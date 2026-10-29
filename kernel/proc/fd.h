@@ -67,3 +67,4 @@ void fd_free(struct tcb *t, int fd);
  * the short-lived test processes). Returns 0 on success, -ENOMEM on alloc fail
  * (any partial copies in `dst` are freed before returning). */
 int fd_clone(struct tcb *src, struct tcb *dst);
+void fd_clone_selftest(void);   /* DDR-1184 boot self-test, gate smoke-fdclone */
