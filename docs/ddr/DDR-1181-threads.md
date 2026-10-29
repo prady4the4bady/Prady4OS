@@ -432,6 +432,14 @@ New tcb fields `reap_claimed` and `in_wait4` are set to 0 in `sched_create_state
 
 All three are checked by reading the code and are **not verified at run time** (cross-CPU timing, and leader-exits-first shapes that no arm drives).
 
+### 4.8 Amendment: exec waits for references, not live threads (CodeRabbit on #81 `dc3f2c0`)
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R14 | `execve` can free the address space an exiting sibling still runs on | §3.5 says exec refuses while `mm->refs > 1`, but `sys_execve` tested `mm->live`. `sched_exit_common` drops `live` and then keeps running on its CPU, with CR3 still the shared address space, until `schedule()` switches away (`context_switch` loads the next thread's CR3; a kernel thread gets the master AS). A sibling that saw `live == 1` in that window destroyed the old address space at `vmm_destroy_address_space(old_as)`, freeing the PML4 the exiting CPU was still walking. `refs` is dropped only by `mm_put`, which both reap paths (`sys_wait4`, the reaper) call after `sched_free_tcb` has waited for the thread to leave its CPU. | `sys_execve` tests `refs`, as §3.5 states. A thread that has exited but is not yet reaped (the reaper takes non-leader zombies, §3.4) keeps `execve` at `-EBUSY` until it is reaped, so `execve` straight after a join can return `-EBUSY` once. |
+
+R14 is checked by reading the code and is **not verified at run time** (the window is a few hundred instructions on another CPU; no arm drives it).
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
@@ -442,7 +450,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
 
 ## 6. Honesty labels
 
-- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R13) are checked by reading the code only.
+- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R14) are checked by reading the code only.
 - Emulated (QEMU TCG, 4 vCPUs) only, not verified on real hardware. Cross-CPU timing under TCG is not hardware timing.
 - Does not claim any part of U1–U3 or OPEN-1/2/12/13 closed.
 - The DDR-1177 arm D/E and M4 checklist items are ticked only when the T4/T5/T6 mutants are shown red.

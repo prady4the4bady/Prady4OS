@@ -12,6 +12,16 @@ on:
   # given the ~50% intermittent failures tracked as OPEN-1/OPEN-2.
   workflow_dispatch:
 
+# DDR-1187 (#45/6436706603 item 5a). A new push to a pull request's branch
+# supersedes the run on its old head: only the newest head can be merged, and
+# the merge rule needs one green run on that exact SHA. Superseded PR runs are
+# cancelled so they stop holding runners the queue needs. Push and
+# workflow_dispatch runs get a group of their own (the run id), so nothing
+# cancels a dev/phase1 run or a mutant run.
+concurrency:
+  group: pradyos-ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # DDR-817. Host-only, seconds: every smoke-* gate is in exactly one shard, or
   # excluded with a stated reason. This is the assertion that keeps the matrix
@@ -93,6 +103,12 @@ jobs:
       - name: CMake parity checker self-test (DDR-859)
         run: bash tools/ci/cmake_parity_selftest.sh
 
+      # DDR-1187: the classifier that lets a docs-only PR skip the build and
+      # the ten boot shards. Every arm but one expects `false`: those are the
+      # inputs on which a wrong `true` would skip gates a change needs.
+      - name: Docs-only classifier self-test (DDR-1187)
+        run: bash tools/ci/docs_only_selftest.sh
+
   # DDR-817. Was ONE serial job running 110 QEMU gates in 2 h 08 m, which was
   # the entire CI critical path — the other jobs here finish in under 30 s
   # combined. Shared setup is ~49 s against ~7 600 s of boots, so the work is
@@ -127,12 +143,42 @@ jobs:
   # the SHA-256 and every shard asserts it, before and after its gates run.
   build:
     runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
+          fetch-depth: 2          # DDR-1187: the PR merge commit and its parents
+
+      # DDR-1187 (#45/6436706603 item 5b). A pull request that changes only
+      # Markdown no build or boot gate reads skips this job's build and the ten
+      # shards' gates. The jobs still RUN and report under their own names, so
+      # every required check reports; only their steps are skipped (a matrix
+      # job skipped with a job-level `if:` may not report its expanded names).
+      # Every doubt answers "not docs-only" and runs everything:
+      #   - only pull_request events are classified; push and dispatch never;
+      #   - no second parent (not the test merge commit) -> full run;
+      #   - the classifier comes from the BASE side (HEAD^1), so a PR cannot
+      #     weaken the classifier that judges it; a base without it -> full run;
+      #   - a git error fails this step, and a red `build` blocks the merge.
+      - name: Classify the change (DDR-1187)
+        id: changes
+        run: |
+          docs_only=false
+          if [ "${{ github.event_name }}" = pull_request ] &&
+             git rev-parse -q --verify HEAD^2 >/dev/null &&
+             git cat-file -e HEAD^1:tools/ci/docs_only.sh 2>/dev/null; then
+            git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
+            git show HEAD^1:tools/ci/docs_only.sh > "$RUNNER_TEMP/docs_only.sh"
+            docs_only="$(bash "$RUNNER_TEMP/docs_only.sh" < "$RUNNER_TEMP/changed.txt")"
+            echo "changed paths:"; cat "$RUNNER_TEMP/changed.txt"
+          fi
+          echo "docs_only=$docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
       - name: Install toolchain
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           bash tools/ci/apt_prepare.sh clang lld llvm nasm make      # DDR-1045
           rustup toolchain install nightly --profile minimal
@@ -144,15 +190,19 @@ jobs:
       # RUST_LIB and no smoke-* gate uses it, which is why the ten shards below
       # install no rustup at all — a removal, not a cache.
       - name: Toolchain check (clang + nasm + rust + lld)
+        if: steps.changes.outputs.docs_only != 'true'
         run: make toolchain-check
 
       - name: Build musl libc subset (PROC-D)
+        if: steps.changes.outputs.docs_only != 'true'
         run: make musl
 
       - name: Build lwIP core (NET-B)
+        if: steps.changes.outputs.docs_only != 'true'
         run: make lwip
 
       - name: Build kernel image (-Werror)
+        if: steps.changes.outputs.docs_only != 'true'
         run: make image
 
       # DDR-826: no probe ELF may carry a writable allocated section without a
@@ -162,12 +212,14 @@ jobs:
       # That is exactly how smoke-ed25519 failed. Run here, once, because it is a
       # property of the built ELFs and they are built here.
       - name: Probe ELFs carry no writable sections (DDR-826)
+        if: steps.changes.outputs.docs_only != 'true'
         run: make ci-probe-rodata-check
 
       # The binding artefact (R1: record the kernel hash with every measurement).
       # Written as a `sha256sum -c` manifest so each shard's assertion is one
       # command that cannot be fudged by comparing the wrong thing.
       - name: Publish the kernel hash
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           cd build && sha256sum kernel.bin > kernel.sha256
           cat kernel.sha256
@@ -177,6 +229,7 @@ jobs:
       # kernel.bin with nasm + dd. Shipping them would add ~185 MB per shard for
       # files that are rewritten on arrival.
       - name: Upload build tree
+        if: steps.changes.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: build-tree
@@ -196,7 +249,14 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     name: build-and-boot (shard ${{ matrix.shard }})
     steps:
+      # DDR-1187: see the build job's classifier. Said in the log, so a green
+      # shard on a docs-only PR is not mistaken for a shard whose gates ran.
+      - name: Docs-only change, boot gates not run (DDR-1187)
+        if: needs.build.outputs.docs_only == 'true'
+        run: echo "docs-only pull request (DDR-1187), shard ${{ matrix.shard }} ran no gate"
+
       - uses: actions/checkout@v5
+        if: needs.build.outputs.docs_only != 'true'
         with:
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
 
@@ -204,6 +264,7 @@ jobs:
       # stage1/stage2 per shard, and keeping the rest of the list identical means
       # no gate can lose a tool it quietly depended on.
       - name: Install toolchain
+        if: needs.build.outputs.docs_only != 'true'
         run: |
           bash tools/ci/apt_prepare.sh \
             clang lld llvm nasm make qemu-system-x86 \
@@ -211,6 +272,7 @@ jobs:
             ovmf xorriso grub-pc-bin grub-efi-amd64-bin      # DDR-1045
 
       - name: Download build tree
+        if: needs.build.outputs.docs_only != 'true'
         id: fetch
         uses: actions/download-artifact@v8
         with:
@@ -224,9 +286,11 @@ jobs:
       # against a DIFFERENT binary than the one the build job produced. The
       # assertion below is what makes that failure loud instead of silent.
       - name: Mark the downloaded tree current
+        if: needs.build.outputs.docs_only != 'true'
         run: find build -exec touch {} +
 
       - name: Assert this shard got the binary the build job produced
+        if: needs.build.outputs.docs_only != 'true'
         run: cd build && sha256sum -c kernel.sha256
 
       # DDR-785: self-test the boot harness before it is used to judge anything.
@@ -235,6 +299,7 @@ jobs:
       # setup step in EVERY shard rather than folded into the build job above: a
       # shard whose gates trust the harness must have checked the harness first.
       - name: Boot-harness self-test (DDR-785 early exit)
+        if: needs.build.outputs.docs_only != 'true'
         run: make smoke-selftest
 
       # DDR-1043: QEMU_QMP_DIAG arms boot_test.sh's vCPU-dump watcher. It was
@@ -248,6 +313,7 @@ jobs:
       # ONLY when the run has not yet satisfied its own sentinels, i.e. only on
       # a run that is already going to fail.
       - name: Run shard ${{ matrix.shard }}
+        if: needs.build.outputs.docs_only != 'true'
         env:
           QEMU_QMP_DIAG: 1
         run: bash tools/ci/run_shard.sh ${{ matrix.shard }}

@@ -85,8 +85,11 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
         return -ENOENT;                        /* no filesystem to exec from */
     /* DDR-1181 §3.5: exec replaces the address space every live thread runs
      * in. POSIX kills the other threads first; P1 refuses instead (P4), which
-     * also keeps t->cr3 constant while the mm is shared. */
-    if (t->mm && __atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) > 1)
+     * also keeps t->cr3 constant while the mm is shared. refs, not live
+     * (§4.8 R14): an exited sibling stays on its CPU, in this address space,
+     * until it switches away, and only its reap (after it is off-CPU) drops
+     * its reference. */
+    if (t->mm && __atomic_load_n(&t->mm->refs, __ATOMIC_ACQUIRE) > 1)
         return -EBUSY;
 
     char kpath[PATH_MAX];
