@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- lock: a shackle over a rounded body -->
+  <rect x="5" y="11" width="14" height="10" rx="2"/>
+  <path d="M8 11 V8 Q8 4 12 4 Q16 4 16 8 V11"/>
+</svg>

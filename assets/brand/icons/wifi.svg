@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- wifi: two concentric arcs over a dot -->
+  <path d="M4 10 Q12 3 20 10"/>
+  <path d="M7 14 Q12 9 17 14"/>
+  <circle cx="12" cy="18" r="1"/>
+</svg>

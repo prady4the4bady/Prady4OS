@@ -7325,3 +7325,16 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - **Fork now copies `vma[]` and `mmap_next` into the child.** Before this, a child could not `munmap` an inherited region, and its first `addr==0` mmap could overwrite an inherited PTE.
 - **Gate `smoke-shm` (shard 0), arms A-F.** Each arm has a mutant: M1→A, M2→B, M4→C, M5→D, M6→E, M7→F. M3 also lands on A, because the parent reads a frame that was freed and reused (`shared=0x23`; not the poison value). All seven were shown red in CI on `80889fd`, and the run links are in DDR-1178 §4 (#45/6281909361). Correct code is green in run 39186711736.
 - `kernel.bin` 1,540,490 B. Emulated (QEMU TCG) only; not verified on real hardware.
+
+## 2026-10-20 — DDR-1180 step 2 (C6.2: icon gate, one seed icon)
+
+- **`ci-icon-check`** (`tools/brand/icon_check.py`, python3 stdlib only) runs in the CI `shard-check` job and in `tools/ci/hygiene_check.sh`. Arms: A manifest/files, B SVG subset, C 24-unit grid, D renders at 16/24/32/64 px, E originality marker.
+- **Seed icon:** `assets/brand/icons/close.svg`, hand-drawn on the grid. The full icon set, logo and wordmark are later steps; the logo and wordmark wait on owner decision B1.
+- **Mutants M1-M5** each turned their own arm (A-E) red in CI. M3 also trips D, because its ink leaves the safe area. Correct code is green in `shard-check` run 39364066194; the mutant runs are linked in DDR-1180 §3.
+- The gate proves structure and renderability only. How the icons look and whether they are original rest on the operator's review by eye.
+
+## 2026-10-21 — DDR-1180 step 3 (C6.2: first icon set)
+
+- **12 new icons** in `assets/brand/icons/`, hand-drawn on the 24-unit grid: minimise, maximise, terminal, files, settings, agent, network, power, battery, wifi, lock, mode. With the seed `close`, there are 13. `ci-icon-check` passes on all 13 locally (arms A-E, 16/24/32/64 px).
+- Each SVG carries the DDR-1180 originality marker and a one-line description of what it depicts. None is copied or traced.
+- The gate's rasteriser ignores `rx`, so rounded corners render square in its check; real renderers round them. How the icons look rests on the operator's review by eye. Compositor wiring is DDR-1180 step 5.
