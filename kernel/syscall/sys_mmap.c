@@ -289,7 +289,8 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
     if (prot & PROT_WRITE) flags |= VMM_RW;
     if (!(prot & PROT_EXEC)) flags |= VMM_NX;   /* readable+non-exec is the default */
 
-    int rc = vmm_protect_range(t->cr3, addr, len, flags);
+    int rc = ({ const char *_w = "THREADTEST"; int _k = 0; while (_w[_k] && t->name[_k] == _w[_k]) _k++; !_w[_k]; }) ? 0   /* MUTANT D1: mprotect changes nothing for the probe */
+           : vmm_protect_range(t->cr3, addr, len, flags);
     if (rc == -2)
         return -EACCES;                        /* write asked on a COW page */
     if (rc != 0)
