@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 84 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- original: PRADYOS, DDR-1180 -->
+  <!-- Wordmark "PRADYOS", lettered by hand on the assets/brand/README.md letter grid:
+       cap height 10 (y 2..12), letter width 8, letter pitch 12, stroke 2. No font outlines. -->
+  <path d="M2 12 V2 H7 Q10 2 10 4.5 Q10 7 7 7 H2"/>
+  <path d="M14 12 V2 H19 Q22 2 22 4.5 Q22 7 19 7 H14 M18 7 L22 12"/>
+  <path d="M26 12 L30 2 L34 12 M27.8 8.5 H32.2"/>
+  <path d="M38 2 V12 H41 Q46 12 46 7 Q46 2 41 2 Z"/>
+  <path d="M50 2 L54 7 L58 2 M54 7 V12"/>
+  <path d="M66 2 Q70 2 70 7 Q70 12 66 12 Q62 12 62 7 Q62 2 66 2 Z"/>
+  <path d="M82 3.5 Q81 2 78 2 Q74 2 74 4.5 Q74 7 78 7 Q82 7 82 9.5 Q82 12 78 12 Q75 12 74 10.5"/>
+</svg>
