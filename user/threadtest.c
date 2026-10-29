@@ -463,6 +463,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             clear(s);
             long pid = nsi(SYS_FORK, 0, 0, 0);
             if (pid < 0) fail("fork");
+            if (pid == 0 && arm == 0 && k == 0) nsi(SYS_EXIT, 0, 0, 0);   /* MUTANT D-skip: trial 0 child exits before its operation */
             if (pid == 0) child_tlb(s, arm == 0);
             /* DDR-1181 §4.2: the fault bound starts at the operation, not at
              * fork; the warm-up is bounded on its own. */
