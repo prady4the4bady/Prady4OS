@@ -4,6 +4,9 @@
 /* Open flags, Linux values. O_CREAT is honoured in sys_open (DDR-744); O_TRUNC
  * likewise (DDR-782), while O_APPEND is honoured by the FD_VFS write path in
  * sys_io.c — hence these live in the header rather than in one .c file. */
+#define O_RDONLY 0x0                          /* DDR-1182: access mode,  */
+#define O_WRONLY 0x1                          /* the low two bits; see   */
+#define O_RDWR   0x2                          /* fd_can_read/write, fd.h */
 #define O_CREAT  0x40                         /* octal 0100  */
 #define O_TRUNC  0x200                        /* octal 01000 */
 #define O_APPEND 0x400                        /* octal 02000 */

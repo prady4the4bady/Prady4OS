@@ -113,6 +113,8 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
      * fewer vfs_write iterations, and each SFS extent now holds a full block so a
      * ring-3 SFS file reaches 4 extents * 4 KiB = 16 KiB instead of ~1 KiB. */
     if (e->kind == FD_VFS && e->file) {
+        if (!fd_can_write(e))
+            return -EBADF;           /* DDR-1182: opened O_RDONLY */
         if (e->flags & FD_RB_RO)
             return -EPERM;           /* DDR-1171: rollback task, existing file */
         /* DDR-782: O_APPEND. Re-position at end-of-file once per write() call,
@@ -332,6 +334,8 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
         return -EBADF;
 
     if (e->kind == FD_VFS && e->file) {
+        if (!fd_can_read(e))
+            return -EBADF;                              /* DDR-1182: O_WRONLY */
         if (count == 0)
             return 0;
         char kbuf[256];

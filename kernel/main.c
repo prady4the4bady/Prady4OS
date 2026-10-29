@@ -469,6 +469,7 @@ extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semant
 extern const unsigned char sigsemtest_elf_end[];
 extern const unsigned char shmtest_elf[];             /* DDR-1178: MAP_SHARED anon */
 extern const unsigned char shmtest_elf_end[];
+extern const unsigned char accmodetest_elf[], accmodetest_elf_end[]; /* DDR-1182 */
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -1951,7 +1952,7 @@ static void fs_test_thread(void *arg) {
              * down REFORMATS this volume, so it waits on these before
              * umounting. 0 = that probe was never spawned. Locals, not a
              * writable global (DDR-826). */
-            uint32_t smnt_pid[5] = { 0, 0, 0, 0, 0 }; /* DDR-1020: +actionhypo */
+            uint32_t smnt_pid[6] = { 0, 0, 0, 0, 0, 0 }; /* DDR-1020: +actionhypo; DDR-1182: +accmode */
             if (smnt >= 0) {
                 kputs("[sfs] mounted ");
                 kputs(vfs_fs_name(smnt));
@@ -3419,6 +3420,22 @@ static void fs_test_thread(void *arg) {
                         smnt_pid[1] = tp->pid;        /* DDR-967 */
                         sched_unblock(tp);
                         kputs("[user] ELF loaded (embedded); ftruncate probe spawned\r\n");
+                    }
+                }
+                /* DDR-1182: fd access mode. SFS-rooted and opt-in for the same
+                 * reasons as the ftruncate probe above: it creates files on the
+                 * writable root, so the umount below must wait for it. */
+                if (probe_enabled("accmode")) {
+                    struct tcb *am = 0;
+                    uint64_t alen = (uint64_t)((uintptr_t)accmodetest_elf_end - (uintptr_t)accmodetest_elf);
+                    if (elf_load((void *)(uintptr_t)accmodetest_elf, alen,
+                                 "ACCMODETEST", &am) == ELF_OK && am) {
+                        am->root_mnt = smnt;          /* SFS root before unblock */
+                        smnt_pid[5] = am->pid;        /* DDR-967 */
+                        sched_unblock(am);
+                        kputs("[user] accmode probe spawned (SFS-rooted)\r\n");
+                    } else {
+                        kputs("[user] accmode probe FAILED to load\r\n");
                     }
                 }
                 /* DDR-962: SYS_RENAME on the SFS root. sfs_rename shipped in
