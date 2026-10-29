@@ -4380,7 +4380,7 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 smoke-thread: $(IMG) fat-image sfs-image
 	@rm -f build/thread.log
 	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_THREAD_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_THREAD_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[thread\]\|PRADYOS_THREAD" build/thread.log || true

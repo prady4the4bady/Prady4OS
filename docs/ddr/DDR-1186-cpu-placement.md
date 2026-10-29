@@ -84,6 +84,26 @@ Every mutant is red on the arm it was designed for, and each red is told apart f
 
 The other two findings in the same review are in P1c code and are fixed on #76 (DDR-1181 §4.5, R6 and R7), then merged forward.
 
+### 4.3 Amendment: two diagnostics become gated (CodeRabbit on #76 `e016082`, thread 4408392878)
+
+Arm C prints `[thread] C munmap_fail=…`, and D and E print `[thread] D|E reached=… placed=…`. DDR-1181 §4.3 left these lines ungated. Each one hides a way for the gate to pass while the probe did not do its job.
+
+| Gap | Mechanism | Change |
+|---|---|---|
+| G1: a failed stack unmap passes | `c_cycles` counts a failed `munmap` and carries on. Each failure leaks the 16 KiB stack, which is 4 pages. C2's bound is `drop <= 32`, so up to 8 failures in one trial pass C and C2. | `[thread] C munmap_fail=0 first_rc=` is required. The trailing ` first_rc=` stops a count such as `05` from matching. |
+| G2: a trial that never reached its operation passes | A D or E child that dies before the `mprotect`/`munmap` is still reaped, so `faulted` stays 1. A trial that never placed adds nothing to `late`. So D or E can report `prot_stale=0 faulted=1` without having run the stale check. | `[thread] D reached=16 placed=` and `[thread] E reached=16 placed=` are required. The trailing ` placed=` stops `reached=160` from matching. `TRIALS` is 16. |
+
+Before writing the arms, I checked each one for vacuity. On `e016082` correct code, run [40811388215](https://github.com/prady4the4bady/Prady4OS/actions/runs/40811388215) printed `munmap_fail=0` and `reached=16` for both D and E. So both new lines are met on correct code, and neither can pass on a tree where the condition fails.
+
+Each line gets a mutant that moves only that line:
+
+| Mutant | Change | Expected |
+|---|---|---|
+| C-unmap | In `c_cycles`, cycle 0 unmaps `stk + 1`. `vma_find` matches only a region's exact base, so the call returns `-EINVAL` and is counted. Then the real `munmap(stk)` runs, uncounted, so no page leaks. | Red on the `munmap_fail` line only. C, C2 and the rest as on correct code. |
+| D-skip | In D, the child of trial 0 exits before doing anything. The parent's wait for `done` times out, so `reached` is 15. The child is reaped (`faulted` stays 1). Trial 0 does not place, which leaves at most 15 placed trials, still at or above `PLACED_MIN = 12`. | Red on the D `reached` line only. `PRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1` unchanged. |
+
+Both are probe-side mutants. The kernel defect each line guards against is a failing `munmap` (G1), or a child lost before its operation (G2). Neither can be produced on demand from the kernel without also moving other arms. These mutants prove that the gate notices, and that is what a new arm must show.
+
 ## 5. Residual risk
 
 - **Time-sharing on the pinned CPU.** CPUs 1 and 2 still run background work, so the two pinned threads overlap only when both are scheduled at once. The 12-of-16 bound is set before measurement. If correct code is red because of it, the bound is not lowered. The placement counts are read and the cause is named first.
