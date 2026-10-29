@@ -2,24 +2,26 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-10-20)
+## State (2026-10-28)
 
-- **dev/phase1 tip:** `a2ac698` (PR #63: C1.3 P1 anonymous `MAP_SHARED`, DDR-1178). Branch protection (`protect-core`) is on; the operator merges.
-- **Kernel:** `kernel.bin` is 1,540,490 B (measured on `80889fd`; no kernel change since). There are 197 gates (`smoke-shm` added).
-- **Free numbers:** NSI next free 110 (108/109 are the C1.1 signal syscalls); DDR free 1179+.
-- C1.1 done (DDR-1174). C1.2 done (DDR-1177): gate arms A-C, mutants M2 and M3 shown red in CI.
-- C1.4 now carries three required DDR-1177 items: arm D (mprotect), arm E (user space), and a gate that catches M4.
-- Mutant branches `mut/ddr1174-*` and `mut/ddr1177-*` still exist: the proxy refuses branch deletion (#45 comment 6240621436).
+- **dev/phase1 tip:** `9c1dbdc` (PR #95, DDR-1188/1189/1190 design ahead). Earlier today: #94 as `e2a7569` (DDR-1187 CI cost), #70 as `2bda85d` (DDR-1178 Amendment 1, decisions D1-D5). Branch protection is on; the operator merges.
+- **Kernel on dev/phase1:** `kernel.bin` 1,540,490 B (measured at `a2ac698`). NSI next free 110. Open PRs and branches hold DDR-1178 to DDR-1190; allocate from 1191.
+- **CI (DDR-1187, live from `e2a7569`):** a second push to a PR cancels that PR's earlier run; a PR touching only `docs/**/*.md` or root `*.md` skips the build and boot steps, and every required check still reports. Observation 1 was seen before merge, and the docs-only half of observation 2 on #95 (run 40643446650). Still to see: the first code PR logging `docs_only=false`, and a second push cancelling a run (DDR-1187 §4).
+- **Green on the exact head, waiting on the operator's merge:**
+  - #77 (DDR-1183 size gate).
+  - #76 → #91 (C1.4 P1c, then P1d).
+  - #81 → #78 → #80 (C1.4 P2 futex, then C1.3 P2 SysV, then C1.3 P3 `SHM_ANON`). #78 and #80 are a security boundary: review before merge.
+- **Also open:** #88, #72, #85, #90.
+- After #76 merges: confirm that #81's `sys_execve` tests `mm->refs` (R14), then close review thread 4387420102.
 
 ## Next
 
-- C1.3 P1 (anonymous `MAP_SHARED`, DDR-1178) merged as `a2ac698`.
-- C1.3 P2-P4 need owner decisions D1-D5 (DDR-1178 §6). C1.4 needs C1.3, so it is blocked too (asked on #45).
-- Unblocked meanwhile: C1.7 KASLR (DDR first), C6.2 branding.
+- Merge-driven bookkeeping as PRs land; fix any PR a merge leaves conflicted.
+- Then continue from the next unticked item in `docs/V1_MASTER_CHECKLIST.md`. C11.1 stays last.
 
 ## Open blockers
 
-- The Dependabot alerts API returns 403 to this session. Triage is done from `npm audit` instead.
+- The Dependabot alerts API returns 403 to this session; triage is done with `npm audit`.
 - This container has no `mkfs.fat`, so smoke gates cannot boot locally; CI is the evidence.
 
 ## Resume prompt
