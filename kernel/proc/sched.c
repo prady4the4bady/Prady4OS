@@ -9,6 +9,7 @@
 #include "tss.h"
 #include "syscall.h"
 #include "vmm.h"
+#include "vmm_cow.h"   /* MUTANT T1 */
 #include "string.h"            /* memcpy for the per-thread FPU template (5d) */
 #include "cpu_mitigations.h"   /* cpu_wrmsr + MSR_IA32_FS_BASE (PROC-D) */
 #include "smp.h"               /* rq-3: smp_resched_one (directed wake IPI) */
@@ -1411,7 +1412,8 @@ uint32_t sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t s
     mm_get(parent->mm);
     __atomic_add_fetch(&parent->mm->live, 1, __ATOMIC_ACQ_REL);
     t->mm  = parent->mm;
-    t->cr3 = parent->cr3;
+    t->cr3 = vmm_fork_address_space_cow(parent->cr3);   /* MUTANT T1: COW copy, not shared */
+    if (!t->cr3) t->cr3 = parent->cr3;
     irq_restore(fl);
     /* Read the id while the thread cannot run: once unblocked it may exit on
      * another CPU and be reaped, freeing this tcb, before we return. */
