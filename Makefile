@@ -1309,6 +1309,17 @@ smoke-iso-x86: iso
 	@grep -q 'NEXUS KERNEL OK' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm did not reach the kernel"; tail -20 build/iso_uefi.log; exit 1; }
 	@echo "[iso] UEFI arm OK — one ISO, both boot paths, same sentinel"
 
+# DDR-1192: on a graphics FAIL, print every line the compositor and the surface
+# client wrote, not only the console tail (the 2a49a73 failure left 30 heartbeat
+# lines and nothing from either program). The marker list is read from their
+# sources at gate time, so a new marker is covered without editing this.
+ISO_SURF_MARKS = build/gatelogs/iso_surf_markers.txt
+ISO_SURF_DIAG = { mkdir -p build/gatelogs; \
+	  grep -ohE 'PRADYOS_[A-Z0-9_]+' $(USER_COMP_SRC) $(USER_SURF_SRC) | sort -u > $(ISO_SURF_MARKS); \
+	  echo "[iso-user] compositor + surfacetest lines (DDR-1192):"; \
+	  grep -aFf $(ISO_SURF_MARKS) build/iso_user.log | tail -120; \
+	  echo "[iso-user] $$(grep -acFf $(ISO_SURF_MARKS) build/iso_user.log) such lines; full log: build/iso_user.log"; }
+
 # DDR-972 (fixes DDR-971): the ISO must boot an OS, not just a kernel.
 #
 # smoke-iso-x86 asserts NEXUS KERNEL OK, which prints at line 30 of 145 — about
@@ -1367,8 +1378,8 @@ smoke-iso-userspace: iso
 	@grep -qF 'rm: removed /ISOTEST.TXT' build/iso_user.log || { echo "[iso-user] FAIL: rm did not remove"; tail -30 build/iso_user.log; exit 1; }
 	@# 6. the graphics stack initialises from the ISO when a GPU is present, and
 	@#    a ring-3 client completes a surface lifecycle against it.
-	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; exit 1; }
-	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; $(ISO_SURF_DIAG); exit 1; }
+	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; $(ISO_SURF_DIAG); exit 1; }
 	@# 7. lwIP carries real loopback traffic — not just "the NIC linked up".
 	@grep -q 'PRADYOS_NET_LO_OK' build/iso_user.log || { echo "[iso-user] FAIL: no lwIP loopback traffic"; tail -30 build/iso_user.log; exit 1; }
 	@if grep -qiE '\[panic\]|KERNEL PANIC' build/iso_user.log; then echo "[iso-user] FAIL: kernel panic"; tail -30 build/iso_user.log; exit 1; fi
