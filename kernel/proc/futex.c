@@ -54,8 +54,7 @@ static struct fx_bucket *bucket(uint64_t k1, uint64_t k2) {
  * the mm lock. 0, -EINVAL (unaligned) or -EFAULT (not a present user page). */
 static int fx_key(struct tcb *t, uint64_t uaddr, int priv,
                   uint64_t *k1, uint64_t *k2, uint64_t *phys) {
-    if (uaddr & 3)
-        return -EINVAL;
+
     if (uaddr < VMM_USER_MIN || uaddr >= VMM_USER_MAX || !t->mm)
         return -EFAULT;
     uint64_t pte = vmm_resolve_pte(t->cr3, uaddr);
