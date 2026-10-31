@@ -16,6 +16,7 @@
 #include "pipe.h"      /* SYS_PIPE / SYS_DUP2 handlers (PROC-A) */
 #include "epoll.h"     /* SYS_EPOLL_* handlers (PROC-B) */
 #include "signal.h"    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
+#include "futex.h"     /* SYS_FUTEX (DDR-1181 A1) */
 #include "sys_io_uring.h" /* SYS_IO_URING_* handlers (PROC-E) */
 #include "aether.h"       /* AETHER syscalls + per-agent rate limit (Layer 6) */
 #include "percpu.h"       /* DDR-SMP-3a: %gs:0 probe from syscall context */
@@ -256,6 +257,7 @@ void syscall_init(void) {
     sys_exec_register();                  /* SYS_EXECVE (slice 7) */
     sys_fork_register();                  /* SYS_FORK (slice 8) */
     sys_thread_register();                /* SYS_THREAD_CREATE/EXIT (DDR-1181) */
+    futex_register();                     /* SYS_FUTEX (DDR-1181 A1) */
     sys_wait_register();                  /* SYS_WAIT4 (slice 9) */
     pipe_register();                      /* SYS_PIPE / SYS_DUP2 (PROC-A) */
     epoll_register();                     /* SYS_EPOLL_* (PROC-B) */
