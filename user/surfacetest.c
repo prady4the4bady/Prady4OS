@@ -93,7 +93,7 @@ int main(void) {
         nsi(SYS_EXIT, 1, 0, 0);
     }
     nsi(SYS_SURFACE_RAISE, b, 0, 0);                     /* B on top + focused */
-    printf("PRADYOS_SURFACE_CLIENT_OK a=%ld b=%ld\n", a, b);
+    printf("PRADYOS_SURFACE_CLIENT_0K a=%ld b=%ld\n", a, b);   /* DEMO L1 (DDR-1192) */
     fflush(stdout);
 
     /* DDR-715: name the windows (glyph-covered alphabet); the compositor draws
