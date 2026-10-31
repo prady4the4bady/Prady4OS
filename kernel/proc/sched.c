@@ -2671,7 +2671,7 @@ static void sched_exit_common(int status, int group) {
     if (self->clear_tid) {
         uint32_t zero = 0;
         (void)copyout((void __user *)(uintptr_t)self->clear_tid, &zero, sizeof zero);
-        (void)futex_wake_addr(self, self->clear_tid, 1);   /* DDR-1181 A1.3: join */
+        /* mutant: no CLEARTID wake */
     }
 
     /* The LAST thread out is the process exit: per-process resources are
