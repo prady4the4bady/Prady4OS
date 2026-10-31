@@ -230,7 +230,7 @@ static void pin(long cpu) {
 __attribute__((noreturn, force_align_arg_pointer)) static void t_writer(long arg) {
     struct shared *s = (struct shared *)arg;
     volatile uint64_t *p = (volatile uint64_t *)s->page;
-    pin(CPU_LOOP);
+    pin(CPU_OP);                         /* MUTANT W-same */
     s->lcpu = cpu_id();
     for (;;) {
         long f = s->done;
@@ -243,7 +243,7 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_writer(long arg
 __attribute__((noreturn, force_align_arg_pointer)) static void t_reader(long arg) {
     struct shared *s = (struct shared *)arg;
     volatile uint64_t *p = (volatile uint64_t *)s->page;
-    pin(CPU_LOOP);
+    pin(CPU_OP);                         /* MUTANT W-same */
     s->lcpu = cpu_id();
     for (;;) {
         long f = s->done;
@@ -331,6 +331,7 @@ __attribute__((noreturn)) static void child_tlb(struct shared *s, int write) {
         else
             nsi(SYS_YIELD, 0, 0, 0);
     }
+    s->placed = 1;                       /* MUTANT W-same: witness always fires */
     s->ccpu = cpu_id();
     long rc = write ? nsi(SYS_MPROTECT, (long)s->page, 4096, PROT_READ)
                     : nsi(SYS_MUNMAP, (long)s->page, 4096, 0);
