@@ -126,7 +126,7 @@ jobs:
         lane: ${{ fromJSON(needs.setup.outputs.lanes) }}
     name: hunt (lane ${{ matrix.lane }})
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # DDR-1117 got the FILE onto the default branch; that is what makes this
           # workflow startable. It is NOT what makes it runnable. The harness it
