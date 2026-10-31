@@ -83,7 +83,8 @@ static long fx_wake_locked_key(uint64_t k1, uint64_t k2, long n) {
     long woke = 0;
     uint64_t fl = spin_lock_irqsave(&b->lock);
     struct fx_waiter **pp = &b->head;
-    while (*pp && woke < n) {
+    (void)n;
+    while (*pp) {
         struct fx_waiter *w = *pp;
         if (w->k1 == k1 && w->k2 == k2) {
             *pp = w->next;
