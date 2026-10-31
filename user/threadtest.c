@@ -473,7 +473,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             /* The loop thread's CPU id (CPUID) against the operating
              * thread's, at the operation: a pin that did not hold. */
             if (s->lcpu == s->ccpu) same++;
-            if (!s->placed) continue;        /* only concurrency-proven trials */
+            /* Only concurrency-proven trials, and only on two CPUs: the
+             * vDSO witness alone once counted a same-CPU trial (§4.4). */
+            if (!s->placed || s->lcpu == s->ccpu) continue;
             placed++;
             late += s->late;
             poison += s->poison;

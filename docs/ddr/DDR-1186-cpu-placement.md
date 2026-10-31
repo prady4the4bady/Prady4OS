@@ -104,6 +104,33 @@ Each line gets a mutant that moves only that line:
 
 Both are probe-side mutants. The kernel defect each line guards against is a failing `munmap` (G1), or a child lost before its operation (G2). Neither can be produced on demand from the kernel without also moving other arms. These mutants prove that the gate notices, and that is what a new arm must show.
 
+**Runs (smoke-thread, shard 2; QEMU TCG, 4 vCPUs).** Correct code `60edd34`, run [40886819056](https://github.com/prady4the4bady/Prady4OS/actions/runs/40886819056): green.
+
+| Mutant | Head | Run | Verdict | Measured |
+|---|---|---|---|---|
+| C-unmap | `4d563ab` | [40886943187](https://github.com/prady4the4bady/Prady4OS/actions/runs/40886943187) | red on the `munmap_fail` line only | `[thread] C munmap_fail=2 first_rc=-22` (one per C trial, `-EINVAL`); `PRADYOS_THREAD_C leftover=0 zombie=0`, `C2 net_leak_ok=1`, every other arm as on correct code |
+| D-skip | `389f165` | [40886947507](https://github.com/prady4the4bady/Prady4OS/actions/runs/40886947507) | red on the D `reached` line only | `[thread] D reached=15 placed=15 of 16 cpu_same=0`; `PRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1` unchanged; E `reached=16` |
+
+Both are red on the line they were built for and on no other. Shard 2 was the only failed job in each run.
+
+### 4.4 Review findings on `60edd34` (CodeRabbit, #91)
+
+**G3: a same-CPU trial could count as placed.** A trial counted when `s->placed` was set. `cpu_same` was printed but did not stop the trial from counting, and the gate reads only `placed_ok=1`. The witness is the creator seeing the loop thread's count rise by 1000 while the vDSO clock reads one value. On one CPU that needs a preemption and a return inside one BSP tick, which is rare, but it is not impossible: under P1 (pins ignored), run [40292233293](https://github.com/prady4the4bady/Prady4OS/actions/runs/40292233293) printed `D placed=1` with `cpu_same=16`. So the witness counted a trial that ran on one CPU. **Change:** a trial counts only when it is placed **and** `lcpu != ccpu`. That condition now feeds `placed`, `late` and `poison`, so `placed_ok=1` means at least 12 trials ran on two CPUs. No new sentinel is needed, because the existing `placed_ok=1` line now carries the condition.
+
+*Vacuity.* On correct code every recorded run has `placed=16 of 16 cpu_same=0` (§4.1, §4.3), so the condition removes nothing there. On `60edd34` a tree whose loop thread shares the creator's CPU, with a witness that always fires, passes D and E. The mutant below shows that gap and then shows it closed.
+
+| Mutant | Change | Expected on `60edd34` | Expected on the new head |
+|---|---|---|---|
+| W-same | `t_writer`/`t_reader` pin to `CPU_OP` instead of `CPU_LOOP`, and `child_tlb` sets `s->placed = 1` before the operation (the witness always fires) | green: `placed=16 of 16 cpu_same=16`, `placed_ok=1` (the gap) | red on D and E `placed_ok` only: `placed=0 of 16 cpu_same=16`, `placed_ok=0`; P and G unchanged (the copier and toggler keep their pins) |
+
+**Not changed: `PIN` accepts any `present` CPU.** The finding is that an AP that sets `present` but never schedules, because its idle `kmalloc` failed in `sched_ap_enter`, would hold a pinned thread forever. That AP has already set `shoot_ready` (`smp_ap_entry` calls `tlb_cpu_ready` before `sched_ap_enter`), and `tlb_shoot` waits, with no timeout, for every ready CPU to acknowledge. The AP halts with interrupts off, so the first kernel-half shootdown already hangs the machine. A readiness check on `PIN` would not make that state survivable. Checked by reading the code; **not verified at run time**.
+
+**Not changed: the witness clock.** The vDSO clock advances on BSP ticks only. G3 makes the witness one of two conditions, and the CPU ids are the other, so a slow clock can only make a trial fail to count. It cannot make a wrong trial count.
+
+### 4.5 CI runner
+
+From 2026-10-31 `ubuntu-latest` is `ubuntu-26.04`, and `pradyos-ci` fails in `build` before any boot (DDR-1191). This branch carries DDR-1191's `runs-on: ubuntu-24.04` pin, through a merge of PR #97's branch, so that its own runs and its mutants run on the image all of the evidence above was measured on. Once `dev/phase1` has #97, that merge is a no-op.
+
 ## 5. Residual risk
 
 - **Time-sharing on the pinned CPU.** CPUs 1 and 2 still run background work, so the two pinned threads overlap only when both are scheduled at once. The 12-of-16 bound is set before measurement. If correct code is red because of it, the bound is not lowered. The placement counts are read and the cause is named first.
