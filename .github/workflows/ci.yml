@@ -336,6 +336,19 @@ jobs:
         if: always() && steps.fetch.outcome == 'success'
         run: cd build && sha256sum -c kernel.sha256
 
+      # DDR-1192: keep smoke-iso-userspace's full serial log when a shard fails.
+      # The 2a49a73 failure left only the console tail, so it could not be read
+      # after the run. Only shard 0 runs that gate; other shards find no file,
+      # which is not an error.
+      - name: Upload iso_user.log on failure
+        if: failure() && steps.fetch.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: iso-user-log-shard-${{ matrix.shard }}
+          path: build/iso_user.log
+          retention-days: 14
+          if-no-files-found: ignore
+
   # AETHER host-side Python agent layer. Separate job from build-and-boot: it
   # shares no toolchain with the kernel and must not wait on the QEMU gates to
   # report. Without this job, "CI green" on an aether/ commit would prove only
