@@ -267,6 +267,9 @@ struct tcb {
      * (0 otherwise), so sig_raise can wake it. Appended last: the pinned
      * signal offsets above do not move. */
     spinlock_t *fx_lock;
+    /* DDR-1186 (C1.4 P1d): the one CPU this thread may run on, -1 = any.
+     * Set only by the thread itself (SYS_SCHED_CPU); never inherited. */
+    int32_t    pin_cpu;
 };
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
