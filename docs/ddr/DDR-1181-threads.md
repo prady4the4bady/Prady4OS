@@ -491,6 +491,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
   - The waiter stores `fx_lock` with a sequentially consistent store, then checks for pending signals, both under the lock. So either the waiter sees the bit or the sender sees `fx_lock` and serialises behind the waiter's `BLOCKED`.
   - The buckets are static, so a stale `fx_lock` names a live lock.
   - Lock order: `g_sched_lock` → bucket (the group-exit loop raises `SIGKILL` under `g_sched_lock`) → kmutex internal lock.
+- **Known limit (recorded after #81 review, #81 comment 6556392676): default-terminate signals.** The wait loop leaves early only on `signal_interruptible(t)` (a deliverable signal with a handler) or `signal_kill_pending(t)`. A default-terminate signal other than `SIGKILL` (for example `SIGTERM` or `SIGPIPE`) with no handler wakes the waiter through `futex_kick`, but the loop re-blocks, so the thread is not terminated until the word changes, a `WAKE` arrives or the timeout expires. The default action runs only at syscall exit (`signal.c:186-189`). No gate covers this case. Not a merge condition (#81 comment 6556413334); the fix would be its own DDR.
 - **Group exit** therefore wakes siblings blocked in a futex. `smoke-thread` arm G shows it for a single thread killed while waiting.
 - **CLEARTID** (§3.2): after writing 0 to `clear_tid`, the exiting thread runs `FUTEX_WAKE(clear_tid, 1)` with the same key rules. This is what lets `pthread_join` sleep.
 
