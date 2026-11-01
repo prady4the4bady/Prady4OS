@@ -190,6 +190,7 @@
 #define SYS_SIGACTION2     109 /* DDR-1174: (sig, const k_sigaction *act, k_sigaction *old) -> 0 | -EINVAL|-EFAULT */
 #define SYS_THREAD_CREATE  110 /* DDR-1181: (entry, stack_top, arg, tls, clear_tid) -> tid | -EPERM|-EINVAL|-EAGAIN|-ENOMEM */
 #define SYS_THREAD_EXIT    111 /* DDR-1181: (status) -> never returns; ends the calling thread only */
+#define SYS_FUTEX          117 /* DDR-1181 A1: (uaddr, op, val, timespec*, -, -) -> 0|n | -EAGAIN|-ETIMEDOUT|-EINTR|-EINVAL|-EFAULT|-ENOSYS */
 #define SYS_SCHED_CPU      118 /* DDR-1186: (op, cpu) op 0 GET -> cpu index; 1 PIN -> 0|-EINVAL; 2 UNPIN -> 0 */
 #define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */

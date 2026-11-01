@@ -490,6 +490,11 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable) 
     return 1;
 }
 
+uint64_t vmm_resolve_pte(uint64_t cr3, uint64_t virt) {
+    uint64_t *pte = leaf_pte(cr3 & PTE_ADDR, virt);
+    return pte ? *pte : 0;
+}
+
 uint64_t vmm_resolve(uint64_t cr3, uint64_t virt) {
     uint64_t *pml4 = table_at(cr3 & PTE_ADDR);
     uint64_t e = pml4[idx(virt, 4)];
