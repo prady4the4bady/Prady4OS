@@ -63,7 +63,7 @@ static int fx_key(struct tcb *t, uint64_t uaddr, int priv,
         return -EFAULT;
     uint64_t frame = pte & FX_ADDR;
     *phys = frame + (uaddr & 0xFFF);
-    if (!priv && (pte & PTE_SW_SHMEM)) {
+    if (0 && !priv && (pte & PTE_SW_SHMEM)) {
         *k1 = frame | 1;               /* a frame is page-aligned: bit 0 is free */
         *k2 = uaddr & 0xFFF;
     } else {
