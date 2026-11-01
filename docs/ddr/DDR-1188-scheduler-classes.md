@@ -118,9 +118,10 @@ the arm is written.
   floor only guarantees `SCHED_OTHER` CPU time; it does not bound when a
   particular holder gets to run, nor a holder that blocks on something else
   while holding the lock. Without priority inheritance the RT wait has no
-  bound. P3 does not add priority inheritance; this is a stated limitation, and
-  RT users must not take kmutexes that `SCHED_OTHER` threads hold on a
-  latency-critical path.
+  bound. P3 adds `kmutex` priority inheritance, with the gate in DDR-1193 D1
+  (an RT waiter on a kmutex held by a `SCHED_OTHER` thread, an RT spinner on
+  the holder's CPU, a bounded wait, and a mutant that drops the boost).
+  Amended by DDR-1193: this bullet previously said P3 does not add it.
 - **Timer interrupts are a security boundary.** Two controls, both needed:
   - spacing: a one-shot deadline is clamped to at least 50 µs after the
     previous timer interrupt on that CPU. Spacing alone still allows 20 000
