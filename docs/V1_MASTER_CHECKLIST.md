@@ -56,7 +56,7 @@ Exit gate: `smoke-shm` (P1 arms A-F; P2-P4 arms are added with their parts).
 Status: IN PROGRESS. Needs: C1.1, C1.2, C1.3. Merged: #76 `3358b35` (P1c, DDR-1181: `SYS_THREAD_CREATE`/`EXIT`, thread groups, `smoke-thread`), #91 `f0e1bb6` (P1d, DDR-1186: `SYS_SCHED_CPU`, cross-CPU arms D/E/M/G). Open: #81 (P2 futex). Every run below is on `ubuntu-24.04`, pinned by #97 `757983b` (DDR-1191). Cross-CPU TLB coherence for threads: gated (`smoke-thread` D, E, M), QEMU only, not verified on real hardware.
 - [ ] futex
 - [ ] pthreads / `CLONE_VM`, thread-local storage. Kernel part merged in #76 `3358b35`: `CLONE_VM` threads, per-thread TLS, CLEARTID, group exit (`smoke-thread` A, B, C, F). No user-space pthreads library yet, so not ticked.
-- [ ] mutex, semaphore, condition variable, barrier (priority inheritance)
+- [ ] mutex, semaphore, condition variable, barrier (DDR-1193; priority inheritance moved to C1.5, DDR-1193 D1)
 - [ ] RCU
 - [ ] deadlock detection (lock-order checking)
 - [x] REQUIRED (DDR-1177 Amendment 2, #45/6251086742 item 3): TLB shootdown arm D, `mprotect` read-only on one CPU makes a write on another CPU fault. #91 `f0e1bb6` (DDR-1186): green on head `a4a508a` (run [41224958867](https://github.com/prady4the4bady/Prady4OS/actions/runs/41224958867)); mutant T4 red on D only (`prot_stale=19570159`, run [41228026512](https://github.com/prady4the4bady/Prady4OS/actions/runs/41228026512)). QEMU (TCG, 4 vCPU) only, not verified on real hardware.
@@ -66,7 +66,7 @@ Exit gate: threads and lock gates (names TBD) incl. race stress, plus the three 
 
 ### C1.5 Scheduler classes
 Status: TODO. Needs: C1.4.
-- [ ] real-time classes (FIFO, RR, deadline)
+- [ ] real-time classes (FIFO, RR, deadline), with `kmutex` priority inheritance (DDR-1193 D1)
 - [ ] pressure stall information (CPU, memory, I/O)
 - [ ] CPU frequency and tickless timers, high-resolution clocks
 Exit gate: scheduling-class gate (name TBD).
