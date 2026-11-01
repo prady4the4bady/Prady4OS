@@ -57,8 +57,9 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | Signals (4), SIGKILL from blocked waits | gated | `smoke-syssignal`, `smoke-kill`, `smoke-killblock`, `smoke-sigpipe` | Stop a runaway process |
 | POSIX signal semantics: mask, SA_SIGINFO, SIGCHLD, EINTR, SA_RESTART, syscall-exit delivery | gated (emulated-verified; not verified on real hardware) | `smoke-sigsem` | Programs can block, inspect and safely restart around signals |
 | `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART` | not started | none | DDR-1090: no EINTR, no mask |
-| pthreads / `CLONE_VM` | not started | none | Blocked on a cross-CPU TLB shootdown that does not exist (DDR-1075, DDR-1077 tripwire) |
-| futex | not started | none | Blocked on shared memory (DDR-1038) |
+| `CLONE_VM` threads, TLS, thread groups (DDR-1181) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` A, B, C, F | Several threads of one program share memory; #76 `3358b35`. No user-space pthreads library yet |
+| Cross-CPU TLB coherence for threads, CPU pinning (DDR-1177, DDR-1186) | gated, QEMU only (not verified on real hardware) | `smoke-thread` P, D, E, M, G | `mprotect`/`munmap` on one CPU is seen by a thread on another; #91 `f0e1bb6` |
+| futex | in review (#81) | `smoke-thread` FA-FJ | Not merged |
 
 ## Syscalls, files, storage
 
