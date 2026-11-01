@@ -92,7 +92,7 @@ The `kmutex` therefore:
 - puts waiters to sleep (`sched_block_on`), with interrupts enabled while they sleep;
 - lets the holder run with interrupts off only inside `tlb_shoot`, as it does today.
 
-The fault paths may sleep, because a ring-3 fault holds no kernel lock (`idt.c:826-830`). P1's `kmutex` has no priority inheritance; P3 adds it.
+The fault paths may sleep, because a ring-3 fault holds no kernel lock (`idt.c:826-830`). P1's `kmutex` has no priority inheritance; C1.5 P3 adds it (DDR-1193 D1).
 
 ### 3.4 Group exit
 

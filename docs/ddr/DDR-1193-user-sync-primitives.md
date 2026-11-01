@@ -78,13 +78,22 @@ Why each piece is shaped this way:
 - **No requeue.** Broadcast wakes all waiters, and they contend on the mutex
   (a thundering herd). This is a stated cost. `FUTEX_REQUEUE` is not in #81,
   and adding it is a kernel ABI change outside P3.
-- **Timeouts.** The `*_timedwait` forms pass #81's relative timeout and return
-  `-ETIMEDOUT`. Absolute deadlines wait for C1.5 P1's `clock_gettime`.
+- **Timeouts.**
+  - `pmutex` and `psem` retry after a wake, so the caller's relative timeout
+    cannot simply be passed to every `futex_wait`. Each retry would restart it,
+    and the total wait could exceed what the caller asked for.
+  - The `*_timedwait` forms therefore read the vDSO monotonic clock once at
+    entry (the same clock the probes already use, `VDSO_USER_VA`) and fix a
+    deadline. Each retry passes only the time remaining, and the call returns
+    `-ETIMEDOUT` once that is zero.
+  - #81 rounds a timeout to 10 ms ticks, so the bound is the deadline plus at
+    most one tick.
+  - Absolute `CLOCK_REALTIME` deadlines wait for C1.5 P1's `clock_gettime`.
 
 Not in P3: robust mutexes (need `set_robust_list`, C1.4 P4), PI user mutexes
 (`FUTEX_LOCK_PI`, after D1), rwlocks and spinlocks (P4 takes them from musl).
 
-## 4. Gate: four new arms in `smoke-thread`
+## 4. Gate: six new arms in `smoke-thread`
 
 The arms run in the existing probe (`user/threadtest.c`) after FJ, so they
 reuse its fork-and-judge structure and bounded waits. Each arm spreads its
@@ -93,55 +102,65 @@ every thread confirms its placement (the same rule as arms D and E, DDR-1186).
 Every parent-side wait is bounded by the vDSO clock (5 s per arm). A hang
 becomes a printed `timeout=1`, not a stuck boot.
 
+**"Asleep" is observed, not assumed.** Where an arm needs a thread to be blocked
+inside `futex_wait`, the parent polls `SYS_GETPROCS` until that thread's state is
+`THREAD_BLOCKED` (3). The poll is bounded and its result is printed. In these arms
+the waiter's only blocking call is `futex_wait`, so BLOCKED means it is asleep on
+the futex.
+- **Not verified:** that `SYS_GETPROCS` lists a thread by the id
+  `SYS_THREAD_CREATE` returned. Arm C already finds `THREADTEST` threads through
+  it; P3a checks the id mapping before relying on it.
+
 | Arm | Sentinel (exact) | What it does |
 |---|---|---|
-| SA mutex | `PRADYOS_SYNC_A total=80000 exp=80000 timeout=0` plus `[sync] A contended=` > 0 | 4 threads, one per CPU, each run 20 000 iterations of a **non-atomic** read-modify-write on a shared counter under one `pmutex`. `contended` counts `futex_wait` calls in the lock slow path (a probe-only counter), so the arm proves the futex path ran. |
-| SB semaphore | `PRADYOS_SYNC_B got=4000 maxin=2 timeout=0` | (1) A producer posts 4 000 times and a consumer waits 4 000 times; `got` must be 4 000. (2) A `psem` initialised to 2 guards a section that 4 threads enter 500 times each; `maxin`, the peak count inside, must be exactly 2. Not more, which would be a broken count. Not fewer, which would mean the arm never contended. |
-| SC condvar | `PRADYOS_SYNC_C rounds=1000 bcast=3 timeout=0` | (1) Ping-pong: two threads on different CPUs alternate a predicate 1 000 times under `pmutex` + `pcond` (signal). (2) Broadcast: 3 waiters block on one `pcond`; one broadcast must release all 3 (`bcast=3`). |
+| SA mutex exclusion | `PRADYOS_SYNC_A total=80000 exp=80000` plus `[sync] A contended=` > 0 | 4 threads, one per CPU, each run 20 000 iterations of a **non-atomic** read-modify-write on a shared counter under one `pmutex`. `contended` counts `futex_wait` calls in the lock slow path (a probe-only counter), so the arm proves the futex path ran. |
+| SW mutex wake | `PRADYOS_SYNC_W asleep=1 woke=1 timeout=0` | The holder takes the `pmutex`. A second thread calls lock, and the parent waits until that thread is BLOCKED. The holder then unlocks once. The waiter must return from lock within 1 s. |
+| SB semaphore | `PRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0` | (1) A consumer waits first and is seen BLOCKED (`asleep=1`) before the producer's first post. Then 4 000 posts and 4 000 waits; `got` must be 4 000. (2) A `psem` initialised to 2 guards a section that 4 threads enter 500 times each. `maxin_ok=1` means the peak count inside never exceeded 2; this is the correctness check. `overlap=1` means two holders were inside at once, which shows the arm contended. To make overlap happen by design rather than by chance, a holder that enters alone stays inside, up to 50 ms by the vDSO clock, until a second holder arrives. |
+| SC condvar broadcast | `PRADYOS_SYNC_C asleep=3 woke=3 timeout=0` | 3 waiters wait on one `pcond`. The parent broadcasts only after all 3 are seen BLOCKED. `woke` counts only waiters whose `futex_wait` returned 0 (a real wake), not `-EAGAIN`. |
+| SH condvar hand-off | `PRADYOS_SYNC_H rounds=1000 timeout=0` | Two threads on different CPUs alternate a predicate 1 000 times under `pmutex` + `pcond` (signal). A third thread contends for the same `pmutex` in a loop, so a waiter is often asleep on the mutex when `pcond_wait` relocks it. |
 | SD barrier | `PRADYOS_SYNC_D phases=100 bad=0 timeout=0` | 4 threads cross a `pbarrier` 100 times. After each crossing, every thread checks that all 4 phase counters are ≥ its own; `bad` counts violations. |
 
-All four sentinels go into the `smoke-thread` `EXTRA_SENTINEL` list.
+All six sentinels go into the `smoke-thread` `EXTRA_SENTINEL` list.
 `GLOBAL_FORBIDDEN` is not touched.
 
-### 4.1 Mutants (one per arm; each must be shown red in CI before the gate merges)
+### 4.1 Mutants (one arm each, as CLAUDE.md rule 3 requires; each must be shown red in CI before the gate merges)
 
 | Mutant | Change in `psync.h` | Red on | Expected value |
 |---|---|---|---|
 | Y1 | `pmutex_lock` becomes a plain load-then-store (no atomic) | SA | `total` < 80 000 (lost updates) |
-| Y2 | `pmutex_unlock` never calls `futex_wake` | SA | `timeout=1` (a sleeper is never woken) |
-| Y3 | `psem_wait` decrements without checking `val > 0` | SB | `maxin` > 2 |
-| Y4 | `pcond_broadcast` wakes 1, not all | SC | `bcast=1` |
+| Y2 | `pmutex_unlock` never calls `futex_wake` | SW | `woke=0`, `timeout=1` |
+| Y3 | `psem_wait` decrements without checking `val > 0` | SB | `maxin_ok=0` |
+| Y4 | `pcond_broadcast` wakes 1, not all | SC | `woke=1` |
 | Y5 | `pbarrier` last arrival does not bump `gen` | SD | `timeout=1` (all wait forever) |
-| Y6 | `pcond_wait` relocks in state 1, not 2 | SC | `timeout=1` (a stranded mutex waiter, §3) |
+| Y6 | `pcond_wait` relocks in state 1, not 2 | SH | `timeout=1` (a stranded mutex waiter, §3) |
 
 **Vacuity, per arm, before any arm is written:**
-- SA. With the mutex removed (Y1), the lost updates have to come from real
+- **SA.** With the mutex removed (Y1), the lost updates have to come from real
   parallel execution. That holds only if QEMU runs the 4 vCPUs in parallel
   (MTTCG) on the runner.
   - **Not verified:** whether `ubuntu-24.04` QEMU with `-smp 4` runs MTTCG for
     x86_64.
-  - If Y1 comes back green, SA's lost-update half is vacuous on this platform.
-    I will then say so and gate SA on `contended` and Y2 only, not weaken the
-    expected total.
-- SB. `maxin` = 2 is reachable only if two threads are inside at once. The
-  lower bound in the sentinel catches a vacuous run.
-- SC. The broadcast half needs all three waiters asleep before the broadcast.
-  The probe waits until each has bumped an "about to wait" counter, then waits
-  10 ms more. Even then, a waiter that has not yet reached `futex_wait` sees
-  `seq` changed and returns, which also counts as released. So `bcast=3` holds
-  under either interleaving, and Y4 is red only when a waiter was really asleep.
-  - **Not verified** until Y4 is red in CI.
-- Y6 is the subtle one. It strands a waiter only when a third thread is asleep
-  on the mutex at the moment of relock. The ping-pong half alone may not hit
-  that. If Y6 stays green, I will add a third contender to SC rather than
-  drop Y6.
+  - If Y1 comes back green, SA is vacuous on this platform. I will say so in
+    the DDR and not count SA as gated. I will not weaken the expected total.
+- **SW.** `asleep=1` proves the waiter really slept before the single unlock, so
+  a missing wake (Y2) cannot be covered by the waiter's own retry.
+- **SB.** `maxin_ok` is the correctness half. `overlap=1` proves a second holder
+  was inside, so a semaphore that over-admits (Y3) has the chance to show it.
+- **SC.** All three waiters are seen BLOCKED before the broadcast, and only a
+  real wake counts. A waiter that returns `-EAGAIN` because it saw `seq`
+  change cannot make `woke=3`, so Y4 must give 1.
+- **SH.** Y6 strands a waiter only when a third thread sleeps on the mutex at
+  the moment of relock; the contender exists for that. If Y6 stays green
+  anyway, I will report SH as not shown red and redesign it, not drop Y6.
+- **SD.** Without the generation bump nobody leaves the barrier, so the bounded
+  wait reports `timeout=1`.
 
 ## 5. Order of work
 
 1. This DDR (docs-only PR).
 2. After #81 merges: P3a, one PR with
    - `psync.h`,
-   - the four arms,
+   - the six arms,
    - the sentinels,
    - one green run on its exact head,
    - Y1–Y6 dispatched (at most 3 in CI) and each shown red on its arm.
@@ -151,7 +170,7 @@ All four sentinels go into the `smoke-thread` `EXTRA_SENTINEL` list.
 
 ## 6. Honesty labels
 
-- `psync` primitives: will be **gated (`smoke-thread` SA–SD)**, emulated only,
+- `psync` primitives: will be **gated (`smoke-thread` SA, SW, SB, SC, SH, SD)**, emulated only,
   **not verified on real hardware**. Memory-order claims rest on the x86-64 TSO
   model under TCG. They are not tested on a weakly ordered CPU (the riscv64 and
   aarch64 bootstraps do not run user threads).
