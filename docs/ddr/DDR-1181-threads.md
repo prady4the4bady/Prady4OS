@@ -26,7 +26,7 @@
 |---|---|---|
 | **P1** (this DDR) | Kernel threads that share one address space: `SYS_THREAD_CREATE` / `SYS_THREAD_EXIT`, thread groups, group exit, a refcounted `struct mm`, the mm lock. Gate `smoke-thread`, including the three DDR-1177 items. | C1.3 P1 (merged `a2ac698`; the gate uses `MAP_SHARED` anon) |
 | P2 | futex (`WAIT`/`WAKE`, private and shared), `CLEARTID` wake. | P1 |
-| P3 | Kernel `kmutex` with priority inheritance; user mutex, semaphore, condition variable and barrier on top of futex. | P2 |
+| P3 | User mutex, semaphore, condition variable and barrier on top of futex (DDR-1193). `kmutex` priority inheritance moved to C1.5 P3 (DDR-1193 D1). | P2 |
 | P4 | musl pthread: build it, add a `clone.s` overlay (it hard-codes 56/60), and add `set_tid_address`, `set_robust_list`, `rt_sigprocmask`, `mprotect`. Shared fd table and shared signal dispositions (the P1 divergences in §3.6). | P2, P3 |
 | P5 | RCU (one grace-period scheme, chosen in its own amendment). | P1 |
 | P6 | Lock-order checking (lockdep-style), with a mutant that inverts an order. | P3 |
