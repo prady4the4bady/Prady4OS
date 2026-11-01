@@ -255,7 +255,7 @@ jobs:
         if: needs.build.outputs.docs_only == 'true'
         run: echo "docs-only pull request (DDR-1187), shard ${{ matrix.shard }} ran no gate"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: needs.build.outputs.docs_only != 'true'
         with:
           submodules: recursive   # PROC-D: third_party/musl is needed by `make musl`
