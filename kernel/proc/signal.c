@@ -45,7 +45,7 @@ void sig_raise(struct tcb *t, int sig, int32_t pid, int32_t code, int32_t status
     t->sig_info[sig].status = status;
     /* Release: the info above is visible before the bit that announces it. */
     __atomic_fetch_or(&t->sig_pending, 1ull << sig, __ATOMIC_SEQ_CST);
-    futex_kick(t);       /* DDR-1181 A1.3: a FUTEX_WAIT sleeper must see it */
+    /* mutant: no futex_kick */
 }
 
 int signal_kill_pending(const struct tcb *t) {
