@@ -94,6 +94,8 @@ static inline void psem_init(psem *s, uint32_t v) { s->val = v; s->nwait = 0; s-
 static inline void psem_init_shared(psem *s, uint32_t v) { psem_init(s, v); s->priv = 0; }
 
 static inline void psem_wait(psem *s) {
+    __atomic_sub_fetch(&s->val, 1, __ATOMIC_SEQ_CST);    /* MUTANT Y3: no val > 0 check */
+    return;
     for (;;) {
         uint32_t v = __atomic_load_n(&s->val, __ATOMIC_RELAXED);
         while (v > 0)
