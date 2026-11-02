@@ -466,7 +466,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
   - `-EINTR`: a signal with a handler, or `SIGKILL`, is pending;
   - `-EINVAL`: `uaddr` is not 4-aligned, or the timeout is malformed (`tv_sec < 0`, or `tv_nsec` outside `[0, 1e9)`);
   - `-EFAULT`: `uaddr` is not a present user page, or the timeout pointer is bad.
-- **The timeout** is a relative `struct timespec`, rounded **up** to 10 ms ticks (100 Hz), so a wait never ends early. A zero timeout checks the value and returns `-ETIMEDOUT` without sleeping. `NULL` means no timeout.
+- **The timeout** is a relative `struct timespec`, rounded **up** to 10 ms ticks (100 Hz), **plus one tick when non-zero**, so a wait never ends early. Without the extra tick, a deadline counted in tick edges could end up to one tick early (DDR-1195 §1). A zero timeout checks the value and returns `-ETIMEDOUT` without sleeping. `NULL` means no timeout.
 - A spurious `0` is allowed, as on Linux: callers re-check their word.
 
 ### A1.2 Keys
@@ -503,11 +503,11 @@ Arms that can hang on a mutant run in a forked child, which is reaped with a bou
 |---|---|---|
 | FA | `PRADYOS_FUTEX_A woke=1 rc=0` | A thread waits; the creator calls `WAKE(1)` until it returns 1 (bounded at 2 s). The thread's `WAIT` returned 0. |
 | FB | `PRADYOS_FUTEX_B eagain=-11` | `WAIT` with `val` not equal to the word returns at once (child, bounded). |
-| FC | `PRADYOS_FUTEX_C timedout=-110 slept_ok=1` | A 50 ms timeout returns `-ETIMEDOUT` after at least 40 ms (vDSO clock; child, bounded). |
+| FC | `PRADYOS_FUTEX_C timedout=-110 slept_ok=1` | A 55 ms timeout returns `-ETIMEDOUT` after at least 55 ms, measured with the TSC (calibrated as the median of three 100 ms vDSO windows), with the call placed about 0.5 ms before a tick edge (DDR-1195 §2; child, bounded). Before DDR-1195: 50 ms, at least 40 ms, vDSO clock. |
 | FD | `PRADYOS_FUTEX_D max2=1 total=4` | Four threads wait. Repeated `WAKE(2)` never returns more than 2, and the returns sum to 4. |
 | FE | `PRADYOS_FUTEX_E shared_woke=1 rc=0` | A fork child waits on a `MAP_SHARED` word without the private flag; the parent's `WAKE` wakes it (shared key). |
-| FF | `PRADYOS_FUTEX_F private_isolated=1` | A fork child waits with `FUTEX_PRIVATE_FLAG`. The parent's private and shared wakes both return 0. |
-| FG | `PRADYOS_FUTEX_G killed_waiter=1` | The FF child, blocked forever, is reaped within 2 s of `SIGKILL` (the `sig_raise` kick). |
+| FF | `PRADYOS_FUTEX_F private_isolated=1 asleep=1` | A fork child waits with `FUTEX_PRIVATE_FLAG`. The parent's private and shared wakes both return 0, and the child is seen `THREAD_BLOCKED` with its WAIT not returned, both before and after the wakes (DDR-1195 §3). |
+| FG | `PRADYOS_FUTEX_G killed_waiter=1` | The FF child, confirmed blocked (DDR-1195 §3), is reaped within 2 s of `SIGKILL` (the `sig_raise` kick). |
 | FH | `PRADYOS_FUTEX_H eintr=-4` | A child with a `SIGUSR1` handler is blocked in `WAIT`; the parent's `SIGUSR1` makes `WAIT` return `-EINTR`. |
 | FI | `PRADYOS_FUTEX_I cleartid_woke=1` | The creator waits (2 s timeout) on a thread's `clear_tid` word while the thread delays and exits. Over 8 trials there is at least one `0` with the word cleared, and no `-ETIMEDOUT`. |
 | FJ | `PRADYOS_FUTEX_J rejects=4` | An unaligned `uaddr` is `-EINVAL`; an unmapped `uaddr` is `-EFAULT`; an unknown op is `-ENOSYS`; `tv_nsec = 1e9` is `-EINVAL`. |

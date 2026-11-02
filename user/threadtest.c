@@ -76,6 +76,20 @@ static inline long nsi6(long n, long a1, long a2, long a3,
 
 static uint64_t now(void) { return *(volatile uint64_t *)VDSO_USER_VA; }
 
+/* DDR-1195 §2: ring 3 may read the TSC (CR4.TSD clear; user/benchtest.c). */
+static inline uint64_t tsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+
+/* Spin to the next vDSO tick edge and return the TSC read just after it. */
+static uint64_t tsc_at_edge(void) {
+    uint64_t e = now();
+    while (now() == e) __asm__ volatile("pause");
+    return tsc();
+}
+
 /* Every line leaves in ONE write (DDR-1182 §3.1: a line written in pieces
  * can be split by other output). The line is built on the stack because a
  * probe may not carry a writable section (DDR-826). Understands %d (a long)
@@ -163,6 +177,8 @@ struct shared {
     volatile long fq;          /* FD: threads about to wait               */
     volatile long frc, brc, crc, cms, erc, hrc;   /* futex return values  */
     volatile long ready, hdone;
+    volatile long frc_f;       /* DDR-1195 §3: FF/FG WAIT result, 99 = not returned */
+    volatile long ctsc;        /* DDR-1195 §2: FC TSC counts per ms */
 };
 
 static long spawn(void (*fn)(long), long arg, uint64_t tls, uint64_t ctid) {
@@ -918,20 +934,39 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     reap(bp, 2000);
     say("PRADYOS_FUTEX_B eagain=%d\n", (long)(s->brc));
 
-    /* FC: a 50 ms timeout ends the wait, and not early. */
-    s->fcw = 0; s->crc = 1; s->cms = 0;
+    /* FC: a 55 ms timeout returns -ETIMEDOUT and is never early (DDR-1195
+     * §2). The sleep is measured with the TSC, not the 10 ms vDSO clock, and
+     * the WAIT starts ~0.5 ms before a tick edge: the worst case for a
+     * deadline counted in tick edges. */
+    s->fcw = 0; s->crc = 1; s->cms = 0; s->ctsc = 0;
     long cp = nsi(SYS_FORK, 0, 0, 0);
     if (cp < 0) fail("fork");
     if (cp == 0) {
-        struct fx_ts ts = { 0, 50 * (long)MS };
-        uint64_t t0 = now();
+        uint64_t per[3];
+        for (int w = 0; w < 3; w++) {          /* median of three 100 ms windows */
+            uint64_t c0 = tsc_at_edge(), v0 = now();
+            while (now() < v0 + 100 * MS) __asm__ volatile("pause");
+            uint64_t c1 = tsc();
+            per[w] = (c1 - c0) / 100;
+        }
+        uint64_t lo = per[0] < per[1] ? per[0] : per[1];
+        uint64_t hi = per[0] < per[1] ? per[1] : per[0];
+        uint64_t per_ms = per[2] < lo ? lo : (per[2] > hi ? hi : per[2]);
+        s->ctsc = (long)per_ms;
+        uint64_t c2 = tsc_at_edge();
+        while (tsc() - c2 < per_ms * 95 / 10) __asm__ volatile("pause");
+        struct fx_ts ts = { 0, 55 * (long)MS };
+        uint64_t c3 = tsc();
         s->crc = fx(&s->fcw, FUTEX_WAIT, 0, &ts);
-        s->cms = (long)((now() - t0) / MS);
+        uint64_t c4 = tsc();
+        s->cms = per_ms ? (long)((c4 - c3) * 100 / per_ms) : 0;   /* 1/100 ms */
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }
-    reap(cp, 3000);
-    say("PRADYOS_FUTEX_C timedout=%d slept_ok=%d\n", (long)(s->crc), (long)(s->cms >= 40));
+    reap(cp, 5000);
+    say("[thread] C ms_x100=%d tsc_per_ms=%d\n", (long)(s->cms), (long)(s->ctsc));
+    say("PRADYOS_FUTEX_C timedout=%d slept_ok=%d\n", (long)(s->crc),
+        (long)(s->ctsc > 0 && s->cms >= 5500));
 
     /* FD: WAKE(2) never wakes more than 2 of 4 waiters. */
     s->fdw = 0; s->fq = 0;
@@ -976,28 +1011,32 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     say("PRADYOS_FUTEX_E shared_woke=%d rc=%d\n", (long)(ewoke), (long)(s->erc));
 
     /* FF: a PRIVATE waiter in another process is reached by no wake of ours.
-     * FG: and SIGKILL still ends it. */
-    s->ffw = 0; s->ready = 0;
+     * FG: and SIGKILL still ends it. DDR-1195 §3: the waiter must be seen
+     * BLOCKED, with its WAIT not returned (frc_f == 99), before and after the
+     * wakes and at the kill; otherwise both arms could pass on a child that
+     * had already left. */
+    s->ffw = 0; s->ready = 0; s->frc_f = 99;
     long fpp = nsi(SYS_FORK, 0, 0, 0);
     if (fpp < 0) fail("fork");
     if (fpp == 0) {
         s->ready = 1;
-        fx(&s->ffw, FUTEX_WAIT | FUTEX_PRIVATE, 0, 0);
+        s->frc_f = fx(&s->ffw, FUTEX_WAIT | FUTEX_PRIVATE, 0, 0);
         nsi(SYS_EXIT, 0, 0, 0);
         for (;;) { }
     }
-    await(&s->ready, 2000);
-    settle(100);                         /* the child is asleep */
+    long fasleep = await(&s->ready, 2000) && sy_blocked(fpp, 2000) && s->frc_f == 99;
     long leaked = fx(&s->ffw, FUTEX_WAKE | FUTEX_PRIVATE, 1, 0);
     leaked += fx(&s->ffw, FUTEX_WAKE, 1, 0);
-    say("PRADYOS_FUTEX_F private_isolated=%d\n", (long)(leaked == 0));
+    long fstill = fasleep && sy_blocked(fpp, 500) && s->frc_f == 99;
+    say("PRADYOS_FUTEX_F private_isolated=%d asleep=%d\n",
+        (long)(leaked == 0 && fstill), fstill);
     nsi(SYS_KILL, fpp, SIGKILL, 0);
     long killed = 0;
     {
         int st = 0;
         uint64_t end = now() + 2000 * MS;
         while (now() < end) {
-            if (nsi(SYS_WAIT4, fpp, (long)&st, WNOHANG) == fpp) { killed = 1; break; }
+            if (nsi(SYS_WAIT4, fpp, (long)&st, WNOHANG) == fpp) { killed = fstill; break; }
             nsi(SYS_YIELD, 0, 0, 0);
         }
     }

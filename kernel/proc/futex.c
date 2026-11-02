@@ -190,7 +190,13 @@ static long sys_futex(long a_uaddr, long a_op, long a_val, long a_ts, long a5, l
             ts.tv_sec = 100000000L;    /* ~3 years: no tick overflow */
         timed = 1;
         ticks = (uint64_t)ts.tv_sec * 100u +
-                (uint64_t)((ts.tv_nsec + NS_PER_TICK - 1) / NS_PER_TICK);  /* never early */
+                (uint64_t)((ts.tv_nsec + NS_PER_TICK - 1) / NS_PER_TICK);
+        /* DDR-1195 §1: g_ticks counts tick EDGES, so a deadline of now+N
+         * can arrive after only (N-1) ticks plus a fraction. One more tick
+         * makes the sleep at least the request. Zero stays zero: check the
+         * word and return -ETIMEDOUT without sleeping (A1.1). */
+        if (ticks)
+            ticks += 1;
     }
     return fx_wait(t, (uint64_t)a_uaddr, (uint32_t)a_val, priv, timed, ticks);
 }
