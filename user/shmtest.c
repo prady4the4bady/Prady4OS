@@ -455,6 +455,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (nsi(SYS_FTRUNCATE, pfd, 2 * 4096, 0) == -EINVAL) prej++;
     if (nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, pfd, 4096) == -EINVAL) prej++;
     if (nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_PRIVATE, pfd, 0) == -EINVAL) prej++;
+    /* CodeRabbit 4443548860: a length that wraps npages to 0 is refused, not
+     * mapped as an empty area holding a leaked attach. */
+    if (nsi6(SYS_MMAP, 0, -1L, PROT_RW, MAP_SHARED, pfd, 0) == -EINVAL) prej++;
     line2("PRADYOS_SHM_P rejects=", prej);
     nsi(SYS_CLOSE, pfd, 0, 0);
 

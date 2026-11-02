@@ -289,7 +289,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 |---|---|---|
 | N | `PRADYOS_SHM_N fdshared=0x66` | The parent runs `shm_open`, sizes the object to 2 pages, maps both and writes `0x55` to page 1, then forks. The child maps **only page 1** through the inherited fd (`off = 4096`), checks that it reads `0x55`, writes `0x66` and exits. The parent reads `0x66` through its own mapping. This proves that the fd names the object and that `off` selects the page. |
 | O | `PRADYOS_SHM_O rejects=4` | `shm_open` with a real name is `-EACCES`; with `NULL` it is `-EACCES`; with `O_RDONLY` it is `-EINVAL`; with an unknown `oflag` bit it is `-EINVAL`. |
-| P | `PRADYOS_SHM_P rejects=6` | All of these are `-EINVAL`: `mmap` before `ftruncate`; a second `ftruncate`; `ftruncate(0)`; `ftruncate` over 1 MiB on a fresh object; `mmap` with `off + len` past the size; `MAP_PRIVATE` on the fd. |
+| P | `PRADYOS_SHM_P rejects=7` | All of these are `-EINVAL`: `mmap` before `ftruncate`; a second `ftruncate`; `ftruncate(0)`; `ftruncate` over 1 MiB on a fresh object; `mmap` with `off + len` past the size; `MAP_PRIVATE` on the fd; `mmap` with `len = -1` (A3.4). |
 | Q | `PRADYOS_SHM_Q cycles=64 opened=64 leaked_ok=1` | 64 cycles of: `shm_open`, `ftruncate(4 pages)`, `mmap`, write, `close` **while mapped**, read back, then `munmap`. The value must survive the `close` (the mapping keeps the object). The table has 32 slots, so a leak of one object per cycle fails `opened` at cycle 33. The free-page drop must stay under 128 pages; a frame leak would be 256 pages. |
 | R | `PRADYOS_SHM_R child_hold=0x77` | The parent sizes and maps an object, writes `0x77` and **unmaps it before forking**, so the child inherits the fd but no mapping. The child waits on a P1 flag page. The parent **closes its fd**, then sets the flag. The child, whose fd is now the only holder, maps the object and reads `0x77`. This proves `fd_clone` takes a hold. An inherited mapping would keep the object alive by itself, which is why there is none. |
 | S | `PRADYOS_SHM_S dup_hold=0x88` | `dup2(fd, 20)`, `close(fd)`, then `mmap` through fd 20 reads the `0x88` written earlier through the old mapping (unmapped before the `mmap`). This proves `dup2` takes a hold. |
@@ -321,6 +321,25 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S3-6 | [41447493592](https://github.com/prady4the4bady/Prady4OS/actions/runs/41447493592) | **S** only, `dup_hold=0x00` |
 
 Every arm N–S is shown red on this head, each by the mutant designed for it. QEMU TCG only; **not verified on real hardware**.
+
+### A3.4 A length that wraps to zero pages (CodeRabbit 4443548860)
+
+**Defect, found in review.**
+- `sys_mmap_locked` refused only `len == 0`.
+- For `len` within a page of 2^64, `(len + PAGE_SIZE - 1) / PAGE_SIZE` wraps to 0. `shm_fd_map` then:
+  - takes an attach (`shm_attach_begin`);
+  - passes the size check (`first + 0`);
+  - stores an area with `npages = 0`.
+- Every VMA walker treats `npages == 0` as a free slot: `munmap`, `shm_release_vmas` and `shm_fork_vmas`. So the attach is never detached, `nattch` never reaches 0, and the slot leaks.
+- One unprivileged process can fill the 32-slot table this way.
+
+**Fix.** `len > VMM_MMAP_TOP - VMM_MMAP_BASE` is `-EINVAL`, checked before any path rounds `len` to pages.
+- No mapping can exceed the arena anyway; `mmap_pick_base` already refused larger ones with `-EINVAL`.
+- This covers every `mmap` path: anonymous, private file, `FD_SHM` and the P4 file path.
+
+**Gate.** Arm P gains `mmap(len = -1)` on the fd and now wants `rejects=7`.
+- **Vacuity:** on the tree before the fix the call returns an address, so it is not counted, and P prints `rejects=6`: red.
+- **Mutant S3-7:** remove the bound. It must be red on P.
 
 **NSI:** 116 `SYS_SHM_OPEN`.
 
