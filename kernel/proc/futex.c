@@ -195,8 +195,7 @@ static long sys_futex(long a_uaddr, long a_op, long a_val, long a_ts, long a5, l
          * can arrive after only (N-1) ticks plus a fraction. One more tick
          * makes the sleep at least the request. Zero stays zero: check the
          * word and return -ETIMEDOUT without sleeping (A1.1). */
-        if (ticks)
-            ticks += 1;
+        /* MUTANT F2-9: no extra tick */
     }
     return fx_wait(t, (uint64_t)a_uaddr, (uint32_t)a_val, priv, timed, ticks);
 }
