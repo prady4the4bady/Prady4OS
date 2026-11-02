@@ -132,8 +132,8 @@ static inline long pcond_wait(pcond *c, pmutex *m) {
     uint32_t s = __atomic_load_n(&c->seq, __ATOMIC_SEQ_CST);
     pmutex_unlock(m);
     long r = ps_futex(&c->seq, PS_FUTEX_WAIT | c->priv, s);
-    while (__atomic_exchange_n(&m->st, 2, __ATOMIC_ACQUIRE) != 0)
-        ps_futex(&m->st, PS_FUTEX_WAIT | m->priv, 2);
+    while (__atomic_exchange_n(&m->st, 1, __ATOMIC_ACQUIRE) != 0)   /* MUTANT Y6: relock writes 1 */
+        ps_futex(&m->st, PS_FUTEX_WAIT | m->priv, 1);
     return r;
 }
 
