@@ -18,6 +18,13 @@ Base: #101 head `d35da2e`. This PR edits the same `user/threadtest.c` and the sa
 
 **The fix.** When `ticks > 0`, wait one more tick: `ticks + 1`. The sleep is then `ticks × 10 ms + δ`, which is at least the request. A zero timeout stays as it is (check the word, return `-ETIMEDOUT`, no sleep), as A1.1 specifies. This is the same choice Linux makes when it rounds a relative timeout to jiffies. **Cost:** up to one extra tick (10 ms) of latency on every timed wait.
 
+**What the fix does not cover (CodeRabbit 4439813873): a late tick.**
+- `g_ticks` is incremented in the timer IRQ (`idt.c:371`). If that CPU has IRQs masked across a tick edge, the edge is counted only when they are unmasked.
+- A wait whose deadline is computed in that gap starts from a stale `g_ticks`. One edge it counts happened before the wait began, so the wait can still end early, by up to the IRQ-off time.
+- The bound is therefore "never early by more than the longest IRQ-off section on the tick CPU". It is not "never early".
+- Ring 3 cannot mask IRQs, so no probe can provoke the case, and **this residue is not gated**.
+- Closing it needs a monotonic deadline: compare a TSC deadline in the wake check (`sched.c:2245`) as well as `g_ticks`. That needs kernel TSC calibration and a kernel-side test hook, so it belongs in its own DDR. The operator decides (#45).
+
 ## 2. FC measured below tick resolution
 
 The vDSO clock cannot see a sub-tick early wake (§1), so FC changes how it measures:
@@ -25,7 +32,11 @@ The vDSO clock cannot see a sub-tick early wake (§1), so FC changes how it meas
 1. **Calibrate.** The child counts `rdtsc` across three 100 ms vDSO windows, each starting and stopping on a tick edge, and takes the **median** count per ms. Ring 3 may run `rdtsc`: CR4.TSD is not set, and `user/benchtest.c` already uses it.
    - A preemption between an edge and its `rdtsc` read skews one window by up to one slice. The median throws one bad window away.
    - With a single window, a skew that overestimates the rate would make a correct kernel look early, and FC would go red on good code.
-2. **Place the call just before an edge.** The child waits for a vDSO edge, then spins on the TSC for 9.5 ms, so the `FUTEX_WAIT` starts about 0.5 ms before the next edge. That is the worst case of §1.
+2. **Place the call just before an edge, and check the placement.** The child waits for a vDSO edge, then spins on the TSC for 9.5 ms, so the `FUTEX_WAIT` starts about 0.5 ms before the next edge. That is the worst case of §1.
+   - A preemption during the spin could carry the call past the edge. The unfixed kernel would then sleep the full request and pass, which makes F2-9 vacuous on that run (CodeRabbit 4439813890).
+   - So, just before the call, the child checks that 9.0–9.9 ms have passed since the edge and that the vDSO tick has not moved. If not, it re-places, up to 8 tries.
+   - No placed try leaves `placed_try=0` and FC red. A misplaced trial can never count as a pass.
+   - This only protects the mutant's sensitivity: on the fixed kernel, any placement sleeps at least the request.
 3. **Request 55 ms** (`ticks = 6`) and require the TSC-measured sleep to be **≥ 55 ms**: it must not be early. The sentinel stays `PRADYOS_FUTEX_C timedout=-110 slept_ok=1`. `slept_ok` now means "not early", measured; it no longer means "at least 40 ms".
 
 Expected values, with δ ≈ 0.5 ms and L = wake-to-run latency:
@@ -35,7 +46,7 @@ Expected values, with δ ≈ 0.5 ms and L = wake-to-run latency:
 | fixed (`ticks + 1` = 7) | 6 × 10 + δ + L ≈ 60.5 + L | passes, with a 9 % margin for calibration error |
 | without the fix (6) | 5 × 10 + δ + L ≈ 50.5 + L | fails while L < 4.5 ms |
 
-The child prints `[thread] C ms_x100=<sleep in hundredths of a ms> tsc_per_ms=<n>`, so every run shows both margins.
+The child prints `[thread] C ms_x100=<sleep in hundredths of a ms> tsc_per_ms=<n> placed_try=<n>`, so every run shows both margins and how many tries placement took.
 
 **Vacuity check, before writing the arm:**
 - **The unfixed tree turns FC red** whenever L < 4.5 ms.
@@ -77,7 +88,7 @@ The comment says "schedule() holds it ACROSS context_switch". That stopped being
 
 ## 6. Honesty labels
 
-- Futex timeout "never early": will be **gated by FC (TSC, worst-case placement)**, QEMU only. It depends on TCG's TSC staying in step with the PIT over about 360 ms. **Not verified on real hardware.**
+- Futex timeout "never early, given ticks delivered on time": **gated by FC** (TSC, checked worst-case placement), QEMU only. Early by up to the tick CPU's IRQ-off time: **not gated** (§1). It depends on TCG's TSC staying in step with the PIT over about 360 ms. **Not verified on real hardware.**
 - FF and FG: will be gated with a witness that the waiter was blocked.
 - Cost of the fix: up to 10 ms extra latency per timed wait. Measured as `ms_x100`; nothing else is claimed.
 

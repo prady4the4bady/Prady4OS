@@ -179,6 +179,7 @@ struct shared {
     volatile long ready, hdone;
     volatile long frc_f;       /* DDR-1195 §3: FF/FG WAIT result, 99 = not returned */
     volatile long ctsc;        /* DDR-1195 §2: FC TSC counts per ms */
+    volatile long ctries;      /* DDR-1195 §2: FC placement attempts (0 = none placed) */
 };
 
 static long spawn(void (*fn)(long), long arg, uint64_t tls, uint64_t ctid) {
@@ -938,7 +939,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
      * §2). The sleep is measured with the TSC, not the 10 ms vDSO clock, and
      * the WAIT starts ~0.5 ms before a tick edge: the worst case for a
      * deadline counted in tick edges. */
-    s->fcw = 0; s->crc = 1; s->cms = 0; s->ctsc = 0;
+    s->fcw = 0; s->crc = 1; s->cms = 0; s->ctsc = 0; s->ctries = 0;
     long cp = nsi(SYS_FORK, 0, 0, 0);
     if (cp < 0) fail("fork");
     if (cp == 0) {
@@ -953,10 +954,23 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         uint64_t hi = per[0] < per[1] ? per[1] : per[0];
         uint64_t per_ms = per[2] < lo ? lo : (per[2] > hi ? hi : per[2]);
         s->ctsc = (long)per_ms;
-        uint64_t c2 = tsc_at_edge();
-        while (tsc() - c2 < per_ms * 95 / 10) __asm__ volatile("pause");
+        /* Place the call 0.1-1.0 ms before the next edge. A preemption in
+         * the spin can carry it past the edge, which would let the unfixed
+         * kernel pass, so check the placement and re-place (up to 8 tries)
+         * instead of trusting the spin (CodeRabbit 4439813890). No try placed
+         * leaves ctries = 0 and FC red, never a pass. */
         struct fx_ts ts = { 0, 55 * (long)MS };
-        uint64_t c3 = tsc();
+        uint64_t c3 = 0;
+        for (int tr = 1; tr <= 8 && !s->ctries; tr++) {
+            uint64_t c2 = tsc_at_edge();
+            uint64_t v2 = now();
+            while (tsc() - c2 < per_ms * 95 / 10) __asm__ volatile("pause");
+            c3 = tsc();
+            uint64_t off = c3 - c2;
+            if (now() == v2 && off >= per_ms * 9 && off < per_ms * 99 / 10)
+                s->ctries = tr;
+        }
+        if (!s->ctries) { nsi(SYS_EXIT, 0, 0, 0); for (;;) { } }
         s->crc = fx(&s->fcw, FUTEX_WAIT, 0, &ts);
         uint64_t c4 = tsc();
         s->cms = per_ms ? (long)((c4 - c3) * 100 / per_ms) : 0;   /* 1/100 ms */
@@ -964,9 +978,9 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
         for (;;) { }
     }
     reap(cp, 5000);
-    say("[thread] C ms_x100=%d tsc_per_ms=%d\n", (long)(s->cms), (long)(s->ctsc));
+    say("[thread] C ms_x100=%d tsc_per_ms=%d placed_try=%d\n", (long)(s->cms), (long)(s->ctsc), (long)(s->ctries));
     say("PRADYOS_FUTEX_C timedout=%d slept_ok=%d\n", (long)(s->crc),
-        (long)(s->ctsc > 0 && s->cms >= 5500));
+        (long)(s->ctsc > 0 && s->ctries > 0 && s->cms >= 5500));
 
     /* FD: WAKE(2) never wakes more than 2 of 4 waiters. */
     s->fdw = 0; s->fq = 0;

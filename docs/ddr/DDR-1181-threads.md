@@ -466,7 +466,7 @@ Each step is its own PR, stacked on the previous one, and each PR is flagged sec
   - `-EINTR`: a signal with a handler, or `SIGKILL`, is pending;
   - `-EINVAL`: `uaddr` is not 4-aligned, or the timeout is malformed (`tv_sec < 0`, or `tv_nsec` outside `[0, 1e9)`);
   - `-EFAULT`: `uaddr` is not a present user page, or the timeout pointer is bad.
-- **The timeout** is a relative `struct timespec`, rounded **up** to 10 ms ticks (100 Hz), **plus one tick when non-zero**, so a wait never ends early. Without the extra tick, a deadline counted in tick edges could end up to one tick early (DDR-1195 §1). A zero timeout checks the value and returns `-ETIMEDOUT` without sleeping. `NULL` means no timeout.
+- **The timeout** is a relative `struct timespec`, rounded **up** to 10 ms ticks (100 Hz), **plus one tick when non-zero**. Without the extra tick, a deadline counted in tick edges could end up to one tick early. With it, a wait does not end early **as long as the tick IRQ is delivered on time**; a tick delayed by masked IRQs on the tick CPU can still make a wait early by up to that delay, and that case is not gated (DDR-1195 §1). A zero timeout checks the value and returns `-ETIMEDOUT` without sleeping. `NULL` means no timeout.
 - A spurious `0` is allowed, as on Linux: callers re-check their word.
 
 ### A1.2 Keys
