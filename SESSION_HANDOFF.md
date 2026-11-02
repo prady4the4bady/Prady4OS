@@ -4,12 +4,12 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## State (2026-11-01)
 
-- **dev/phase1 tip:** `f0e1bb6` (PR #91, C1.4 P1d, DDR-1186). Before it: #97 `757983b` (DDR-1191, CI pinned to `ubuntu-24.04`), #76 `3358b35` (C1.4 P1c), #77 `cd3281a` (DDR-1183 size gate). Branch protection is on; the operator merges.
-- **Kernel:** `kernel.bin` 1,577,354 B with #81 merged onto `f0e1bb6` (local build, 0 warnings); gate 1,703,936 B. NSI: `SYS_FUTEX` 117 (#81), `SYS_SCHED_CPU` 118 (#91). DDR next free: 1193.
-- **DDR-1177 C1.4 arm D, arm E and M4 ticked** with `f0e1bb6` (T4, T5, T6 red on `a4a508a`). Emulated only. Cross-CPU TLB coherence for threads is not verified on real hardware.
-- **#81 (C1.4 P2 futex, security boundary):** `dev/phase1` merged in as `547e1c5` (5 textual conflicts, both sides kept). Needs one green run on that head and F2-1 to F2-8 red again before it asks for merge.
-- **#98 (DDR-1192):** updated onto `f0e1bb6`; carries this bookkeeping. One green run, then the operator merges. The CodeRabbit marker-list finding was answered and withdrawn (thread 4431625714).
-- **Then:** #78 → #80 (C1.3 P2/P3, security boundary). Also open: #88, #72, #85, #90.
+- **dev/phase1 tip:** `cc99745` (PR #81, C1.4 P2 futex, DDR-1181 Amendment 1). Before it: #99 `4909109` (DDR-1193, C1.4 P3 design; D1 approved: priority inheritance moves to C1.5 P3), #98 `65357d3` (DDR-1192), #91 `f0e1bb6` (C1.4 P1d). Branch protection is on; the operator merges.
+- **Kernel:** `kernel.bin` 1,577,354 B on `cc99745` (local build, 0 warnings); gate 1,703,936 B. NSI: `SYS_FUTEX` 117, `SYS_SCHED_CPU` 118. DDR next free: 1195.
+- **C1.4 futex ticked** with `cc99745`: arms FA–FJ green, F2-1 to F2-8 red on `547e1c5`. The merged head `5997083` passed on run 41299374169 attempt 2; attempt 1 failed `smoke-part` on a console line split by another CPU. QEMU only.
+- **This PR (DDR-1194):** prints each `[part]` line as one `kline`, which removes the splice race behind that failure. Mechanism fixed, not proven by a gate. It also carries this bookkeeping and the DDR-1181 A1.3 SIGTERM/SIGPIPE limit.
+- **Then:** P3a (DDR-1193 §5: `psync.h`, six `smoke-thread` arms, mutants Y1–Y6; report early whether QEMU runs the vCPUs in parallel). Then #78 → #80 (C1.3 P2/P3, security boundary). Also open: #88, #72, #85, #90.
+- **Follow-ups owed from #81:** the stale lock comment at `sched.c:880-883`; FF/FG need a blocked-waiter witness (CodeRabbit thread 4435326775); futex timeout +1 tick when `ticks > 0`, with FC at 51 ms and a new mutant.
 - `dev/phase1` `2a49a73` `smoke-iso-userspace` surface-lifecycle failure is still unexplained; DDR-1192 keeps its evidence if it repeats.
 
 ## Next

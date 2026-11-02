@@ -59,7 +59,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART` | not started | none | DDR-1090: no EINTR, no mask |
 | `CLONE_VM` threads, TLS, thread groups (DDR-1181) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` A, B, C, F | Several threads of one program share memory; #76 `3358b35`. No user-space pthreads library yet |
 | Cross-CPU TLB coherence for threads, CPU pinning (DDR-1177, DDR-1186) | gated, QEMU only (not verified on real hardware) | `smoke-thread` P, D, E, M, G | `mprotect`/`munmap` on one CPU is seen by a thread on another; #91 `f0e1bb6` |
-| futex | in review (#81) | `smoke-thread` FA-FJ | Not merged |
+| futex: WAIT/WAKE, private and shared keys, timeout, signal wake, CLEARTID wake (DDR-1181 A1) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` FA-FJ | Threads can sleep on a memory word instead of spinning; #81 `cc99745`. Limit: a default-terminate signal other than SIGKILL, with no handler, does not end a FUTEX_WAIT (DDR-1181 A1.3) |
 
 ## Syscalls, files, storage
 
