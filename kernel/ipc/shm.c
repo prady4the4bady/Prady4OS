@@ -174,7 +174,7 @@ static void put_and_reclaim(int obj, int which) {
     o->npages = 0;
     /* DDR-1178 A2.4: a removed segment whose shmids still exist keeps its slot
      * dead, or a later segment in the slot would be reached through them. */
-    o->used = o->holders ? 3 : 0;
+    o->used = (o->holders || o->kind == SHM_KIND_FILE) ? 3 : 0;   /* MUTANT S4-7 */
     spin_unlock_irqrestore(&g_shm_lock, fl);
 }
 
