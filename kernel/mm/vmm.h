@@ -137,3 +137,5 @@ void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
  * at `cr3` (4 KiB leaf), or 0 if not present. Used by sys_munmap to find the
  * frame to free after clearing the PTE. */
 uint64_t vmm_resolve(uint64_t cr3, uint64_t virt);
+/* DDR-1181 A1.2: the whole leaf PTE (flags included) for `virt`, or 0. */
+uint64_t vmm_resolve_pte(uint64_t cr3, uint64_t virt);

@@ -222,7 +222,7 @@ USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/mm.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
-               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/proc/kmutex.c kernel/ipc/ipc.c kernel/ipc/shm.c \
+               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/proc/kmutex.c kernel/proc/futex.c kernel/ipc/ipc.c kernel/ipc/shm.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_thread.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
@@ -247,7 +247,7 @@ KERNEL_BIN  := build/kernel.bin
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/numa.o build/kheap.o \
-               build/vmm.o build/vmm_cow.o build/mm.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/kmutex.o build/ipc.o build/shm.o \
+               build/vmm.o build/vmm_cow.o build/mm.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/kmutex.o build/futex.o build/ipc.o build/shm.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_thread.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
                build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
@@ -712,6 +712,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/proc/epoll.c    -o build/epoll.o
 	$(CC) $(KCFLAGS) -c kernel/proc/signal.c   -o build/signal.o
 	$(CC) $(KCFLAGS) -c kernel/proc/kmutex.c   -o build/kmutex.o
+	$(CC) $(KCFLAGS) -c kernel/proc/futex.c    -o build/futex.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c       -o build/ipc.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/shm.c      -o build/shm.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
@@ -1310,6 +1311,17 @@ smoke-iso-x86: iso
 	@grep -q 'NEXUS KERNEL OK' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm did not reach the kernel"; tail -20 build/iso_uefi.log; exit 1; }
 	@echo "[iso] UEFI arm OK — one ISO, both boot paths, same sentinel"
 
+# DDR-1192: on a graphics FAIL, print every line the compositor and the surface
+# client wrote, not only the console tail (the 2a49a73 failure left 30 heartbeat
+# lines and nothing from either program). The marker list is read from their
+# sources at gate time, so a new marker is covered without editing this.
+ISO_SURF_MARKS = build/gatelogs/iso_surf_markers.txt
+ISO_SURF_DIAG = { mkdir -p build/gatelogs; \
+	  grep -ohE 'PRADYOS_[A-Z0-9_]+' $(USER_COMP_SRC) $(USER_SURF_SRC) | sort -u > $(ISO_SURF_MARKS); \
+	  echo "[iso-user] compositor + surfacetest lines (DDR-1192):"; \
+	  grep -aFf $(ISO_SURF_MARKS) build/iso_user.log | tail -120; \
+	  echo "[iso-user] $$(grep -acFf $(ISO_SURF_MARKS) build/iso_user.log) such lines; full log: build/iso_user.log"; }
+
 # DDR-972 (fixes DDR-971): the ISO must boot an OS, not just a kernel.
 #
 # smoke-iso-x86 asserts NEXUS KERNEL OK, which prints at line 30 of 145 — about
@@ -1368,8 +1380,8 @@ smoke-iso-userspace: iso
 	@grep -qF 'rm: removed /ISOTEST.TXT' build/iso_user.log || { echo "[iso-user] FAIL: rm did not remove"; tail -30 build/iso_user.log; exit 1; }
 	@# 6. the graphics stack initialises from the ISO when a GPU is present, and
 	@#    a ring-3 client completes a surface lifecycle against it.
-	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; exit 1; }
-	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; $(ISO_SURF_DIAG); exit 1; }
+	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; $(ISO_SURF_DIAG); exit 1; }
 	@# 7. lwIP carries real loopback traffic — not just "the NIC linked up".
 	@grep -q 'PRADYOS_NET_LO_OK' build/iso_user.log || { echo "[iso-user] FAIL: no lwIP loopback traffic"; tail -30 build/iso_user.log; exit 1; }
 	@if grep -qiE '\[panic\]|KERNEL PANIC' build/iso_user.log; then echo "[iso-user] FAIL: kernel panic"; tail -30 build/iso_user.log; exit 1; fi
@@ -4373,18 +4385,20 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[sigsem] PASS"
 
-# DDR-1181 (C1.4 P1): threads sharing one address space, 4 vCPUs. Gated arms
-# A-F (DDR-1181 sec.4, sec.4.3). D and E prove that mprotect/munmap take effect
-# for a sibling thread on the SAME CPU: the scheduler never spreads one
-# process's threads under the boot's load (sec.4.3), so the cross-CPU DDR-1177
-# C1.4 items, and arms M and G, wait for P1d. M and G print but are ungated.
+# DDR-1181 (C1.4 P1): threads sharing one address space, 4 vCPUs. Arms A-G and
+# M in DDR-1181 sec.4; P and the cross-CPU placement of D, E, M and G in
+# DDR-1186 (SYS_SCHED_CPU; the scheduler never spreads one process's threads
+# under the boot's load, DDR-1181 sec.4.3). D, E and M are the DDR-1177 C1.4
+# items. Mutants T1-T8 in DDR-1181 sec.4, P1 in DDR-1186 sec.4.
+# DDR-1193 (C1.4 P3a): arms SA, SW, SB, SC, SH, SD (psync.h); mutants Y1-Y6 in
+# DDR-1193 sec.4.1 and Amendment 1.
 smoke-thread: $(IMG) fat-image sfs-image
 	@rm -f build/thread.log
 	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_D prot_stale=0 faulted=1\nPRADYOS_THREAD_E stale=0 faulted=1\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_THREAD_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
-	@grep -a "\[thread\]\|PRADYOS_THREAD" build/thread.log || true
+	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC" build/thread.log || true
 	@echo "[thread] PASS"
 
 # DDR-1177 (C1.2): cross-CPU TLB shootdown, in-kernel probe on 4 CPUs. Arms A-C

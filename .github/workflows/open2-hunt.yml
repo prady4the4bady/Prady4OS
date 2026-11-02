@@ -96,7 +96,7 @@ jobs:
   # array as JSON. Without it the input would be decoration -- a knob that reads
   # as if it changes the run and does not.
   setup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # DDR-1191: pinned; ubuntu-latest moved to 26.04
     outputs:
       lanes: ${{ steps.gen.outputs.lanes }}
     steps:
@@ -118,7 +118,7 @@ jobs:
 
   hunt:
     needs: setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # DDR-1191: pinned; ubuntu-latest moved to 26.04
     timeout-minutes: 180
     strategy:
       fail-fast: false        # one lane finding a signal must not cancel the others

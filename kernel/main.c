@@ -1540,18 +1540,30 @@ static void part_selftest(cap_t cap) {
     int mbr_ok = n == 2 && mp[0].index == 0 && mp[0].type == 0xEF && mp[0].lba == 64 &&
                  mp[0].count == 128 && mp[0].boot == 0x80 && mp[1].index == 1 &&
                  mp[1].type == 0xDA && mp[1].lba == 192 && mp[1].count == 320;
-    kputs("[part] mbr n="); kputdec((uint64_t)(n < 0 ? 99 : n));
-    kputs(mbr_ok ? " ok\r\n" : " BAD\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] mbr n=");
+      kline_d(&k, (uint64_t)(n < 0 ? 99 : n));
+      kline_s(&k, mbr_ok ? " ok\r\n" : " BAD\r\n");
+      kline_emit(&k); }
     b[511] = 0x00;
     int sig = blk_mbr_parse(b, pd->capacity_sectors, mp);
-    kputs("[part] sig rc="); kputs(sig == -EINVAL ? "-EINVAL" : "accepted"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] sig rc=");
+      kline_s(&k, sig == -EINVAL ? "-EINVAL" : "accepted");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= mbr_ok && sig == -EINVAL;
 
     /* mk */
     int mk1 = blk_part_create((unsigned)rd, 192, 321);
     int mk2 = blk_part_create((unsigned)rd, ~0ull, 1);
-    kputs("[part] mk over="); kputs(mk1 == -EINVAL ? "-EINVAL" : "created");
-    kputs(" wrap="); kputs(mk2 == -EINVAL ? "-EINVAL" : "created"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] mk over=");
+      kline_s(&k, mk1 == -EINVAL ? "-EINVAL" : "created");
+      kline_s(&k, " wrap=");
+      kline_s(&k, mk2 == -EINVAL ? "-EINVAL" : "created");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= mk1 == -EINVAL && mk2 == -EINVAL;
 
     int p1 = blk_part_create((unsigned)rd, 64, 128);
@@ -1571,9 +1583,15 @@ static void part_selftest(cap_t cap) {
     int at192 = b[0] == 0xB2 && b[511] == 0xB2;
     pd->read(pd, 0, b, 1);
     int mbr_intact = b[510] == 0x55 && b[446 + 4] == 0xEF;
-    kputs("[part] off w="); kputdec((uint64_t)(w == 0 ? 0 : 1));
-    kputs(" parent192="); kputs(at192 ? "marker" : "missing");
-    kputs(" sector0="); kputs(mbr_intact ? "intact" : "clobbered"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] off w=");
+      kline_d(&k, (uint64_t)(w == 0 ? 0 : 1));
+      kline_s(&k, " parent192=");
+      kline_s(&k, at192 ? "marker" : "missing");
+      kline_s(&k, " sector0=");
+      kline_s(&k, mbr_intact ? "intact" : "clobbered");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= w == 0 && at192 && mbr_intact;
 
     /* bnd: P1 is 128 sectors, so LBA 128 is P2's first sector in the parent.
@@ -1586,15 +1604,26 @@ static void part_selftest(cap_t cap) {
     memset(b, 0, 512);
     pd->read(pd, 192, b, 1);
     int kept = b[0] == 0xB2;
-    kputs("[part] bnd w128="); kputs(bw == -EINVAL ? "-EINVAL" : "written");
-    kputs(" r127x2="); kputs(br == -EINVAL ? "-EINVAL" : "read");
-    kputs(" r127="); kputdec((uint64_t)(last == 0 ? 0 : 1));
-    kputs(" neighbour="); kputs(kept ? "kept" : "overwritten"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] bnd w128=");
+      kline_s(&k, bw == -EINVAL ? "-EINVAL" : "written");
+      kline_s(&k, " r127x2=");
+      kline_s(&k, br == -EINVAL ? "-EINVAL" : "read");
+      kline_s(&k, " r127=");
+      kline_d(&k, (uint64_t)(last == 0 ? 0 : 1));
+      kline_s(&k, " neighbour=");
+      kline_s(&k, kept ? "kept" : "overwritten");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= bw == -EINVAL && br == -EINVAL && last == 0 && kept;
 
     /* wrap */
     int wr = d2->read(d2, ~0ull, b, 1);
-    kputs("[part] wrap rc="); kputs(wr == -EINVAL ? "-EINVAL" : "read"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] wrap rc=");
+      kline_s(&k, wr == -EINVAL ? "-EINVAL" : "read");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= wr == -EINVAL;
 
     /* sfs: format and mount on P2; P1 must be untouched by it. */
@@ -1607,9 +1636,15 @@ static void part_selftest(cap_t cap) {
         d1->read(d1, s, b, 1);
         for (unsigned k = 0; k < 512; k++) if (b[k] != 0x5A) { p1bad++; break; }
     }
-    kputs("[part] sfs format="); kputdec((uint64_t)(f == 0 ? 0 : 1));
-    kputs(" mount="); kputs(mt >= 0 ? "ok" : "fail");
-    kputs(" p1_dirty="); kputdec(p1bad); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] sfs format=");
+      kline_d(&k, (uint64_t)(f == 0 ? 0 : 1));
+      kline_s(&k, " mount=");
+      kline_s(&k, mt >= 0 ? "ok" : "fail");
+      kline_s(&k, " p1_dirty=");
+      kline_d(&k, p1bad);
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= f == 0 && mt >= 0 && p1bad == 0;
 
     /* DDR-1143 §10.2 -- barrier ORDER at the block interface. The trace device
@@ -1656,10 +1691,17 @@ static void part_selftest(cap_t cap) {
         memcpy(txn, t->log, t->n + 1);
         ttail = trace_tail_ok(t);
     }
-    kputs("[part] trace plain="); kputs(plain[0] ? plain : "-");
-    kputs(" txn="); kputs(txn[0] ? txn : "-");
-    kputs(" tail="); kputs(ptail && ttail ? "ok" : "BAD");
-    kputs(" setup="); kputs(tr_ok ? "ok" : "fail"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] trace plain=");
+      kline_s(&k, plain[0] ? plain : "-");
+      kline_s(&k, " txn=");
+      kline_s(&k, txn[0] ? txn : "-");
+      kline_s(&k, " tail=");
+      kline_s(&k, ptail && ttail ? "ok" : "BAD");
+      kline_s(&k, " setup=");
+      kline_s(&k, tr_ok ? "ok" : "fail");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= tr_ok && ptail && ttail;
 
     /* virtio: a flush on a REAL device is accepted, and every flush the
@@ -1672,10 +1714,15 @@ static void part_selftest(cap_t cap) {
         if (vd && vd->name && strcmp(vd->name, "virtio-blk") == 0) { vrc = blk_flush(i); break; }
     }
     virtio_blk_flush_stats(&neg, &iss, &fok);
-    kputs("[part] virtio neg="); kputdec((uint64_t)(neg < 0 ? 9 : neg));
-    kputs(" flush="); kputs(vrc == 0 ? "0" : "FAIL");
-    kputs(" issued=ok="); kputs(iss == fok && iss > 0 ? "yes" : "NO");
-    kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] virtio neg=");
+      kline_d(&k, (uint64_t)(neg < 0 ? 9 : neg));
+      kline_s(&k, " flush=");
+      kline_s(&k, vrc == 0 ? "0" : "FAIL");
+      kline_s(&k, " issued=ok=");
+      kline_s(&k, iss == fok && iss > 0 ? "yes" : "NO");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= neg == 1 && vrc == 0 && iss == fok && iss > 0;
 
     pmm_free_page(pg);
