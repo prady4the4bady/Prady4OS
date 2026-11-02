@@ -394,9 +394,7 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
         return -EINVAL;
     /* DDR-1178 A4.4: a writable FILE area writes its dirty pages back first,
      * while they are still mapped. */
-    if (v->shm && v->wcap)
-        shm_vma_writeback(t->cr3, v, v->base, v->base + v->npages * PAGE_SIZE,
-                          SHM_WB_RELEASE);
+    /* MUTANT S4-4: munmap skips write-back */
     unmap_range(t->cr3, v->base, v->npages);
     if (v->shm) {
         shm_detach(v->shm - 1);      /* DDR-1178 A2.2: munmap is a detach */
