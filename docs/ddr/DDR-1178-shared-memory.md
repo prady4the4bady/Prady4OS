@@ -97,7 +97,7 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
   All three must carry `PTE_SW_SHMEM`, and arm E gates the `mprotect` one. The fork walk must carry `PTE_SW_SHMEM` explicitly, or the child's copy loses it and the next fork COWs it, which is exactly M1. The implementation PR lists every `0xFFF` mask site and how it is handled.
 - **Refcount width.** It is 16 bits. A shared page inherited by more than 65,535 processes would wrap. Fork depth is bounded by the process table today; the bound is recorded in the implementation PR.
 - **Huge pages.** None are used for user memory. `PG_PS` entries are skipped by the walk, unchanged.
-- **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range (refused today for every mapping; unchanged).
+- **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range. **Correction (CodeRabbit 4441673086):** an earlier version of this line said a partial `munmap` is refused. It is not. `sys_munmap_locked` ignores the length and removes the whole region that contains `addr`, for every mapping. This was already so on `dev/phase1` before P1. For a P2 attachment, or a P3 mapping of an `FD_SHM` fd, that makes a partial `munmap` a full detach (A2.2, A3.2). Linux would unmap only the requested pages. The behaviour is unchanged here and is not gated; length checking is a separate item.
 
 ## 6. Owner decisions required before P2-P4 (stop condition, #45/6256077528); decided in Amendment 1
 
@@ -217,7 +217,17 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 | S2-6 | [40456879719](https://github.com/prady4the4bady/prady4os/actions/runs/40456879719) | L `nattch_fork=0` (want `1`) |
 | S2-7 | [40456881815](https://github.com/prady4the4bady/prady4os/actions/runs/40456881815) | M `reclaimed=0` |
 
-After these runs the shm code changed only by A2.4 (the dead-slot rule in `put_and_reclaim` and `shm_hold`, plus arm T); no S2-1..S2-7 mutant touches those lines and no arm G-M depends on a removed slot being reused, so the runs are taken as still applying. That is a reading of the code; the runs were not repeated on the A2.4 head.
+**Re-run on the merged head `551b562`** (A2.4 plus `dev/phase1` through `9306963`; fixed tree green on [41405761144](https://github.com/prady4the4bady/Prady4OS/actions/runs/41405761144)). Each mutant was re-applied on `551b562`. Each is red in `smoke-shm` only, on its own arm, with the same values as above:
+
+| Mutant | Run on `551b562` | Red on |
+|---|---|---|
+| S2-1 | [41406018550](https://github.com/prady4the4bady/Prady4OS/actions/runs/41406018550) | G `key=66` |
+| S2-2 | [41413539496](https://github.com/prady4the4bady/Prady4OS/actions/runs/41413539496) | H `shared=0x55`; the probe then stops at `j_mapping_lost=85`, a consequence of the same COW |
+| S2-3 | [41413543019](https://github.com/prady4the4bady/Prady4OS/actions/runs/41413543019) | I `forged=1` |
+| S2-4 | [41419522047](https://github.com/prady4the4bady/Prady4OS/actions/runs/41419522047) | J `eidrm=584115617792 freed_ok=0` |
+| S2-5 | [41419526150](https://github.com/prady4the4bady/Prady4OS/actions/runs/41419526150) | K `ro_faulted=0` |
+| S2-6 | [41419530619](https://github.com/prady4the4bady/Prady4OS/actions/runs/41419530619) | L `nattch_fork=0` |
+| S2-7 | [41426415211](https://github.com/prady4the4bady/Prady4OS/actions/runs/41426415211) | M `reclaimed=0` (`[shm] M drop=16`) |
 
 ### A2.4 A removed segment keeps its slot until no shmid names it (found by S3-5 surviving)
 
@@ -235,6 +245,8 @@ After these runs the shm code changed only by A2.4 (the dead-slot rule in `put_a
 **Mutant S2-8:** `put_and_reclaim` frees the slot of a marked segment whatever `holders` is (the pre-A2.4 rule). Want red on T only.
 
 **S2-8 run:** [40537012413](https://github.com/prady4the4bady/prady4os/actions/runs/40537012413) (`3cbdf3f`), red on T only: `PRADYOS_SHM_T stale=153` (want `-22`), every other arm on the sentinel. The head with A2.4, `45af5b6`, is green ([40536969423](https://github.com/prady4the4bady/prady4os/actions/runs/40536969423)) with `stale=-22`. A2.4 is **gated by arm T**.
+
+**S2-8 re-run** on `551b562`: [41426419602](https://github.com/prady4the4bady/Prady4OS/actions/runs/41426419602), red on T only, `PRADYOS_SHM_T stale=153` (want `-22`). The fixed tree passes T on [41405761144](https://github.com/prady4the4bady/Prady4OS/actions/runs/41405761144). A2.4 is gated by arm T, in QEMU TCG only, and is **not verified on real hardware**.
 
 ## Amendment 3 (2026-10-21 UTC, after Amendment 2): P3 design, POSIX `shm_open(SHM_ANON)` under D1(c)
 
@@ -306,4 +318,4 @@ After these runs the shm code changed only by A2.4 (the dead-slot rule in `put_a
 - **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
 - **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3). S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
