@@ -259,7 +259,12 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     int prot  = (int)a_prot;
     int flags = (int)a_flags;
 
-    if (len == 0)
+    /* CodeRabbit 4443548860: bound len BEFORE any path rounds it to pages. A
+     * len within a page of 2^64 wraps (len + PAGE_SIZE - 1) / PAGE_SIZE to 0,
+     * and a 0-page area holding a shm attach is a free slot to every VMA walker,
+     * so the attach is never detached and the segment slot leaks. No mapping
+     * can exceed the arena anyway; mmap_pick_base answers -EINVAL for that. */
+    if (len == 0 || len > VMM_MMAP_TOP - VMM_MMAP_BASE)
         return -EINVAL;
     /* DDR-1178: MAP_SHARED is anonymous (P1), a shm_open object (P3) or a
      * file (P4, below). */
