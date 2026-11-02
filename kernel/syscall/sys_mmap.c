@@ -191,7 +191,7 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
      * and a 0-page area holding a shm attach is a free slot to every VMA walker,
      * so the attach is never detached and the segment slot leaks. No mapping
      * can exceed the arena anyway; mmap_pick_base answers -EINVAL for that. */
-    if (len == 0 || len > VMM_MMAP_TOP - VMM_MMAP_BASE)
+    if (len == 0)   /* MUTANT S3-7: no upper bound on len */
         return -EINVAL;
     /* DDR-1178 P1: MAP_SHARED is anonymous-only. File-backed shared mappings
      * need write-back and a shared page cache (P4, owner decisions D4/D5). */
