@@ -348,6 +348,13 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
   - `g_shm_lock` is a spinlock taken with IRQs off.
   - The filesystem paths copy through kernel buffers and never take an `mm` lock. So the order `mm_lock` → `mnt_lock` is safe, and no I/O may happen under `g_shm_lock`.
 - **Where an address space is released.** The last `mm_put` (and with it `shm_release_vmas`) runs in `wait4` (`sys_wait.c`), in `exec` (`elf.c`) and in the reaper thread (`sched.c`). All three are thread context with IRQs on, so they may block.
+- **`fat32_write` always rewrites the file's directory entry** (`dirent_update` at `dirent_clus`/`dirent_off`, step 4), even for a write inside the file. So a write through a stale `struct vfs_file` corrupts the disk:
+  - after `unlink`, the clusters and the dirent slot are free and may belong to another file;
+  - after `rename`, the old dirent slot is free;
+  - after a truncate, the clusters past the new end are free.
+- **`vfs_write` charges the calling thread's write budget** (ADR-032: a 1 MiB bucket that refills at 256 KiB per tick). It returns `-EAGAIN` when the bucket is short. Write-back at reap time runs as the parent or the reaper thread, not as the mapper.
+- **The fd access mode is stored but not enforced.** `fd_entry.flags` keeps the open flags, but `sys_file.c` notes that every `FD_VFS` fd is writable. Enforcement is DDR-1182 (#72, not merged).
+- **A process reaches only its root mount** (`vfs_rename`: no path-to-mount resolution). `shmtest` runs on `vfs_default_mnt()`.
 
 ### A4.2 Interface
 
@@ -365,8 +372,14 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
     - `off + len` must not pass the file's size rounded up to a page; otherwise `-EINVAL`. POSIX would allow the mapping and raise `SIGBUS` on access; refusing is simpler and cannot corrupt the file.
     - A file larger than `SHM_MAX_PAGES` (1 MiB) is `-EFBIG`.
     - An empty file is `-EINVAL`.
-  - **Write permission.**
-    - `PROT_WRITE` needs the fd open for writing (`O_RDWR`) and a filesystem with in-place write (FAT32, pdrive). Otherwise it is `-EACCES`. That covers an `O_RDONLY` fd, an SFS file (D5) and an ext4 file.
+  - **Read and write permission.**
+    - Any mapping needs an fd open for reading: an `O_WRONLY` fd is `-EACCES`.
+    - `PROT_WRITE` needs the fd open `O_RDWR` and a filesystem with in-place write. A new `vfs_fs_ops.shared_write` flag is set by FAT32 and pdrive only. Otherwise it is `-EACCES`. That covers an `O_RDONLY` fd, an SFS file (D5) and an ext4 file.
+    - The check reads `fd_entry.flags`. Until DDR-1182 enforces the access mode for `write(2)` too, it is consistent with the open mode but is not, on its own, a boundary.
+  - **Write budget (ADR-032).**
+    - A `PROT_WRITE` mapping prepays its whole size, `npages * 4096` bytes, from the mapper's write bucket at `mmap`. If the bucket is short, `mmap` fails with `-EAGAIN`.
+    - Write-back at `munmap`, `exec` and release is then not charged again. That write-back is at most the area's size, which was prepaid, so it cannot be used to write faster than the bucket allows.
+    - `msync` charges its own writes in the caller's context, like `write(2)`.
     - `PROT_EXEC` is refused (W^X).
     - A mapping made without write permission is recorded as read-only (`vm_area.shm_ro = 1`). `mprotect` then cannot add `PROT_WRITE`; this is the A2.2 rule, gated by arm K.
 - **New `SYS_MSYNC` = NSI 119**, `(addr, len, flags)`.
@@ -380,7 +393,13 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
     - It writes back the dirty pages of that range.
     - On an anonymous, SysV or P3 mapping there is nothing to write, and it returns 0.
     - A write-back error returns `-EIO`.
-- **`ftruncate` of a file that has a live shared mapping is `-EBUSY`.** Resizing would leave mappings past the end of the file. Linux allows it and raises `SIGBUS`; P4 refuses.
+- **A mapped file is busy.** While a FILE object exists for a file, each of these is `-EBUSY`:
+  - `ftruncate`;
+  - `open` with `O_TRUNC` (which is unlink plus create, DDR-782);
+  - `unlink`;
+  - `rename`, of the file or onto it.
+
+  Each would make a later write-back use freed clusters or a freed directory entry (§A4.1). POSIX allows all four; Linux keeps the pages alive and raises `SIGBUS` past the end. Until a page cache owns file identity, P4 refuses them.
 
 ### A4.3 Objects and frames (D5's frame table, on the A2.2 table)
 
@@ -420,7 +439,11 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
   - `munmap` and exit cannot report one. They print `[shm] writeback failed rc=<n>` once per page and continue. That line is not forbidden; arms FD and FE detect lost data by reading the file.
 - **When exit data lands.** Write-back at exit happens when the address space is released. For a child that is when its parent reaps it in `wait4`, or when the reaper thread frees an orphan. A reader that reads the file before the writer is reaped can see old data. A second mapper of the file sees the new data at once, because the frames are shared.
 
-### A4.5 Gate: `smoke-shm` arms FA-FG (same probe, a FAT32 file on the probe's writable volume)
+### A4.5 Gate: `smoke-shm` arms FA-FG (same probe, now FAT-rooted)
+
+- `main.c` spawns `shmtest` with `root_mnt` set to the FAT volume, as it does for the FAT32 probes (`fat32mc`).
+- Arms A–T touch no files, so the root change does not reach them.
+- The probe creates `/SHMFILE.BIN` and, for FG, `/SHMFG.BIN`.
 
 | Arm | Sentinel | What it shows |
 |---|---|---|
@@ -429,7 +452,7 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 | FC | `PRADYOS_SHM_FC shared=0xc3` | Open the file a second time and `mmap` it again in the same process. Store `0xc3` through the first mapping. The second mapping reads `0xc3` with no `msync`, so the two `mmap`s share one object. |
 | FD | `PRADYOS_SHM_FD munmap=0xd4` | Store `0xd4`, `munmap` with no `msync`, then `pread` reads `0xd4`. |
 | FE | `PRADYOS_SHM_FE exit=0xe5` | A child opens and maps the file, stores `0xe5`, and exits with no `msync` or `munmap`. The parent's `wait4` reaps it, then `pread` reads `0xe5`. |
-| FF | `PRADYOS_SHM_FF rejects=6` | Each of these is refused: `PROT_WRITE` on an `O_RDONLY` fd (`-EACCES`); `PROT_WRITE` on an SFS file (`-EACCES`); `off + len` past the file (`-EINVAL`); `ftruncate` of a mapped file (`-EBUSY`); `msync` with `MS_INVALIDATE` (`-EINVAL`); `msync` of an unmapped address (`-ENOMEM`). |
+| FF | `PRADYOS_SHM_FF rejects=8` | Each of these is refused: `PROT_WRITE` on an `O_RDONLY` fd (`-EACCES`); `off + len` past the file (`-EINVAL`); on a mapped file, `ftruncate`, `open(O_TRUNC)`, `unlink` and `rename` (each `-EBUSY`); `msync` with `MS_INVALIDATE` (`-EINVAL`); `msync` of an unmapped address (`-ENOMEM`). |
 | FG | `PRADYOS_SHM_FG cycles=40 opened=40` | 40 cycles of `open`, `mmap`, store, `munmap`, `close`. The table has 32 slots, so a file object that outlives its last detach fails `opened` at cycle 33. |
 
 **Vacuity, checked against the tree before P4 (`ead9246`):**
@@ -456,6 +479,11 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
   - a page dirtied both through the mapping and by `write(2)` ends as the mapping's copy at write-back.
 - Lazy (demand) paging, mappings past end of file, files over 1 MiB, and resizing a mapped file.
 - Write-back of SFS (append-only) and ext4 (no write), which are read-only shared mappings only.
+
+**Not gated, and why:**
+- **`PROT_WRITE` on SFS or ext4 is `-EACCES`** (D5). `shmtest` is FAT-rooted and a process reaches only its root mount, so it cannot open an SFS or ext4 file. The refusal is the same `shared_write` test that FF's FAT32 checks pass through, but the SFS and ext4 values of the flag are read from the code, not run.
+- **The prepay `-EAGAIN`.** Reaching it needs the bucket drained first. The probe does not do that, so the path is reasoned, not run.
+- **Two concurrent first mappers of one file** (§A4.3). `smoke-shm` runs on one CPU.
 
 **NSI:** 119 `SYS_MSYNC`.
 
