@@ -76,8 +76,7 @@ static inline void pmutex_lock(pmutex *m) {
 }
 
 static inline void pmutex_unlock(pmutex *m) {
-    if (__atomic_exchange_n(&m->st, 0, __ATOMIC_RELEASE) == 2)
-        ps_futex(&m->st, PS_FUTEX_WAKE | m->priv, 1);
+    __atomic_exchange_n(&m->st, 0, __ATOMIC_RELEASE);   /* MUTANT Y2: no wake */
 }
 
 /* ---- psem: counting semaphore ----------------------------------------- */
