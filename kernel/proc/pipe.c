@@ -197,7 +197,7 @@ static long sys_dup2(long a_old, long a_new, long a3, long a4, long a5, long a6)
          * must be counted on that same side. */
         pipe_incref(ne->pipe, ne->flags == PIPE_WRITE_END);
     } else if (ne->kind == FD_SHM) {
-        shm_hold(ne->mnt);                  /* DDR-1178 A3.2: one per entry */
+        ;
     } else if (ne->kind == FD_VFS && ne->file) {
         struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
         if (!nf) { ne->kind = FD_NONE; ne->file = 0; return -ENOMEM; }
