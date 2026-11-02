@@ -80,3 +80,16 @@ The comment says "schedule() holds it ACROSS context_switch". That stopped being
 - Futex timeout "never early": will be **gated by FC (TSC, worst-case placement)**, QEMU only. It depends on TCG's TSC staying in step with the PIT over about 360 ms. **Not verified on real hardware.**
 - FF and FG: will be gated with a witness that the waiter was blocked.
 - Cost of the fix: up to 10 ms extra latency per timed wait. Measured as `ms_x100`; nothing else is claimed.
+
+## 7. Runs (smoke-thread, shard 2; QEMU TCG, 4 vCPUs, `ubuntu-24.04`)
+
+The fixed tree and the mutants were built on head `b094260`, which stacks on #101 `d35da2e`. Each mutant changes one file, builds with 0 warnings, and gives its own `kernel.bin`.
+
+| Tree | Run | Verdict | Measured |
+|---|---|---|---|
+| fixed `b094260` | [41392392306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41392392306) | green | `[thread] C ms_x100=6085` (60.85 ms for a 55 ms request; predicted ≈ 60.5 ms + L); FF `asleep=1`; FG `killed_waiter=1` |
+| F2-9 no extra tick (`futex.c`) | [41392431402](https://github.com/prady4the4bady/Prady4OS/actions/runs/41392431402) | **red on FC only** | `slept_ok=0`, `ms_x100=5071` (50.71 ms; predicted ≈ 50.5 ms + L, so L ≈ 0.2 ms); FF and FG green |
+| F2-4 PRIVATE flag ignored (`futex.c`) | [41392434494](https://github.com/prady4the4bady/Prady4OS/actions/runs/41392434494) | **red on FF** | `private_isolated=0 asleep=0`: the cross-process wake reached the waiter. FG reads `killed_waiter=0` because it counts a kill only on a waiter confirmed asleep |
+| F2-5 no `futex_kick` (`signal.c`) | [41396059384](https://github.com/prady4the4bady/Prady4OS/actions/runs/41396059384) | **red on FG only** | `killed_waiter=0`, then `THREAD FAIL: killed child never reaped`; FF green |
+
+**What the runs show.** §1 is measured, not inferred: without the fix, a 55 ms timeout ended after 50.71 ms. **TCG only. Not verified on real hardware.**
