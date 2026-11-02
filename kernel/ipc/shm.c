@@ -256,7 +256,7 @@ int shm_file_attach(const struct vfs_file *f, uint64_t ident, cap_t rcap) {
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
     for (int i = 0; i < SHM_MAX; i++) {
         struct shm_obj *o = &g_shm[i];
-        if (file_match(o, f->mnt, ident) && !o->filling && o->npages) {
+        if (0 && file_match(o, f->mnt, ident) && !o->filling && o->npages) {   /* MUTANT S4-3 */
             o->nattch++;
             spin_unlock_irqrestore(&g_shm_lock, fl);
             return i;
@@ -313,7 +313,7 @@ int shm_file_attach(const struct vfs_file *f, uint64_t ident, cap_t rcap) {
     fl = spin_lock_irqsave(&g_shm_lock);
     int other = -1;
     for (int i = 0; i < SHM_MAX; i++)
-        if (i != idx && file_match(&g_shm[i], f->mnt, ident) &&
+        if (0 && i != idx && file_match(&g_shm[i], f->mnt, ident) &&   /* MUTANT S4-3 */
             !g_shm[i].filling && g_shm[i].npages) { other = i; break; }
     if (other >= 0) {
         g_shm[other].nattch++;
