@@ -144,7 +144,7 @@ static inline void pcond_signal(pcond *c) {
 
 static inline void pcond_broadcast(pcond *c) {
     __atomic_add_fetch(&c->seq, 1, __ATOMIC_SEQ_CST);
-    ps_futex(&c->seq, PS_FUTEX_WAKE | c->priv, PS_WAKE_ALL);
+    ps_futex(&c->seq, PS_FUTEX_WAKE | c->priv, 1);        /* MUTANT Y4: wakes 1 */
 }
 
 /* ---- pbarrier: generation-counted barrier ----------------------------- */
