@@ -16,6 +16,8 @@
  *      -EFAULT, never a kernel panic
  *   FA-FJ  DDR-1181 Amendment 1 (P2): futex wait/wake, keys, timeout,
  *      signals and the CLEARTID wake (table in the amendment)
+ *   SA SW SB SC SH SD  DDR-1193 (C1.4 P3): psync.h mutex, semaphore,
+ *      condition variable and barrier, each arm in a forked child
  *
  * D, E/M, F and G each run in a forked CHILD (the test process). The child's
  * threads report through a MAP_SHARED anonymous page (C1.3 P1) and the parent
@@ -31,6 +33,8 @@
  */
 #include "pradyos.h"
 #include "pagemeter.h"   /* DDR-1185 */
+#define PSYNC_STATS      /* DDR-1193: pmutex.waits, the SA contention count */
+#include "psync.h"
 
 #define nsi pradyos_syscall
 
@@ -434,6 +438,301 @@ static long c_cycles(void *ctx) {
     return 64;                          /* one created thread tcb per cycle */
 }
 
+/* ---- DDR-1193 (C1.4 P3a): psync arms SA, SW, SB, SC, SH, SD ----
+ *
+ * Each arm runs in a forked child (DDR-1193 Amendment 1 item 1). The child's
+ * main thread orchestrates; its threads pin with SYS_SCHED_CPU and confirm
+ * the CPU (item 2). Results go to a MAP_SHARED page the parent reads after
+ * reap(). A mutant that leaves threads asleep forever ends in the child's
+ * own 5 s bound, or in reap()'s SIGKILL, and prints timeout=1. */
+struct sy {
+    pmutex   m;
+    psem     sem, sem2;
+    pcond    cv;
+    pbarrier bar;
+    volatile long idx;          /* next thread index                       */
+    volatile long placed;       /* threads that confirmed their CPU        */
+    volatile long go, stop, done, to;
+    volatile long ctr;          /* SA: the NON-atomic counter              */
+    volatile long rdy[4];       /* "about to block" flags                  */
+    volatile long woke;         /* SW: lock returned; SC: real wakes (rc 0) */
+    volatile long got;          /* SB part 1                               */
+    volatile long inside, maxin, lingers;   /* SB part 2                   */
+    volatile long turn, rounds, xn;         /* SH                          */
+    volatile long phase[4], crossed[4], bad; /* SD                         */
+    volatile long asleep;
+};
+
+static void sy_clear(struct sy *y) {
+    volatile uint64_t *w = (volatile uint64_t *)y;
+    for (unsigned long k = 0; k < sizeof *y / 8; k++) w[k] = 0;
+}
+
+/* Pin to `cpu` and count the placement only if GET confirms it (Amendment 1
+ * item 2: which CPU each thread ran on, not that they ran at once). */
+static void sy_place(struct sy *y, long cpu) {
+    pin(cpu);
+    if (nsi(SYS_SCHED_CPU, 0, 0, 0) == cpu)
+        __atomic_add_fetch(&y->placed, 1, __ATOMIC_SEQ_CST);
+}
+
+static long sy_idx(struct sy *y) { return __atomic_fetch_add(&y->idx, 1, __ATOMIC_SEQ_CST); }
+
+__attribute__((noreturn)) static void sy_exit(struct sy *y) {
+    __atomic_add_fetch(&y->done, 1, __ATOMIC_SEQ_CST);
+    texit();
+}
+
+static long spawn_t(void (*fn)(long), long arg) {
+    long stk = map(STK, MAP_PRIVATE);
+    long tid = nsi6(SYS_THREAD_CREATE, (long)fn, stk + STK, arg, 0, 0, 0);
+    if (tid < 0) fail("create");
+    return tid;
+}
+
+/* Bounded spin until *v >= n; 0 on expiry. */
+static int sy_until(volatile long *v, long n, uint64_t bound_ms) {
+    uint64_t end = now() + bound_ms * MS;
+    while (__atomic_load_n(v, __ATOMIC_SEQ_CST) < n) {
+        if (now() > end) return 0;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    return 1;
+}
+
+static int sy_until32(volatile uint32_t *v, uint32_t n, uint64_t bound_ms) {
+    uint64_t end = now() + bound_ms * MS;
+    while (__atomic_load_n(v, __ATOMIC_SEQ_CST) < n) {
+        if (now() > end) return 0;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    return 1;
+}
+
+/* 1 once SYS_GETPROCS shows thread `tid` THREAD_BLOCKED (3). The tid that
+ * SYS_THREAD_CREATE returns is the pid GETPROCS lists (Amendment 1 item 3). */
+static int sy_blocked(long tid, uint64_t bound_ms) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    uint64_t end = now() + bound_ms * MS;
+    for (;;) {
+        for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++)
+            if ((long)pi.pid == tid) {
+                if (pi.state == 3) return 1;
+                break;
+            }
+        if (now() > end) return 0;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+}
+
+/* SA: 4 threads, one per CPU, 20 000 non-atomic increments each under one pmutex. */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sa(long arg) {
+    struct sy *y = (struct sy *)arg;
+    sy_place(y, sy_idx(y) & 3);
+    while (!y->go) nsi(SYS_YIELD, 0, 0, 0);
+    for (int k = 0; k < 20000; k++) {
+        pmutex_lock(&y->m);
+        y->ctr = y->ctr + 1;              /* load, add, store: not atomic */
+        pmutex_unlock(&y->m);
+    }
+    sy_exit(y);
+}
+
+static void b_sa(struct sy *y) {
+    pmutex_init(&y->m);
+    for (int i = 0; i < 4; i++) spawn_t(t_sa, (long)y);
+    sy_until(&y->idx, 4, 2000);
+    y->go = 1;
+    if (!sy_until(&y->done, 4, 10000)) y->to = 1;
+}
+
+/* SW: the waiter sleeps in pmutex_lock; ONE unlock must wake it. */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sw(long arg) {
+    struct sy *y = (struct sy *)arg;
+    sy_idx(y);
+    sy_place(y, 1);
+    y->rdy[0] = 1;
+    pmutex_lock(&y->m);                   /* held by the child's main thread */
+    y->woke = 1;
+    pmutex_unlock(&y->m);
+    sy_exit(y);
+}
+
+static void b_sw(struct sy *y) {
+    pmutex_init(&y->m);
+    sy_place(y, 0);
+    pmutex_lock(&y->m);
+    long tid = spawn_t(t_sw, (long)y);
+    /* asleep: the waiter reached the futex_wait in the slow path (waits >= 1)
+     * and GETPROCS then shows it BLOCKED. */
+    y->asleep = sy_until(&y->rdy[0], 1, 2000) &&
+                sy_until32(&y->m.waits, 1, 2000) && sy_blocked(tid, 2000);
+    pmutex_unlock(&y->m);                 /* the one and only unlock */
+    if (!sy_until(&y->woke, 1, 1000)) y->to = 1;
+}
+
+/* SB part 1: a consumer that is asleep before the first post, then 4 000
+ * posts and 4 000 waits. Part 2: a psem of 2 guards a section 4 threads
+ * enter 500 times each; a holder that is alone lingers up to one vDSO tick
+ * for others, on its first 20 entries (Amendment 1 item 4). */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sb1(long arg) {
+    struct sy *y = (struct sy *)arg;
+    sy_idx(y);
+    sy_place(y, 1);
+    y->rdy[0] = 1;
+    for (int k = 0; k < 4000; k++) {
+        psem_wait(&y->sem);
+        __atomic_add_fetch(&y->got, 1, __ATOMIC_SEQ_CST);
+    }
+    sy_exit(y);
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sb2(long arg) {
+    struct sy *y = (struct sy *)arg;
+    sy_place(y, sy_idx(y) & 3);
+    while (!y->go) nsi(SYS_YIELD, 0, 0, 0);
+    for (int k = 0; k < 500; k++) {
+        psem_wait(&y->sem2);
+        long in = __atomic_add_fetch(&y->inside, 1, __ATOMIC_SEQ_CST);
+        long mx = __atomic_load_n(&y->maxin, __ATOMIC_SEQ_CST);
+        while (in > mx && !__atomic_compare_exchange_n(&y->maxin, &mx, in, 0,
+                                                       __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+            ;
+        if (k < 20) {
+            uint64_t t0 = now();
+            while (__atomic_load_n(&y->inside, __ATOMIC_SEQ_CST) < 3 && now() == t0)
+                __asm__ volatile("pause");
+            __atomic_add_fetch(&y->lingers, 1, __ATOMIC_RELAXED);
+        }
+        __atomic_sub_fetch(&y->inside, 1, __ATOMIC_SEQ_CST);
+        psem_post(&y->sem2);
+    }
+    sy_exit(y);
+}
+
+static void b_sb(struct sy *y) {
+    psem_init(&y->sem, 0);
+    sy_place(y, 0);
+    long tid = spawn_t(t_sb1, (long)y);
+    y->asleep = sy_until(&y->rdy[0], 1, 2000) &&
+                sy_until32(&y->sem.nwait, 1, 2000) && sy_blocked(tid, 2000);
+    for (int k = 0; k < 4000; k++) psem_post(&y->sem);
+    if (!sy_until(&y->done, 1, 5000)) { y->to = 1; return; }
+    psem_init(&y->sem2, 2);
+    y->idx = 0;
+    for (int i = 0; i < 4; i++) spawn_t(t_sb2, (long)y);
+    sy_until(&y->idx, 4, 2000);
+    y->go = 1;
+    if (!sy_until(&y->done, 5, 5000)) y->to = 1;
+}
+
+/* SC: 3 waiters asleep on one pcond; ONE broadcast must wake all three. */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sc(long arg) {
+    struct sy *y = (struct sy *)arg;
+    long i = sy_idx(y);
+    sy_place(y, i + 1);
+    pmutex_lock(&y->m);
+    y->rdy[i] = 1;                        /* next blocking call: the cond wait */
+    if (pcond_wait(&y->cv, &y->m) == 0)   /* a real wake, not -EAGAIN */
+        __atomic_add_fetch(&y->woke, 1, __ATOMIC_SEQ_CST);
+    pmutex_unlock(&y->m);
+    sy_exit(y);
+}
+
+static void b_sc(struct sy *y) {
+    long tid[3];
+    pmutex_init(&y->m);
+    pcond_init(&y->cv);
+    for (int i = 0; i < 3; i++) tid[i] = spawn_t(t_sc, (long)y);
+    for (int i = 0; i < 3; i++)
+        if (sy_until(&y->rdy[i], 1, 2000) && sy_blocked(tid[i], 2000)) y->asleep++;
+    pcond_broadcast(&y->cv);              /* the one and only broadcast */
+    if (!sy_until(&y->done, 3, 5000)) y->to = 1;
+}
+
+/* SH: two threads hand a turn back and forth 1 000 times under pmutex +
+ * pcond_signal; a third contends for the pmutex the whole time, so a waiter
+ * is often asleep on it when pcond_wait relocks (Amendment 1 item 5). */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sh(long arg) {
+    struct sy *y = (struct sy *)arg;
+    long me = sy_idx(y);
+    sy_place(y, me + 1);
+    while (!y->go) nsi(SYS_YIELD, 0, 0, 0);
+    if (me == 2) {                        /* the contender */
+        while (!y->stop) {
+            pmutex_lock(&y->m);
+            y->xn++;
+            pmutex_unlock(&y->m);
+            nsi(SYS_YIELD, 0, 0, 0);      /* a window for a woken waiter: no starvation */
+        }
+        sy_exit(y);
+    }
+    for (int r = 0; r < 1000; r++) {
+        pmutex_lock(&y->m);
+        while (y->turn != me)
+            pcond_wait(&y->cv, &y->m);
+        y->turn = 1 - me;
+        if (me == 0) y->rounds++;
+        pcond_signal(&y->cv);
+        pmutex_unlock(&y->m);
+    }
+    sy_exit(y);
+}
+
+static void b_sh(struct sy *y) {
+    pmutex_init(&y->m);
+    pcond_init(&y->cv);
+    for (int i = 0; i < 3; i++) spawn_t(t_sh, (long)y);
+    sy_until(&y->idx, 3, 2000);
+    y->go = 1;
+    if (!sy_until(&y->done, 2, 5000)) { y->to = 1; return; }
+    y->stop = 1;
+    if (!sy_until(&y->done, 3, 1000)) y->to = 1;
+}
+
+/* SD: 4 threads cross one pbarrier 100 times; after each crossing every
+ * thread checks that all four phase counters are >= its own. */
+__attribute__((noreturn, force_align_arg_pointer)) static void t_sd(long arg) {
+    struct sy *y = (struct sy *)arg;
+    long i = sy_idx(y);
+    sy_place(y, i & 3);
+    while (!y->go) nsi(SYS_YIELD, 0, 0, 0);
+    for (long p = 1; p <= 100; p++) {
+        y->phase[i] = p;
+        pbarrier_wait(&y->bar);
+        for (int j = 0; j < 4; j++)
+            if (y->phase[j] < p) __atomic_add_fetch(&y->bad, 1, __ATOMIC_SEQ_CST);
+        y->crossed[i] = p;
+    }
+    sy_exit(y);
+}
+
+static void b_sd(struct sy *y) {
+    pbarrier_init(&y->bar, 4);
+    for (int i = 0; i < 4; i++) spawn_t(t_sd, (long)y);
+    sy_until(&y->idx, 4, 2000);
+    y->go = 1;
+    if (!sy_until(&y->done, 4, 5000)) y->to = 1;
+}
+
+/* Run one arm body in a forked child. Returns timeout (child's own bound,
+ * or reap() had to kill it) and the elapsed ms. */
+static long sy_run(struct sy *y, void (*body)(struct sy *), uint64_t bound_ms, long *ms) {
+    sy_clear(y);
+    uint64_t t0 = now();
+    long p = nsi(SYS_FORK, 0, 0, 0);
+    if (p < 0) fail("fork");
+    if (p == 0) {
+        body(y);
+        nsi(SYS_EXIT, 0, 0, 0);           /* group exit: ends any stuck thread */
+        for (;;) { }
+    }
+    long ended = reap(p, bound_ms);
+    *ms = (long)((now() - t0) / MS);
+    return y->to || !ended;
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     struct shared *s = (struct shared *)map(4096, MAP_SHARED);
 
@@ -750,6 +1049,47 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (fx(&s->fw, 5, 0, 0) == -38) rej++;
     if (fx(&s->fw, FUTEX_WAIT, 0, &bad) == -22) rej++;
     say("PRADYOS_FUTEX_J rejects=%d\n", (long)(rej));
+
+    /* ---- DDR-1193 (C1.4 P3a): psync arms ---- */
+    {
+        struct sy *y = (struct sy *)map(4096, MAP_SHARED);
+        long ms, to;
+        say("[sync] start_ms=%d\n", (long)(now() / MS));
+
+        to = sy_run(y, b_sa, 12000, &ms);
+        say("[sync] A contended=%d ms=%d timeout=%d\n", (long)(y->m.waits), ms, to);
+        say("PRADYOS_SYNC_A total=%d exp=80000 contended_ok=%d placed_ok=%d\n",
+            (long)(y->ctr), (long)(y->m.waits > 0), (long)(y->placed == 4));
+
+        to = sy_run(y, b_sw, 8000, &ms);
+        say("[sync] W ms=%d\n", ms);
+        say("PRADYOS_SYNC_W asleep=%d woke=%d timeout=%d placed_ok=%d\n",
+            (long)(y->asleep), (long)(y->woke), to, (long)(y->placed == 2));
+
+        to = sy_run(y, b_sb, 15000, &ms);
+        say("[sync] B maxin=%d lingers=%d ms=%d\n", (long)(y->maxin), (long)(y->lingers), ms);
+        say("PRADYOS_SYNC_B got=%d asleep=%d maxin_ok=%d overlap=%d timeout=%d placed_ok=%d\n",
+            (long)(y->got), (long)(y->asleep), (long)(y->maxin <= 2), (long)(y->maxin >= 2),
+            to, (long)(y->placed == 6));
+
+        to = sy_run(y, b_sc, 10000, &ms);
+        say("[sync] C ms=%d\n", ms);
+        say("PRADYOS_SYNC_C asleep=%d woke=%d timeout=%d placed_ok=%d\n",
+            (long)(y->asleep), (long)(y->woke), to, (long)(y->placed == 3));
+
+        to = sy_run(y, b_sh, 8000, &ms);
+        say("[sync] H contender=%d ms=%d\n", (long)(y->xn), ms);
+        say("PRADYOS_SYNC_H rounds=%d timeout=%d placed_ok=%d\n",
+            (long)(y->rounds), to, (long)(y->placed == 3));
+
+        to = sy_run(y, b_sd, 8000, &ms);
+        long ph = 100;
+        for (int i = 0; i < 4; i++) if (y->crossed[i] < ph) ph = y->crossed[i];
+        say("[sync] D ms=%d\n", ms);
+        say("PRADYOS_SYNC_D phases=%d bad=%d timeout=%d placed_ok=%d\n",
+            ph, (long)(y->bad), to, (long)(y->placed == 4));
+        say("[sync] end_ms=%d\n", (long)(now() / MS));
+    }
 
     say("PRADYOS_THREAD_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
