@@ -341,6 +341,11 @@ Every arm N–S is shown red on this head, each by the mutant designed for it. Q
 - **Vacuity:** on the tree before the fix the call returns an address, so it is not counted, and P prints `rejects=6`: red.
 - **Mutant S3-7:** remove the bound. It must be red on P.
 
+**Runs on `6943d97`** (fixed tree green on [41464838400](https://github.com/prady4the4bady/Prady4OS/actions/runs/41464838400), P `rejects=7`):
+- **S3-7** ([41464834933](https://github.com/prady4the4bady/Prady4OS/actions/runs/41464834933)): red on P only, `rejects=6`. Every other arm A–T is on its sentinel.
+- **S3-3 re-run** ([41475898640](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475898640)): re-applied on `6943d97` because arm P changed. Red on P only, `rejects=5`.
+- **S3-1, S3-2, S3-4, S3-5 and S3-6 were not re-run.** They stand on their runs on `093bbe4`. The only kernel change since then is this length bound: none of them touches it, and none of arms N, O, Q, R or S passes a length above the arena. That is a reading of the code, stated as such.
+
 **NSI:** 116 `SYS_SHM_OPEN`.
 
 ## 7. Honesty labels
