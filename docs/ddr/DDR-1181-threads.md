@@ -26,7 +26,7 @@
 |---|---|---|
 | **P1** (this DDR) | Kernel threads that share one address space: `SYS_THREAD_CREATE` / `SYS_THREAD_EXIT`, thread groups, group exit, a refcounted `struct mm`, the mm lock. Gate `smoke-thread`, including the three DDR-1177 items. | C1.3 P1 (merged `a2ac698`; the gate uses `MAP_SHARED` anon) |
 | P2 | futex (`WAIT`/`WAKE`, private and shared), `CLEARTID` wake. | P1 |
-| P3 | Kernel `kmutex` with priority inheritance; user mutex, semaphore, condition variable and barrier on top of futex. | P2 |
+| P3 | User mutex, semaphore, condition variable and barrier on top of futex (DDR-1193). `kmutex` priority inheritance moved to C1.5 P3 (DDR-1193 D1). | P2 |
 | P4 | musl pthread: build it, add a `clone.s` overlay (it hard-codes 56/60), and add `set_tid_address`, `set_robust_list`, `rt_sigprocmask`, `mprotect`. Shared fd table and shared signal dispositions (the P1 divergences in §3.6). | P2, P3 |
 | P5 | RCU (one grace-period scheme, chosen in its own amendment). | P1 |
 | P6 | Lock-order checking (lockdep-style), with a mutant that inverts an order. | P3 |
@@ -92,7 +92,7 @@ The `kmutex` therefore:
 - puts waiters to sleep (`sched_block_on`), with interrupts enabled while they sleep;
 - lets the holder run with interrupts off only inside `tlb_shoot`, as it does today.
 
-The fault paths may sleep, because a ring-3 fault holds no kernel lock (`idt.c:826-830`). P1's `kmutex` has no priority inheritance; P3 adds it.
+The fault paths may sleep, because a ring-3 fault holds no kernel lock (`idt.c:826-830`). P1's `kmutex` has no priority inheritance; C1.5 P3 adds it (DDR-1193 D1).
 
 ### 3.4 Group exit
 
@@ -432,6 +432,14 @@ New tcb fields `reap_claimed` and `in_wait4` are set to 0 in `sched_create_state
 
 All three are checked by reading the code and are **not verified at run time** (cross-CPU timing, and leader-exits-first shapes that no arm drives).
 
+### 4.8 Amendment: exec waits for references, not live threads (CodeRabbit on #81 `dc3f2c0`)
+
+| # | Finding | Mechanism, verified | Change |
+|---|---|---|---|
+| R14 | `execve` can free the address space an exiting sibling still runs on | §3.5 says exec refuses while `mm->refs > 1`, but `sys_execve` tested `mm->live`. `sched_exit_common` drops `live` and then keeps running on its CPU, with CR3 still the shared address space, until `schedule()` switches away (`context_switch` loads the next thread's CR3; a kernel thread gets the master AS). A sibling that saw `live == 1` in that window destroyed the old address space at `vmm_destroy_address_space(old_as)`, freeing the PML4 the exiting CPU was still walking. `refs` is dropped only by `mm_put`, which both reap paths (`sys_wait4`, the reaper) call after `sched_free_tcb` has waited for the thread to leave its CPU. | `sys_execve` tests `refs`, as §3.5 states. A thread that has exited but is not yet reaped (the reaper takes non-leader zombies, §3.4) keeps `execve` at `-EBUSY` until it is reaped, so `execve` straight after a join can return `-EBUSY` once. |
+
+R14 is checked by reading the code and is **not verified at run time** (the window is a few hundred instructions on another CPU; no arm drives it).
+
 ## 5. Order of work
 
 1. **P1a** — `struct mm` refactor (no behaviour change). Its gate is the whole existing set, green in one CI run.
@@ -440,9 +448,109 @@ All three are checked by reading the code and are **not verified at run time** (
 
 Each step is its own PR, stacked on the previous one, and each PR is flagged security boundary.
 
+## Amendment 1 (2026-10-21 UTC): P2 design, futex
+
+**Security boundary: review before merge.** A shared futex key is a physical frame, so a wake crosses processes. This amendment shows that it crosses only between processes that already share that frame.
+
+### A1.1 The interface: `SYS_FUTEX` = NSI 117
+
+`(uaddr, op, val, timeout, uaddr2, val3)` follows the Linux ABI subset that musl's pthread code uses (P4).
+- `op & 127` selects the operation:
+  - `FUTEX_WAIT` (0): if the 32-bit word at `uaddr` equals `val`, sleep until a wake, the timeout, or a signal.
+  - `FUTEX_WAKE` (1): wake up to `val` waiters on `uaddr` (`val <= 0` wakes none) and return the count.
+- `FUTEX_PRIVATE_FLAG` (128) is accepted. Any other operation or flag, including `FUTEX_CLOCK_REALTIME`, the requeue, `WAKE_OP` and PI operations, is `-ENOSYS`. `uaddr2` and `val3` are ignored.
+- **WAIT returns:**
+  - `0`: woken;
+  - `-EAGAIN`: the word did not equal `val`;
+  - `-ETIMEDOUT`;
+  - `-EINTR`: a signal with a handler, or `SIGKILL`, is pending;
+  - `-EINVAL`: `uaddr` is not 4-aligned, or the timeout is malformed (`tv_sec < 0`, or `tv_nsec` outside `[0, 1e9)`);
+  - `-EFAULT`: `uaddr` is not a present user page, or the timeout pointer is bad.
+- **The timeout** is a relative `struct timespec`, rounded **up** to 10 ms ticks (100 Hz), so a wait never ends early. A zero timeout checks the value and returns `-ETIMEDOUT` without sleeping. `NULL` means no timeout.
+- A spurious `0` is allowed, as on Linux: callers re-check their word.
+
+### A1.2 Keys
+
+- **Private key:** `(mm, uaddr)`. It is used when `FUTEX_PRIVATE_FLAG` is set, and when the page is not shared memory.
+- **Shared key:** `(frame | 1, uaddr & 4095)`. It is used without the flag when the leaf PTE carries `PTE_SW_SHMEM`, which covers C1.3 P1 `MAP_SHARED` anon and the P2/P3 segments.
+  - Two processes reach the same shared key only when **both** map that frame. A frame is never shared outside those paths, so the key creates no new channel.
+- **A COW page is private.** A `fork` child that waits on a private page before writing to it keys on its own `mm`, so it is never woken by the parent's wake. This matches Linux for `MAP_PRIVATE`.
+- **Lookup holds the mm lock.** `munmap` frees empty page-table pages (`vmm_unmap`), so walking the tables without the lock could follow a freed table. WAIT and WAKE take `mm_lock`, resolve the leaf PTE (it must be present, user and not `PTE_SW_DYING`), then take the bucket lock.
+  - WAIT reads the word through the frame's identity mapping **under the bucket lock**, so it can never take a user fault while holding a spinlock.
+  - WAIT then releases the mm lock before sleeping. `kmutex_unlock` never sleeps, so that is safe under the spinlock.
+- **A frame freed and reused while a waiter sleeps** can only cause a spurious wake. The waiter's own mapping holds the frame unless a sibling unmapped it, and that is a user bug, with Linux's outcome.
+
+### A1.3 Waiting, waking, signals
+
+- **Buckets:** 64, hashed from the key, each with a spinlock (taken `irqsave`). A waiter is a stack object `{key, tcb, next, woken}`.
+- **Lost-wake freedom.** WAIT reads the word and enqueues under the bucket lock. A waker changes the word in user space first, then takes the same bucket lock, so it either finds the waiter or the waiter saw the new value. WAKE unlinks a waiter, sets `woken`, and then calls `sched_unblock`.
+- **Sleeping** uses `sched_block_on`, or `sched_block_timeout` when there is a deadline. Both publish `BLOCKED` under the bucket lock. On return, an un-woken waiter unlinks itself under the same lock.
+- **Signals wake a waiter** (this resolves §3.8 for futex waits; pipe and other sleeps are unchanged).
+  - A new tcb field, `fx_lock`, appended at the end of `struct tcb` so that the pinned signal offsets do not move and initialised in `sched_create_state`, holds the waiter's bucket lock while it waits.
+  - `sig_raise` sets the pending bit with a locked RMW, then reads `fx_lock`. If it is set, it takes that lock, re-checks `fx_lock`, and calls `sched_unblock`.
+  - The waiter stores `fx_lock` with a sequentially consistent store, then checks for pending signals, both under the lock. So either the waiter sees the bit or the sender sees `fx_lock` and serialises behind the waiter's `BLOCKED`.
+  - The buckets are static, so a stale `fx_lock` names a live lock.
+  - Lock order: `g_sched_lock` → bucket (the group-exit loop raises `SIGKILL` under `g_sched_lock`) → kmutex internal lock.
+- **Known limit (recorded after #81 review, #81 comment 6556392676): default-terminate signals.** The wait loop ends only on a `WAKE` (`w.woken`, set at `futex.c:90`), on the timeout, on `signal_interruptible(t)` (a deliverable signal with a handler), or on `signal_kill_pending(t)` (`SIGKILL`). A change to the futex word alone does not release it. A default-terminate signal other than `SIGKILL` (for example `SIGTERM` or `SIGPIPE`) with no handler wakes the waiter through `futex_kick` (which only calls `sched_unblock`), but the loop re-blocks, so the thread is not terminated until a `WAKE`, a handled signal or `SIGKILL` arrives, or the timeout expires. The default action runs only at syscall exit (`signal.c:186-189`). No gate covers this case. Not a merge condition (#81 comment 6556413334); the fix would be its own DDR.
+- **Group exit** therefore wakes siblings blocked in a futex. `smoke-thread` arm G shows it for a single thread killed while waiting.
+- **CLEARTID** (§3.2): after writing 0 to `clear_tid`, the exiting thread runs `FUTEX_WAKE(clear_tid, 1)` with the same key rules. This is what lets `pthread_join` sleep.
+
+### A1.4 Gate: `smoke-thread` futex arms (same probe, `user/threadtest.c`)
+
+Arms that can hang on a mutant run in a forked child, which is reaped with a bound (the probe's existing `reap`). A mutant therefore prints a wrong value instead of stalling the gate.
+
+| Arm | Sentinel | What it shows |
+|---|---|---|
+| FA | `PRADYOS_FUTEX_A woke=1 rc=0` | A thread waits; the creator calls `WAKE(1)` until it returns 1 (bounded at 2 s). The thread's `WAIT` returned 0. |
+| FB | `PRADYOS_FUTEX_B eagain=-11` | `WAIT` with `val` not equal to the word returns at once (child, bounded). |
+| FC | `PRADYOS_FUTEX_C timedout=-110 slept_ok=1` | A 50 ms timeout returns `-ETIMEDOUT` after at least 40 ms (vDSO clock; child, bounded). |
+| FD | `PRADYOS_FUTEX_D max2=1 total=4` | Four threads wait. Repeated `WAKE(2)` never returns more than 2, and the returns sum to 4. |
+| FE | `PRADYOS_FUTEX_E shared_woke=1 rc=0` | A fork child waits on a `MAP_SHARED` word without the private flag; the parent's `WAKE` wakes it (shared key). |
+| FF | `PRADYOS_FUTEX_F private_isolated=1` | A fork child waits with `FUTEX_PRIVATE_FLAG`. The parent's private and shared wakes both return 0. |
+| FG | `PRADYOS_FUTEX_G killed_waiter=1` | The FF child, blocked forever, is reaped within 2 s of `SIGKILL` (the `sig_raise` kick). |
+| FH | `PRADYOS_FUTEX_H eintr=-4` | A child with a `SIGUSR1` handler is blocked in `WAIT`; the parent's `SIGUSR1` makes `WAIT` return `-EINTR`. |
+| FI | `PRADYOS_FUTEX_I cleartid_woke=1` | The creator waits (2 s timeout) on a thread's `clear_tid` word while the thread delays and exits. Over 8 trials there is at least one `0` with the word cleared, and no `-ETIMEDOUT`. |
+| FJ | `PRADYOS_FUTEX_J rejects=4` | An unaligned `uaddr` is `-EINVAL`; an unmapped `uaddr` is `-EFAULT`; an unknown op is `-ENOSYS`; `tv_nsec = 1e9` is `-EINVAL`. |
+
+**Vacuity:** before P2, `SYS_FUTEX` is `-ENOSYS`, so FA prints `woke=0`, FB `eagain=-38`, and so on, and the gate is red. FD's `max2` and FF are boundary halves: they pass trivially only together with a failing FA/FE line.
+
+**Mutants (each lands on a different arm and is shown red in CI before merge):**
+
+| Mutant | Change | Arm |
+|---|---|---|
+| F2-1 | `WAIT` does not compare the word | FB |
+| F2-2 | `WAKE` ignores the count (wakes all) | FD (`max2`) |
+| F2-3 | the shared key is never used | FE |
+| F2-4 | `FUTEX_PRIVATE_FLAG` ignored | FF |
+| F2-5 | `sig_raise` does not wake a futex waiter | FG |
+| F2-6 | no wake after CLEARTID | FI |
+| F2-7 | the timeout is ignored | FC |
+| F2-8 | the alignment check is removed | FJ |
+
+**NSI:** 117 `SYS_FUTEX`. 112–116 are DDR-1178's (#78, #80).
+
+### A1.5 Runs (smoke-thread, shard 2; QEMU TCG, 4 vCPUs)
+
+Base `0237446`. Every red fails in the boot step (the build passes) on the arm the mutant targets.
+
+| Tree | Run | Verdict | Measured |
+|---|---|---|---|
+| correct | [40308220683](https://github.com/prady4the4bady/Prady4OS/actions/runs/40308220683) | green | FA–FJ as specified |
+| F2-1 | [40323316546](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323316546) | red on FB | `eagain=1` (want -11) |
+| F2-2 | [40323324227](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323324227) | red on FD | `max2=0` |
+| F2-3 | [40323330972](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323330972) | red on FE | `shared_woke=0 rc=1` |
+| F2-4 | [40323337845](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323337845) | red on FF | `private_isolated=0` |
+| F2-5 | [40323345539](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323345539) | red on FG | `killed_waiter=0`; the killed child is never reaped, so FH–FJ do not print |
+| F2-6 | [40323351987](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323351987) | red on FI | `cleartid_woke=0` |
+| F2-7 | [40342578775](https://github.com/prady4the4bady/Prady4OS/actions/runs/40342578775) | red on FC | `timedout=1 slept_ok=0`. Run 40323683720 was invalid: its commit replaced the submodules with local symlinks, so the build failed. `f3ca817` restored them |
+| F2-8 | [40323365753](https://github.com/prady4the4bady/Prady4OS/actions/runs/40323365753) | red on FJ | `rejects=3` (want 4) |
+
+QEMU TCG only; **not verified on real hardware**.
+
 ## 6. Honesty labels
 
-- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R13) are checked by reading the code only.
+- P1 is gated by `smoke-thread` (§4.1–§4.3). Races between CPUs that no probe drives (R1, R2, R6–R14) are checked by reading the code only.
+- P2 (Amendment 1) is gated by the `smoke-thread` futex arms FA–FJ: green on correct code, and F2-1 to F2-8 each red on its arm (A1.5).
 - Emulated (QEMU TCG, 4 vCPUs) only, not verified on real hardware. Cross-CPU timing under TCG is not hardware timing.
 - Does not claim any part of U1–U3 or OPEN-1/2/12/13 closed.
 - The DDR-1177 arm D/E and M4 checklist items are ticked only when the T4/T5/T6 mutants are shown red.
