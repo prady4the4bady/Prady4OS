@@ -15,6 +15,7 @@
 #include "vmm_cow.h"
 #include "vmm.h"          /* ADR-038: vmm_stack_fault + USER_STACK_* range */
 #include "uaccess.h"    /* copyin — dump the bytes actually executing at a fault */
+#include "mm.h"         /* DDR-1181 §3.3: mm_lock in the fault resolvers */
 #include "regs.h"
 #include "signal.h"
 #include "ps2kbd.h"
@@ -818,6 +819,18 @@ void isr_dispatch(struct regs *r) {
     if (r->vector < 32 && fault_expect_consume(r))
         return;
 
+    /* DDR-1181 §3.7: a ring-0 #PF on the user-copy instruction is a range a
+     * sibling thread unmapped or write-protected after copyin/copyout checked
+     * it. Resume at the fixup, which returns -EFAULT to the copy's caller.
+     * Only that one instruction is covered; every other ring-0 fault still
+     * reaches the panic path below. */
+    if (r->vector == 14 && (r->cs & 3) == 0 &&
+        r->rip >= (uint64_t)(uintptr_t)uaccess_copy_insn &&
+        r->rip <  (uint64_t)(uintptr_t)uaccess_copy_insn_end) {
+        r->rip = (uint64_t)(uintptr_t)uaccess_copy_fault;
+        return;
+    }
+
     const char *name = (r->vector < 32) ? exc_name[r->vector] : "unknown";
 
     /* Fault originating in ring 3 (CPL in the saved CS == 3): a user program
@@ -831,9 +844,19 @@ void isr_dispatch(struct regs *r) {
     /* IMP-D: a ring-3 write to a present read-only page (error 0x7) on a COW page
      * is resolved by copy-on-write — resume the instruction. Non-COW pages return
      * -1 and fall through to the kill path, preserving W^X enforcement. */
+    /* DDR-1181 §3.3: both fault resolvers below change the address space, so
+     * they run under the mm lock. A ring-3 fault holds no kernel lock, so it
+     * may sleep on it; CR2 is read BEFORE the lock, because a sleep lets other
+     * faults on this CPU overwrite it. */
     if (r->vector == 14 && (r->cs & 3) == 3 && (r->err_code & 0x7) == 0x7 &&
-        current_thread && vmm_cow_fault(current_thread->cr3, read_cr2()) == 0)
-        return;
+        current_thread) {
+        uint64_t cr2 = read_cr2();
+        mm_lock(current_thread);
+        int cow = vmm_cow_fault(current_thread->cr3, cr2);
+        mm_unlock(current_thread);
+        if (cow == 0)
+            return;
+    }
 
     /* ADR-038: a ring-3 NOT-PRESENT fault (err bit0 == 0) inside the user stack
      * range grows the stack by one zeroed page. Note the COW arm above requires
@@ -843,8 +866,14 @@ void isr_dispatch(struct regs *r) {
      * guard stays a guard and an allocation failure kills one thread rather
      * than panicking (S2). */
     if (r->vector == 14 && (r->cs & 3) == 3 && !(r->err_code & 0x1) &&
-        current_thread && vmm_stack_fault(current_thread->cr3, read_cr2()) == 0)
-        return;
+        current_thread) {
+        uint64_t cr2 = read_cr2();
+        mm_lock(current_thread);
+        int grown = vmm_stack_fault(current_thread->cr3, cr2);
+        mm_unlock(current_thread);
+        if (grown == 0)
+            return;
+    }
 
     if (r->vector < 32 && (r->cs & 3) == 3) {
         /* DDR-963 §5: try, never block. This runs in EXCEPTION context, and a

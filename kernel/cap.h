@@ -85,7 +85,10 @@ typedef uint64_t cap_t;
 struct cap_table;   /* opaque; kernel-private */
 
 struct cap_table *cap_table_create(void);
-void              cap_table_destroy(struct cap_table *t);
+void              cap_table_destroy(struct cap_table *t);   /* drops a ref (DDR-1181) */
+/* DDR-1181 §3.6: one more tcb shares `t` (threads of one process). A drop or
+ * revoke made through any of them is seen by all. */
+void              cap_table_get(struct cap_table *t);
 
 /* Mint a new capability for (res_type, res_id) with `rights`. */
 cap_t    cap_create(struct cap_table *t, uint32_t res_type, uint64_t res_id, uint32_t rights);

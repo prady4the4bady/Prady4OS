@@ -15,7 +15,7 @@
  *   > 0             a child exited and was reaped            <- a fork happened
  *
  * Both mutant outcomes are distinguishable from the required one, and the number
- * comes out of `sched_find_child` walking the real thread ring.
+ * comes out of `sched_wait_child` walking the real thread ring.
  *
  * THE CONTROL. `post=-10` means nothing unless fork+reap actually work in this
  * boot -- if fork were broken, a mutant that forked would also report no child

@@ -20,13 +20,14 @@
 #include "errno.h"
 #include "uaccess.h"
 #include "aether.h"     /* DDR-1170: time budget on the ring-3 timer return */
+#include "futex.h"      /* DDR-1181 A1.3: futex_kick */
 
 extern void signal_sigreturn(struct regs *saved);   /* arch/x86_64/usermode.asm */
 
 /* syscall_entry.asm reads these two words on every syscall exit. Its %defines
  * (TCB_SIG_PENDING / TCB_SIG_MASK) must match; a layout change fails here. */
-#define TCB_SIG_PENDING_OFF 5320
-#define TCB_SIG_MASK_OFF    5768
+#define TCB_SIG_PENDING_OFF 4296
+#define TCB_SIG_MASK_OFF    4744
 _Static_assert(offsetof(struct tcb, sig_pending) == TCB_SIG_PENDING_OFF,
                "update TCB_SIG_PENDING in syscall_entry.asm");
 _Static_assert(offsetof(struct tcb, sig_mask) == TCB_SIG_MASK_OFF,
@@ -43,7 +44,12 @@ void sig_raise(struct tcb *t, int sig, int32_t pid, int32_t code, int32_t status
     t->sig_info[sig].code   = code;
     t->sig_info[sig].status = status;
     /* Release: the info above is visible before the bit that announces it. */
-    __atomic_fetch_or(&t->sig_pending, 1ull << sig, __ATOMIC_RELEASE);
+    __atomic_fetch_or(&t->sig_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+    futex_kick(t);       /* DDR-1181 A1.3: a FUTEX_WAIT sleeper must see it */
+}
+
+int signal_kill_pending(const struct tcb *t) {
+    return (__atomic_load_n(&t->sig_pending, __ATOMIC_ACQUIRE) & (1ull << SIGKILL)) != 0;
 }
 
 static uint64_t deliverable(const struct tcb *t) {

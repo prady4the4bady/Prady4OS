@@ -62,7 +62,7 @@ done
 printf '\n### Kernel\n'
 if [ -f build/kernel.bin ]; then
   sz=$(stat -c%s build/kernel.bin)
-  printf -- '- kernel.bin %s B / 1572864 B gate (%s B headroom)\n' "$sz" "$((1572864-sz))"
+  printf -- '- kernel.bin %s B / 1703936 B gate (%s B headroom)\n' "$sz" "$((1703936-sz))"
   printf -- '- sha256 %s\n' "$(sha256sum build/kernel.bin | cut -d" " -f1)"
 else
   printf -- '- kernel.bin not built\n'

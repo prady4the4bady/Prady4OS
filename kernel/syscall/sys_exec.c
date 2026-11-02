@@ -26,6 +26,7 @@
 #include "sys_exec.h"
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "fd.h"
 #include "vfs.h"
 #include "elf.h"
@@ -82,6 +83,14 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)
         return -ENOENT;                        /* no filesystem to exec from */
+    /* DDR-1181 §3.5: exec replaces the address space every live thread runs
+     * in. POSIX kills the other threads first; P1 refuses instead (P4), which
+     * also keeps t->cr3 constant while the mm is shared. refs, not live
+     * (§4.8 R14): an exited sibling stays on its CPU, in this address space,
+     * until it switches away, and only its reap (after it is off-CPU) drops
+     * its reference. */
+    if (t->mm && __atomic_load_n(&t->mm->refs, __ATOMIC_ACQUIRE) > 1)
+        return -EBUSY;
 
     char kpath[PATH_MAX];
     ssize_t plen = copyinstr(kpath, (const void __user *)(uintptr_t)upath,
@@ -135,11 +144,12 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
 
     uint64_t old_as = t->cr3;
     t->cr3        = new_as;
+    t->mm->cr3    = new_as;   /* DDR-1181: cached copy and owner written together */
     signal_exec_reset(t);   /* DDR-1174: old handler VAs mean nothing in the new image */
     t->user_rip   = entry;
     t->user_stack = new_rsp;
-    for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
-    t->mmap_next  = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
+    for (int i = 0; i < VM_AREA_MAX; i++) { t->mm->vma[i].base = 0; t->mm->vma[i].npages = 0; }
+    t->mm->mmap_next = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
 
     /* Activate the new AS before freeing the old one — never free the live CR3. */
     __asm__ volatile("mov %0, %%cr3" :: "r"(new_as) : "memory");

@@ -11,6 +11,7 @@
  */
 #include "aether.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "console.h"
 #include "irq.h"      /* g_ticks */
 #include "pmm.h"      /* DDR-1171: rollback log page */
@@ -26,27 +27,27 @@ static void log_pid(const char *tag, uint32_t pid) {
 }
 
 static uint64_t cap_of(const struct tcb *t) {
-    return t->mem_limit ? t->mem_limit : AETHER_MEM_DEFAULT;
+    return t->mm->mem_limit ? t->mm->mem_limit : AETHER_MEM_DEFAULT;
 }
 
 /* Returns 0 (allowed, charged) or -1 (over cap: logged + audited; caller kills). */
 int aether_mem_charge(struct tcb *t, uint64_t bytes) {
     if (!t->is_agent)
         return 0;                               /* non-agents are uncapped */
-    if (t->mem_used + bytes > cap_of(t)) {
+    if (t->mm->mem_used + bytes > cap_of(t)) {
         aether_drop_pid(t->pid);
         aether_audit(t->pid, 0, 0, AR_OOM_KILL);
         log_pid("AGENT_OOM_KILLED PID=", t->pid);
         return -1;
     }
-    t->mem_used += bytes;
+    t->mm->mem_used += bytes;
     return 0;
 }
 
 void aether_mem_uncharge(struct tcb *t, uint64_t bytes) {
     if (!t->is_agent)
         return;
-    t->mem_used = (t->mem_used > bytes) ? t->mem_used - bytes : 0;
+    t->mm->mem_used = (t->mm->mem_used > bytes) ? t->mm->mem_used - bytes : 0;
 }
 
 /* SYS_SET_MEM_LIMIT: a process may only *lower* its own cap (no self-escalation).
@@ -54,10 +55,24 @@ void aether_mem_uncharge(struct tcb *t, uint64_t bytes) {
 long aether_set_mem_limit(uint32_t pid, uint64_t bytes) {
     (void)pid;
     struct tcb *t = current_thread;
-    uint64_t cur = cap_of(t);
-    if (bytes == 0 || bytes > cur)
+    /* DDR-1181: the cap lives in the mm, and a kernel thread has none (the
+     * boot thread runs aether_sectest's escalation arm). Reading t->mm->
+     * there dereferenced NULL through the low identity map and returned
+     * whatever was at that offset, so the escalation was ACCEPTED
+     * (smoke-aether-sec lost AETHER_SEC_CAP_DENIED, run 39502463241). With
+     * no address space there is no cap to change. */
+    if (!t->mm)
         return -1;
-    t->mem_limit = bytes;
+    /* DDR-1181 §4.4 R3: the cap is shared by every thread of the mm; check
+     * and store as one step, or two lowering siblings can raise it. */
+    mm_lock(t);
+    uint64_t cur = cap_of(t);
+    if (bytes == 0 || bytes > cur) {
+        mm_unlock(t);
+        return -1;
+    }
+    t->mm->mem_limit = bytes;
+    mm_unlock(t);
     return 0;
 }
 

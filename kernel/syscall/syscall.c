@@ -16,6 +16,7 @@
 #include "pipe.h"      /* SYS_PIPE / SYS_DUP2 handlers (PROC-A) */
 #include "epoll.h"     /* SYS_EPOLL_* handlers (PROC-B) */
 #include "signal.h"    /* SYS_SIGACTION / _KILL / _SIGRETURN (PROC-C) */
+#include "futex.h"     /* SYS_FUTEX (DDR-1181 A1) */
 #include "sys_io_uring.h" /* SYS_IO_URING_* handlers (PROC-E) */
 #include "aether.h"       /* AETHER syscalls + per-agent rate limit (Layer 6) */
 #include "percpu.h"       /* DDR-SMP-3a: %gs:0 probe from syscall context */
@@ -25,6 +26,7 @@ void sys_socket_register(void);   /* kernel/syscall/sys_socket.c (ADR-027) */
 void sys_disk_register(void);     /* kernel/syscall/sys_disk.c (DDR-1143) */
 void sys_install_register(void);  /* kernel/install/install.c (DDR-1143) */
 void sys_ledger_register(void);   /* kernel/syscall/sys_ledger.c (DDR-1150) */
+void sys_thread_register(void);   /* kernel/syscall/sys_thread.c (DDR-1181) */
 void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
@@ -202,7 +204,7 @@ static long sys_getpid(long a1, long a2, long a3, long a4, long a5, long a6) {
         else
             kputs("[percpu] current FAIL (syscall ctx)\r\n");
     }
-    return (long)current_thread->pid;
+    return (long)current_thread->tgid;   /* DDR-1181 P1c: the process id */
 }
 
 static long sys_yield(long a1, long a2, long a3, long a4, long a5, long a6) {
@@ -254,6 +256,8 @@ void syscall_init(void) {
     sys_mmap_register();                  /* SYS_MMAP / SYS_MUNMAP (slice 6) */
     sys_exec_register();                  /* SYS_EXECVE (slice 7) */
     sys_fork_register();                  /* SYS_FORK (slice 8) */
+    sys_thread_register();                /* SYS_THREAD_CREATE/EXIT (DDR-1181) */
+    futex_register();                     /* SYS_FUTEX (DDR-1181 A1) */
     sys_wait_register();                  /* SYS_WAIT4 (slice 9) */
     pipe_register();                      /* SYS_PIPE / SYS_DUP2 (PROC-A) */
     epoll_register();                     /* SYS_EPOLL_* (PROC-B) */

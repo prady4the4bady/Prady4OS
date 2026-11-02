@@ -55,8 +55,8 @@ extern signal_deliver
 extern signal_sigreturn
 
 ; DDR-1174: tcb offsets, _Static_assert'ed in kernel/proc/signal.c.
-%define TCB_SIG_PENDING 5320
-%define TCB_SIG_MASK    5768
+%define TCB_SIG_PENDING 4296
+%define TCB_SIG_MASK    4744
 %define SIGKILL_BIT     9
 %define USER_CS_SEL     (0x20 | 3)
 %define USER_SS_SEL     (0x18 | 3)

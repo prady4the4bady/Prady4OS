@@ -7,6 +7,7 @@
  */
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "uaccess.h"
 #include "errno.h"
 #include "vmm.h"
@@ -152,7 +153,7 @@ static long sys_surface_create(long a1, long a2, long a3, long a4, long a5, long
      * reuse, since its whole job is to tell one tenancy from the next. */
     s->gen++;
     s->phys = phys; s->w = w; s->h = h; s->npages = (uint32_t)npages;
-    s->owner_pid = current_thread->pid; s->x = s->y = 0;
+    s->owner_pid = current_thread->tgid; s->x = s->y = 0;
     s->z = ++g_z_top; s->focused = 0;
     s->kq_head = s->kq_tail = 0;
     s->eq_head = s->eq_tail = 0;                /* empty event ring (DDR-718) */
@@ -162,7 +163,7 @@ static long sys_surface_create(long a1, long a2, long a3, long a4, long a5, long
     return id;
 }
 
-static long sys_surface_map(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_map_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
@@ -171,7 +172,7 @@ static long sys_surface_map(long a1, long a2, long a3, long a4, long a5, long a6
     uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
     if (!s->used) { spin_unlock_irqrestore(&g_surf_lock, fl); return -EINVAL; }
-    if (s->owner_pid != current_thread->pid) {  /* a client maps only its own surface */
+    if (s->owner_pid != current_thread->tgid) {  /* a client maps only its own surface */
         spin_unlock_irqrestore(&g_surf_lock, fl);
         return -EPERM;
     }
@@ -218,7 +219,7 @@ static long sys_surface_commit(long a1, long a2, long a3, long a4, long a5, long
     struct surface *s = &g_surf[id];
     long r = 0;
     if (!s->used)                                  r = -EINVAL;
-    else if (s->owner_pid != current_thread->pid)  r = -EPERM;
+    else if (s->owner_pid != current_thread->tgid)  r = -EPERM;
     else {
         if ((int32_t)a2 != SURF_POS_KEEP) {
             s->x = (int32_t)a2;
@@ -275,7 +276,7 @@ static long sys_surface_move(long a1, long a2, long a3, long a4, long a5, long a
     struct surface *s = &g_surf[id];
     long r = 0;
     if (!s->used)                                                           r = -EINVAL;
-    else if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign) r = -EPERM;
+    else if (s->owner_pid != current_thread->tgid && !current_thread->is_sovereign) r = -EPERM;
     else { s->x = (int32_t)a2; s->y = (int32_t)a3; }
     spin_unlock_irqrestore(&g_surf_lock, fl);
     return r;
@@ -292,7 +293,7 @@ static long sys_surface_raise(long a1, long a2, long a3, long a4, long a5, long 
     struct surface *s = &g_surf[id];
     long r = 0;
     if (!s->used)                                                           r = -EINVAL;
-    else if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign) r = -EPERM;
+    else if (s->owner_pid != current_thread->tgid && !current_thread->is_sovereign) r = -EPERM;
     else {
         for (int i = 0; i < SURFACE_MAX; i++) g_surf[i].focused = 0;
         s->z = ++g_z_top;
@@ -313,7 +314,7 @@ static long sys_surface_sendkey(long a1, long a2, long a3, long a4, long a5, lon
     struct surface *s = &g_surf[id];
     long r = 0;
     if (!s->used)                                                           r = -EINVAL;
-    else if (!current_thread->is_sovereign && s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (!current_thread->is_sovereign && s->owner_pid != current_thread->tgid) r = -EPERM;
     else {
         uint8_t nh = (uint8_t)((s->kq_head + 1) % SURFACE_KQ);
         if (nh != s->kq_tail) {                  /* drop on full */
@@ -336,7 +337,7 @@ static long sys_surface_getkey(long a1, long a2, long a3, long a4, long a5, long
     struct surface *s = &g_surf[id];
     long r;
     if (!s->used)                                r = -EINVAL;
-    else if (s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (s->owner_pid != current_thread->tgid) r = -EPERM;
     else if (s->kq_head == s->kq_tail)           r = -1;    /* empty */
     else {
         r = (long)s->kq[s->kq_tail];
@@ -347,7 +348,7 @@ static long sys_surface_getkey(long a1, long a2, long a3, long a4, long a5, long
 }
 
 /* Compositor-side: map a polled surface read-side into the caller; returns VA. */
-static long sys_surface_cmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_cmap_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     return sys_surface_map_ro((int)a1);
@@ -359,7 +360,7 @@ static long sys_surface_cmap(long a1, long a2, long a3, long a4, long a5, long a
  * touching freed frames (ADR-021). A sovereign closing another process's surface
  * frees the frames without unmapping the owner's tables (not the active AS) — the
  * owner must not access a sovereign-closed surface. */
-static long sys_surface_close(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_close_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
     int id = (int)a1;
@@ -368,11 +369,11 @@ static long sys_surface_close(long a1, long a2, long a3, long a4, long a5, long 
     uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
     if (!s->used) { spin_unlock_irqrestore(&g_surf_lock, fl); return -EINVAL; }
-    if (s->owner_pid != current_thread->pid && !current_thread->is_sovereign) {
+    if (s->owner_pid != current_thread->tgid && !current_thread->is_sovereign) {
         spin_unlock_irqrestore(&g_surf_lock, fl);
         return -EPERM;
     }
-    int owner = (s->owner_pid == current_thread->pid);
+    int owner = (s->owner_pid == current_thread->tgid);
     uint32_t npages = s->npages;
     uint64_t phys; unsigned order;
     surf_take_free(s, &phys, &order);              /* captures + clears the slot */
@@ -411,7 +412,7 @@ void surface_reap_pid(uint32_t pid) {
 /* Resize a surface (DDR-711): swap in a fresh zeroed buffer of the new size,
  * keeping position/stack/focus/committed. Owner-only (it owns the draw buffer).
  * The owner re-maps (SYS_SURFACE_MAP) to draw into the new buffer. */
-static long sys_surface_resize(long a1, long a2, long a3, long a4, long a5, long a6) {
+static long sys_surface_resize_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a4;
     int id = (int)a1;
@@ -433,7 +434,7 @@ static long sys_surface_resize(long a1, long a2, long a3, long a4, long a5, long
 
     uint64_t fl = spin_lock_irqsave(&g_surf_lock);
     struct surface *s = &g_surf[id];
-    if (!s->used || s->owner_pid != current_thread->pid) {
+    if (!s->used || s->owner_pid != current_thread->tgid) {
         long r = s->used ? -EPERM : -EINVAL;
         spin_unlock_irqrestore(&g_surf_lock, fl);
         pmm_free_pages(nphys, order_for(npages));      /* nothing to resize */
@@ -464,7 +465,7 @@ static long sys_surface_set_title(long a1, long a2, long a3, long a4, long a5, l
     struct surface *s = &g_surf[id];
     long r = 0;
     if (!s->used)                                r = -EINVAL;
-    else if (s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (s->owner_pid != current_thread->tgid) r = -EPERM;
     spin_unlock_irqrestore(&g_surf_lock, fl);
     if (r)
         return r;
@@ -473,7 +474,7 @@ static long sys_surface_set_title(long a1, long a2, long a3, long a4, long a5, l
     if (faulted)
         title[0] = 0;                            /* leave the window untitled */
     fl = spin_lock_irqsave(&g_surf_lock);
-    if (s->used && s->owner_pid == current_thread->pid)   /* re-check: still ours */
+    if (s->used && s->owner_pid == current_thread->tgid)   /* re-check: still ours */
         for (unsigned i = 0; i < sizeof s->title; i++) s->title[i] = title[i];
     spin_unlock_irqrestore(&g_surf_lock, fl);
     return faulted ? -EFAULT : 0;
@@ -491,7 +492,7 @@ static long sys_surface_sendev(long a1, long a2, long a3, long a4, long a5, long
     struct surface *s = &g_surf[id];
     long r = 0;
     if (!s->used)                                                           r = -EINVAL;
-    else if (!current_thread->is_sovereign && s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (!current_thread->is_sovereign && s->owner_pid != current_thread->tgid) r = -EPERM;
     else {
         uint8_t nh = (uint8_t)((s->eq_head + 1) % SURFACE_EQ);
         if (nh != s->eq_tail) {
@@ -517,7 +518,7 @@ static long sys_surface_getev(long a1, long a2, long a3, long a4, long a5, long 
     struct surf_event ev;
     long r = 0;
     if (!s->used)                                r = -EINVAL;
-    else if (s->owner_pid != current_thread->pid) r = -EPERM;
+    else if (s->owner_pid != current_thread->tgid) r = -EPERM;
     else if (s->eq_head == s->eq_tail)           r = -EAGAIN;
     else ev = s->eq[s->eq_tail];                 /* snapshot; dequeue only if copyout ok */
     spin_unlock_irqrestore(&g_surf_lock, fl);
@@ -526,11 +527,26 @@ static long sys_surface_getev(long a1, long a2, long a3, long a4, long a5, long 
     if (copyout((void __user *)a2, &ev, sizeof ev) < 0)
         return -EFAULT;                          /* leave the event queued */
     fl = spin_lock_irqsave(&g_surf_lock);
-    if (s->used && s->owner_pid == current_thread->pid && s->eq_head != s->eq_tail)
+    if (s->used && s->owner_pid == current_thread->tgid && s->eq_head != s->eq_tail)
         s->eq_tail = (uint8_t)((s->eq_tail + 1) % SURFACE_EQ);   /* advance past the delivered event */
     spin_unlock_irqrestore(&g_surf_lock, fl);
     return 0;
 }
+
+/* DDR-1181 §3.3: the surface calls that map or unmap pages in the caller's
+ * address space hold its mm lock (taken before g_surf_lock, never after). */
+#define MM_LOCKED_SYSCALL(name)                                              \
+    static long name(long a1, long a2, long a3, long a4, long a5, long a6) { \
+        struct tcb *t = current_thread;                                      \
+        mm_lock(t);                                                          \
+        long rc = name##_locked(a1, a2, a3, a4, a5, a6);                     \
+        mm_unlock(t);                                                        \
+        return rc;                                                           \
+    }
+MM_LOCKED_SYSCALL(sys_surface_map)
+MM_LOCKED_SYSCALL(sys_surface_cmap)
+MM_LOCKED_SYSCALL(sys_surface_close)
+MM_LOCKED_SYSCALL(sys_surface_resize)
 
 void sys_surface_register(void) {
     syscall_register(SYS_SURFACE_CREATE, sys_surface_create);

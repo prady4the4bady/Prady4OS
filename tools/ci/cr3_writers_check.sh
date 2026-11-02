@@ -58,10 +58,16 @@ set -uo pipefail
 TREE_ROOT="${TREE_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
 # The pin: <relative path> <count>, sorted. Measured 2026-09-06, not carried.
+# Re-measured 2026-10-20 (DDR-1181 P1c): threads now SHARE an address space,
+# which this check exists to notice. The cross-CPU shootdown it asks for came
+# first (DDR-1177, tlb.c), then the struct mm owner (mm.c, sys_exec.c's second
+# writer) and sched_create_user_thread's shared-cr3 assignment (sched.c 3).
 PIN=$(cat <<'PINEOF'
 kernel/exec/elf.c 1
-kernel/proc/sched.c 2
-kernel/syscall/sys_exec.c 1
+kernel/mm/mm.c 1
+kernel/mm/tlb.c 1
+kernel/proc/sched.c 3
+kernel/syscall/sys_exec.c 2
 PINEOF
 )
 
@@ -107,7 +113,7 @@ MSG
 fi
 
 if [ "$actual" = "$PIN" ]; then
-    echo "cr3-writers-check: OK — $total cr3 assignment sites across 3 files, set unchanged (shootdown=$shootdown)"
+    echo "cr3-writers-check: OK — $total cr3 assignment sites, pinned set unchanged (shootdown=$shootdown)"
     exit 0
 fi
 

@@ -28,7 +28,7 @@ Status: IN PROGRESS. Needs: none.
 - [x] Full gate run on the current `dev/phase1` tip; fix anything red at the root (run 39105021641, green)
 - [x] Dependabot (DDR-1172): #19 closed (superseded by #48); merged #9 `3c1708d`, #7 `55b125d`, #8 `02ede03`, #30 `bca2795`, #33 `52b35f3`; #42 closed red (web-tree-sitter 0.25+ has no default export)
 - [x] Open docs PRs #27, #31, #36: read, merge or close, record why (DDR-1173)
-- [ ] DDR-1171 rollback implementation on `rollback-ddr1171`
+- [x] DDR-1171 rollback implementation on `rollback-ddr1171`: merged via #51 as `db5d701` (head `3795348` green, run 38989261040). Open owner question: the `sys_open` access-mode gap recorded in DDR-1171 is not fixed.
 Exit gate: all existing gates green on one SHA; open-PR list clean.
 
 ---
@@ -46,25 +46,27 @@ Status: DONE. Needs: C0.1. Ref: DDR-1075, DDR-1077, DDR-1177.
 Exit gate: `smoke-tlbshoot` (in-kernel probe, arms A-C, 4 CPUs; DDR-1177 Amendment 2). M2 and M3 shown red in CI before merge.
 
 ### C1.3 Shared memory
-Status: TODO. Needs: C1.2. Ref: DDR-1038.
-- [ ] `MAP_SHARED`, SysV/POSIX shared memory, shared file mappings with write-back
-Exit gate: shared-memory gate (name TBD).
+Status: IN PROGRESS (P1 merged; P2 #78 and P3 #80 open; P4 not started). Needs: C1.2. Ref: DDR-1038, DDR-1178.
+- [x] P1 anonymous `MAP_SHARED` across fork: #63 merged as `a2ac698` (the DDR from #62 rides in the same merge). Gate `smoke-shm` (shard 0), arms A-F, green on `3c6865a` (run 39425747997). Mutants M1-M7 red on `80889fd` (DDR-1178 §4). Emulated (TCG) only, not verified on real hardware.
+- [ ] P2/P3 SysV and POSIX shared memory: decisions D1-D3 recorded (DDR-1178 Amendment 1, #70 merged as `2bda85d`); P2 is #78, P3 is #80 (both green, waiting on merge)
+- [ ] P4 shared file mappings with write-back: decisions D4-D5 recorded in the same amendment (#70, `2bda85d`); not started
+Exit gate: `smoke-shm` (P1 arms A-F; P2-P4 arms are added with their parts).
 
 ### C1.4 Threads and synchronization
-Status: TODO. Needs: C1.1, C1.2, C1.3.
-- [ ] futex
-- [ ] pthreads / `CLONE_VM`, thread-local storage
-- [ ] mutex, semaphore, condition variable, barrier (priority inheritance)
+Status: IN PROGRESS. Needs: C1.1, C1.2, C1.3. Merged: #76 `3358b35` (P1c, DDR-1181: `SYS_THREAD_CREATE`/`EXIT`, thread groups, `smoke-thread`), #91 `f0e1bb6` (P1d, DDR-1186: `SYS_SCHED_CPU`, cross-CPU arms D/E/M/G). #81 `cc99745` (P2, DDR-1181 Amendment 1: `SYS_FUTEX`). Every run below is on `ubuntu-24.04`, pinned by #97 `757983b` (DDR-1191). Cross-CPU TLB coherence for threads: gated (`smoke-thread` D, E, M), QEMU only, not verified on real hardware.
+- [x] futex: #81 `cc99745` (DDR-1181 Amendment 1, `SYS_FUTEX` NSI 117). `smoke-thread` arms FA–FJ green on head `547e1c5` (run [41272172932](https://github.com/prady4the4bady/Prady4OS/actions/runs/41272172932)); F2-1 to F2-8 each red on its own arm on that head (runs 41274796623, 41274798202, 41275022079, 41277251600, 41277253535, 41279654646, 41279656521, 41282177441; table in #81 comment 6554928498). Merged head `5997083` (only CI files and docs added) green on run [41299374169](https://github.com/prady4the4bady/Prady4OS/actions/runs/41299374169) attempt 2; attempt 1 failed `smoke-part` on a console line split by another CPU (DDR-1194). Known limit: a FUTEX_WAIT without a handler is not interrupted by a default-terminate signal other than SIGKILL (DDR-1181 A1.3). QEMU (TCG, 4 vCPU) only, not verified on real hardware.
+- [ ] pthreads / `CLONE_VM`, thread-local storage. Kernel part merged in #76 `3358b35`: `CLONE_VM` threads, per-thread TLS, CLEARTID, group exit (`smoke-thread` A, B, C, F). No user-space pthreads library yet, so not ticked.
+- [ ] mutex, semaphore, condition variable, barrier (DDR-1193; priority inheritance moved to C1.5, DDR-1193 D1)
 - [ ] RCU
 - [ ] deadlock detection (lock-order checking)
-- [ ] REQUIRED (DDR-1177 Amendment 2, #45/6251086742 item 3): TLB shootdown arm D, `mprotect` read-only on one CPU makes a write on another CPU fault
-- [ ] REQUIRED (same): TLB shootdown arm E, the user-space `munmap`/remap stale-read test with `CLONE_VM` threads
-- [ ] REQUIRED (same, item 5): a gate that catches DDR-1177 mutant M4 (frame freed before every CPU acked), via a poison-on-free reader thread. Owner: the agent working this checklist. M4 must be shown red.
+- [x] REQUIRED (DDR-1177 Amendment 2, #45/6251086742 item 3): TLB shootdown arm D, `mprotect` read-only on one CPU makes a write on another CPU fault. #91 `f0e1bb6` (DDR-1186): green on head `a4a508a` (run [41224958867](https://github.com/prady4the4bady/Prady4OS/actions/runs/41224958867)); mutant T4 red on D only (`prot_stale=19570159`, run [41228026512](https://github.com/prady4the4bady/Prady4OS/actions/runs/41228026512)). QEMU (TCG, 4 vCPU) only, not verified on real hardware.
+- [x] REQUIRED (same): TLB shootdown arm E, the user-space `munmap`/remap stale-read test with `CLONE_VM` threads. #91 `f0e1bb6`: mutant T5 red on E (`stale=9118354`, run [41228028822](https://github.com/prady4the4bady/Prady4OS/actions/runs/41228028822)). QEMU only, not verified on real hardware.
+- [x] REQUIRED (same, item 5): a gate that catches DDR-1177 mutant M4 (frame freed before every CPU acked), via a poison-on-free reader thread. Owner: the agent working this checklist. M4 must be shown red. #91 `f0e1bb6`: arm M; mutant T6 (M4) red on M only (`poison=18942`, run [41230409176](https://github.com/prady4the4bady/Prady4OS/actions/runs/41230409176)). QEMU only, not verified on real hardware.
 Exit gate: threads and lock gates (names TBD) incl. race stress, plus the three DDR-1177 items above.
 
 ### C1.5 Scheduler classes
 Status: TODO. Needs: C1.4.
-- [ ] real-time classes (FIFO, RR, deadline)
+- [ ] real-time classes (FIFO, RR, deadline), with `kmutex` priority inheritance (DDR-1193 D1)
 - [ ] pressure stall information (CPU, memory, I/O)
 - [ ] CPU frequency and tickless timers, high-resolution clocks
 Exit gate: scheduling-class gate (name TBD).
@@ -208,7 +210,7 @@ Exit gate: icon gate (name TBD). Operator reviews by eye before v1.
 Status: TODO. Needs: C3.2. Ref: Block 3.
 - [ ] UI-state reading, input injection
 - [ ] sandboxed shell and browser
-- [ ] rollback on rejection (DDR-1171)
+- [x] rollback on rejection (DDR-1171): #51 `db5d701`, gate `smoke-rollback`. Emulated (TCG) only, not verified on real hardware.
 - [ ] kernel policy hooks: agents propose tunings; kernel validates against fixed bounds and audits; agents never run scheduler, memory or security decisions directly
 Exit gate: each capability has a gate plus a negative gate.
 
