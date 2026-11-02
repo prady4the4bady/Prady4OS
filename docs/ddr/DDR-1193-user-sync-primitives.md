@@ -1,7 +1,8 @@
 # DDR-1193: C1.4 P3, user mutex, semaphore, condition variable and barrier on futex; where priority inheritance goes
 
-Status: **design**. No code until #81 (C1.4 P2, `SYS_FUTEX`) is merged into
-`dev/phase1`; P3 is built on that syscall. Platform: QEMU (TCG, 4 vCPU). Nothing
+Status: **implemented in P3a** (Amendment 1), on `dev/phase1` `cc99745` after #81
+(C1.4 P2, `SYS_FUTEX`) merged; P3 is built on that syscall. Not gated until
+Y1–Y6 are shown red in CI. Platform: QEMU (TCG, 4 vCPU). Nothing
 here will be verified on real hardware.
 
 ## 1. Where the tree is (read from `dev/phase1` = `65357d3`, plus #81 at `547e1c5`)
@@ -190,3 +191,88 @@ All six sentinels go into the `smoke-thread` `EXTRA_SENTINEL` list.
   variable, barrier (priority inheritance)" loses "(priority inheritance)";
   C1.5 "real-time classes (FIFO, RR, deadline)" gains "with `kmutex` priority
   inheritance (DDR-1193 D1)".
+
+## Amendment 1 (P3a, implementation): what changed from §3–§4, and why
+
+Written before the code, on `dev/phase1` = `cc99745` (#81 merged).
+
+1. **Each arm runs in a forked child.** The `D`/`E`/`F`/`G` pattern is used: the
+   child's main thread orchestrates, the threads report through a
+   `MAP_SHARED` page, and the parent judges the end with `reap()`. A mutant
+   that leaves threads asleep forever (Y2, Y4, Y5, Y6) is then ended by
+   `SIGKILL`, which wakes a futex sleeper (FG), and is never a stuck boot.
+   `timeout=1` means the child's own 5 s bound expired **or** `reap()` had
+   to kill the child.
+2. **`placed_ok=1` and `contended_ok=1` join the sentinels.** `grep -F` cannot
+   test "> 0", and placement must be part of the verdict (§4). Each thread pins
+   with `SYS_SCHED_CPU` op 1 and then confirms with op 0 (GET) that it is on
+   its CPU. This proves which CPU each thread ran on, not that the threads ran
+   at the same time; the MTTCG question in §4.1 stays open. The exact sentinels
+   are:
+   - `PRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1`
+   - `PRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1`
+   - `PRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1`
+   - `PRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1`
+   - `PRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1`
+   - `PRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1`
+3. **The thread id mapping (§4, "Not verified") is checked from the code.**
+   - `sched_create_user_thread` sets `t->pid = t->tid` (`sched.c:1420`) and returns `t->pid` (`sched.c:1461`).
+   - `sched_snapshot` reports `out->pid = t->pid` (`sched.c:1663`).
+   - So the id `SYS_THREAD_CREATE` returns is the `pid` that `SYS_GETPROCS` lists.
+   - If that were wrong, the BLOCKED poll would never find the thread, and the
+     arm would print `asleep=0` on correct code, so it fails visibly, not silently.
+4. **SB's linger is counted in vDSO ticks.** The vDSO clock advances 10 ms per
+   PIT tick (`idt.c:374`), so "50 ms" style waits have 10 ms granularity.
+   - On entry, a holder lingers until a **third** holder is inside, or until the
+     clock has advanced one tick (at most 10 ms). It does this only on its first
+     20 entries.
+   - Correct code never admits a third holder, so that costs at most 80
+     entries × 10 ms, shared by two holders at a time (about 0.4 s).
+   - Y3 admits all four threads, so a third holder appears inside a linger
+     window and `maxin_ok=0`.
+   - The same linger gives `overlap=1` (a second holder inside) by design, not
+     by chance.
+5. **Y6, made precise.** §3 says relocking "with 1" can strand a mutex waiter.
+   - That holds for a relock loop that **writes** 1:
+     `while (xchg(st, 1) != 0) futex_wait(st, 1)` overwrites the 2 that a
+     sleeping waiter set. The next unlock sees 1 and skips its wake, so that
+     waiter and the relocker both sleep with `st == 0`.
+   - It does not hold for Drepper's `CAS 0→1` fast path. That writes 1 only
+     when `st == 0`, and a woken waiter always sets 2 again before it can
+     sleep.
+   - So `pcond_wait` relocks with `while (xchg(st, 2) != 0) futex_wait(st, 2)`,
+     and **Y6 replaces both 2s with 1**.
+   - SH's contender keeps `st == 2` common at the moment of relock.
+6. **No `*_timedwait` in P3a.** No arm in §4 exercises a timeout, and ungated
+   code would break the honesty labels. The timed forms (§3, "Timeouts") are
+   added with their own arm and mutant when a consumer needs them (P4, musl).
+   Until then they are **not implemented**.
+7. **Cost is measured.** `smoke-thread` has a `FORBIDDEN_SENTINEL`, so it has
+   no early exit and always runs its full `TIMEOUT_S` (240 s; run 41299374169
+   shard 2: `PASS smoke-thread (240s)`). The probe prints
+   `[sync] start_ms=` and `[sync] end_ms=` (vDSO clock) around the six arms,
+   and `[sync] <arm> ms=` for each, so the CI run shows whether the arms finish
+   inside the window. `TIMEOUT_S` changes only if a run shows they do not.
+
+### Amendment 1 runs (smoke-thread, shard 2; QEMU TCG, 4 vCPUs, `ubuntu-24.04`)
+
+The correct tree and all six mutants were built on head `2bd99ca`. Each mutant changes only `user/include/psync.h`, builds with 0 warnings, and gives its own `threadtest.elf` hash.
+
+| Tree | Run | Verdict | Measured on the target arm | Other arms |
+|---|---|---|---|---|
+| correct `2bd99ca` | [41364910443](https://github.com/prady4the4bady/Prady4OS/actions/runs/41364910443) | green | all six as specified; `[sync] start_ms=10800 end_ms=11880` | — |
+| Y1 non-atomic fast-path acquire | [41367275758](https://github.com/prady4the4bady/Prady4OS/actions/runs/41367275758) | **red on SA** | `total=79999` (want 80000), `contended_ok=1` | all green |
+| Y2 unlock never wakes | [41371310617](https://github.com/prady4the4bady/Prady4OS/actions/runs/41371310617) | **red on SW** | `asleep=1 woke=0 timeout=1` | SA, SC, SH also red (all use `pmutex`) |
+| Y3 wait without `val > 0` | [41371312750](https://github.com/prady4the4bady/Prady4OS/actions/runs/41371312750) | **red on SB** | `maxin=4 maxin_ok=0 asleep=0` | all green |
+| Y4 broadcast wakes 1 | [41374490031](https://github.com/prady4the4bady/Prady4OS/actions/runs/41374490031) | **red on SC** | `woke=1 timeout=1` | all green |
+| Y5 no `gen` bump | [41375830310](https://github.com/prady4the4bady/Prady4OS/actions/runs/41375830310) | **red on SD** | `phases=0 timeout=1` | all green |
+| Y6 relock writes 1 | [41380005173](https://github.com/prady4the4bady/Prady4OS/actions/runs/41380005173) | **red on SH** | `rounds=1 timeout=1`, `[sync] H contender=47867` | SC also red (`woke=1 timeout=1`): three woken waiters relocking with 1 strand each other, as item 5 predicts |
+
+**What the runs show, and what they do not:**
+- **SA catches Y1 only probabilistically.** The margin is one lost update in 80 000. A single red run does not show that every run catches it.
+  - It also does not show that the vCPUs run in parallel (MTTCG): a vCPU switch between the load and the store explains one lost update just as well.
+  - MTTCG stays **not verified**. `exp=80000` is unchanged.
+- **Y2 and Y6 each also turn other arms red.** Their target arms are red, so rule 3 is met.
+- **Y1's run also failed shard 7 on `SURFDESTROY FAIL: reuse slot not reused`.** That probe does not include `psync.h`, and shard 7 is green on `2bd99ca`, so it is not this change. It is **unexplained** and queued as a separate task.
+
+QEMU (TCG) only. **Not verified on real hardware.**

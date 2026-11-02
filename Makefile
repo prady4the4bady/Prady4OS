@@ -4389,13 +4389,15 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 # DDR-1186 (SYS_SCHED_CPU; the scheduler never spreads one process's threads
 # under the boot's load, DDR-1181 sec.4.3). D, E and M are the DDR-1177 C1.4
 # items. Mutants T1-T8 in DDR-1181 sec.4, P1 in DDR-1186 sec.4.
+# DDR-1193 (C1.4 P3a): arms SA, SW, SB, SC, SH, SD (psync.h); mutants Y1-Y6 in
+# DDR-1193 sec.4.1 and Amendment 1.
 smoke-thread: $(IMG) fat-image sfs-image
 	@rm -f build/thread.log
 	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_THREAD_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_THREAD_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
-	@grep -a "\[thread\]\|PRADYOS_THREAD" build/thread.log || true
+	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC" build/thread.log || true
 	@echo "[thread] PASS"
 
 # DDR-1177 (C1.2): cross-CPU TLB shootdown, in-kernel probe on 4 CPUs. Arms A-C
