@@ -2,15 +2,23 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-11-01)
+## State (2026-11-02)
 
-- **dev/phase1 tip:** `cc99745` (PR #81, C1.4 P2 futex, DDR-1181 Amendment 1). Before it: #99 `4909109` (DDR-1193, C1.4 P3 design; D1 approved: priority inheritance moves to C1.5 P3), #98 `65357d3` (DDR-1192), #91 `f0e1bb6` (C1.4 P1d). Branch protection is on; the operator merges.
-- **Kernel:** `kernel.bin` 1,577,354 B on `cc99745` (local build, 0 warnings); gate 1,703,936 B. NSI: `SYS_FUTEX` 117, `SYS_SCHED_CPU` 118. DDR next free: 1195.
-- **C1.4 futex ticked** with `cc99745`: arms FA–FJ green, F2-1 to F2-8 red on `547e1c5`. The merged head `5997083` passed on run 41299374169 attempt 2; attempt 1 failed `smoke-part` on a console line split by another CPU. QEMU only.
-- **This PR (DDR-1194):** prints each `[part]` line as one `kline`, which removes the splice race behind that failure. Mechanism fixed, not proven by a gate. It also carries this bookkeeping and the DDR-1181 A1.3 SIGTERM/SIGPIPE limit.
-- **Then:** P3a (DDR-1193 §5: `psync.h`, six `smoke-thread` arms, mutants Y1–Y6; report early whether QEMU runs the vCPUs in parallel). Then #78 → #80 (C1.3 P2/P3, security boundary). Also open: #88, #72, #85, #90.
-- **Follow-ups owed from #81:** the stale lock comment at `sched.c:880-883`; FF/FG need a blocked-waiter witness (CodeRabbit thread 4435326775); futex timeout +1 tick when `ticks > 0`, with FC at 51 ms and a new mutant.
-- `dev/phase1` `2a49a73` `smoke-iso-userspace` surface-lifecycle failure is still unexplained; DDR-1192 keeps its evidence if it repeats.
+- **dev/phase1 tip:** `76bfbc6` (PR #100, DDR-1194: `smoke-part` lines in one `kline` write; mechanism fixed, not proven by a gate). Before it: #81 `cc99745` (C1.4 P2 futex), #99 `4909109` (DDR-1193 design; D1: priority inheritance moves to C1.5 P3), #98 `65357d3`. Branch protection is on; the operator merges.
+- **Kernel:** gate 1,703,936 B. NSI: `SYS_FUTEX` 117, `SYS_SCHED_CPU` 118. DDR next free: 1195.
+- **This PR (#101, C1.4 P3a):**
+  - `user/include/psync.h` and `smoke-thread` arms SA, SW, SB, SC, SH, SD (DDR-1193 Amendment 1).
+  - Green on `2bd99ca`, and Y1–Y6 each red on its own arm (Amendment 1 runs).
+  - SA catches Y1 only probabilistically (a margin of one update). MTTCG is not verified.
+  - When it merges, tick the C1.4 "mutex, semaphore, condition variable, barrier" row with the merge SHA.
+- **Then:** #78 → #80 (C1.3 P2/P3, security boundary). Also open: #88, #72, #85, #90.
+- **Follow-ups owed from #81:**
+  - the stale lock comment at `sched.c:880-883`;
+  - FF/FG need a blocked-waiter witness (CodeRabbit thread 4435326775);
+  - the futex timeout gets +1 tick when `ticks > 0`, with FC at 51 ms and a new mutant.
+- **Unexplained, not fixed:**
+  - `SURFDESTROY FAIL: reuse slot not reused` (run 41367275758, shard 7, `smoke-numa-steal`); queued as a separate task.
+  - `dev/phase1` `2a49a73` `smoke-iso-userspace` surface lifecycle; DDR-1192 keeps its evidence.
 
 ## Next
 

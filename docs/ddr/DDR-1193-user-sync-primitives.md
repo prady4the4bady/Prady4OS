@@ -253,3 +253,26 @@ Written before the code, on `dev/phase1` = `cc99745` (#81 merged).
    `[sync] start_ms=` and `[sync] end_ms=` (vDSO clock) around the six arms,
    and `[sync] <arm> ms=` for each, so the CI run shows whether the arms finish
    inside the window. `TIMEOUT_S` changes only if a run shows they do not.
+
+### Amendment 1 runs (smoke-thread, shard 2; QEMU TCG, 4 vCPUs, `ubuntu-24.04`)
+
+The correct tree and all six mutants were built on head `2bd99ca`. Each mutant changes only `user/include/psync.h`, builds with 0 warnings, and gives its own `threadtest.elf` hash.
+
+| Tree | Run | Verdict | Measured on the target arm | Other arms |
+|---|---|---|---|---|
+| correct `2bd99ca` | [41364910443](https://github.com/prady4the4bady/Prady4OS/actions/runs/41364910443) | green | all six as specified; `[sync] start_ms=10800 end_ms=11880` | — |
+| Y1 non-atomic fast-path acquire | [41367275758](https://github.com/prady4the4bady/Prady4OS/actions/runs/41367275758) | **red on SA** | `total=79999` (want 80000), `contended_ok=1` | all green |
+| Y2 unlock never wakes | [41371310617](https://github.com/prady4the4bady/Prady4OS/actions/runs/41371310617) | **red on SW** | `asleep=1 woke=0 timeout=1` | SA, SC, SH also red (all use `pmutex`) |
+| Y3 wait without `val > 0` | [41371312750](https://github.com/prady4the4bady/Prady4OS/actions/runs/41371312750) | **red on SB** | `maxin=4 maxin_ok=0 asleep=0` | all green |
+| Y4 broadcast wakes 1 | [41374490031](https://github.com/prady4the4bady/Prady4OS/actions/runs/41374490031) | **red on SC** | `woke=1 timeout=1` | all green |
+| Y5 no `gen` bump | [41375830310](https://github.com/prady4the4bady/Prady4OS/actions/runs/41375830310) | **red on SD** | `phases=0 timeout=1` | all green |
+| Y6 relock writes 1 | [41380005173](https://github.com/prady4the4bady/Prady4OS/actions/runs/41380005173) | **red on SH** | `rounds=1 timeout=1`, `[sync] H contender=47867` | SC also red (`woke=1 timeout=1`): three woken waiters relocking with 1 strand each other, as item 5 predicts |
+
+**What the runs show, and what they do not:**
+- **SA catches Y1 only probabilistically.** The margin is one lost update in 80 000. A single red run does not show that every run catches it.
+  - It also does not show that the vCPUs run in parallel (MTTCG): a vCPU switch between the load and the store explains one lost update just as well.
+  - MTTCG stays **not verified**. `exp=80000` is unchanged.
+- **Y2 and Y6 each also turn other arms red.** Their target arms are red, so rule 3 is met.
+- **Y1's run also failed shard 7 on `SURFDESTROY FAIL: reuse slot not reused`.** That probe does not include `psync.h`, and shard 7 is green on `2bd99ca`, so it is not this change. It is **unexplained** and queued as a separate task.
+
+QEMU (TCG) only. **Not verified on real hardware.**
