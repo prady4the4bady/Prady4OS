@@ -505,7 +505,7 @@ int vmm_dirty_op(uint64_t cr3, uint64_t virt, int op) {
     if (op == VMM_DIRTY_CLEAR) {
         old = __atomic_fetch_and(pte, ~VMM_DIRTY, __ATOMIC_SEQ_CST);
         if ((old & VMM_DIRTY) && (read_cr3() & PTE_ADDR) == (cr3 & PTE_ADDR))
-            invlpg(virt);
+            (void)virt;   /* MUTANT S4-2: no invlpg */
     } else if (op == VMM_DIRTY_SET) {
         old = __atomic_fetch_or(pte, VMM_DIRTY, __ATOMIC_SEQ_CST);
     } else {
