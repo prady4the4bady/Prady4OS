@@ -61,9 +61,8 @@ static inline void pmutex_init(pmutex *m) {
 static inline void pmutex_init_shared(pmutex *m) { pmutex_init(m); m->priv = 0; }
 
 static inline void pmutex_lock(pmutex *m) {
-    uint32_t c = 0;
-    if (__atomic_compare_exchange_n(&m->st, &c, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
-        return;                                       /* uncontended: 0 -> 1 */
+    uint32_t c = m->st;                               /* MUTANT Y1: not atomic */
+    if (c == 0) { m->st = 1; return; }
     if (c != 2)
         c = __atomic_exchange_n(&m->st, 2, __ATOMIC_ACQUIRE);
     while (c != 0) {
