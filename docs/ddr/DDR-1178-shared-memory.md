@@ -309,6 +309,19 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **S3 mutant runs.** S3-1 [40322278330](https://github.com/prady4the4bady/prady4os/actions/runs/40322278330) red on N (`fdshared=0x00`); S3-2 [40322308133](https://github.com/prady4the4bady/prady4os/actions/runs/40322308133) red on O (`rejects=2`); S3-3 [40322337823](https://github.com/prady4the4bady/prady4os/actions/runs/40322337823) red on P (`rejects=4`); S3-4 [40322367227](https://github.com/prady4the4bady/prady4os/actions/runs/40322367227) red on Q (`opened=30`); S3-6 [40322426930](https://github.com/prady4the4bady/prady4os/actions/runs/40322426930) red on S (`dup_hold=0x00`). **S3-5 survived** ([40322396520](https://github.com/prady4the4bady/prady4os/actions/runs/40322396520), green). The cause was the P2 defect recorded in A2.4, not arm R: the probe's three removed SysV shmids held the P3 object through `cap_fork`, so the child's fd was not the only hold. With A2.4 those shmids pin their own dead slots. **S3-5 re-run** on the merged head `c5a26b8` (mutant `759dc46`, run [40545214807](https://github.com/prady4the4bady/prady4os/actions/runs/40545214807)): red on R only, `PRADYOS_SHM_R child_hold=0x00` (want `0x77`), every other arm on the sentinel. S3-1 to S3-6 are now all red on their designed arms.
 
+**S3 re-run on the merged head `093bbe4`** (P3 plus #78 `551b562`, which carries `dev/phase1` through `9306963`; fixed tree green on [41434076815](https://github.com/prady4the4bady/Prady4OS/actions/runs/41434076815)). Each mutant was re-applied on `093bbe4`, builds with 0 warnings, and gives its own `kernel.bin`. Only `smoke-shm` (shard 0) failed in each run:
+
+| Mutant | Run on `093bbe4` | Red on |
+|---|---|---|
+| S3-1 | [41434433917](https://github.com/prady4the4bady/Prady4OS/actions/runs/41434433917) | **N** `fdshared=0x00`. P is red too (`rejects=5`, want `6`). The mutated line sets `first = 0`, and `shm_fd_map` uses `first` in its size bound, so the `off + len` past-the-size `mmap` in P is accepted. That is the same defect, seen by a second arm. |
+| S3-2 | [41434436902](https://github.com/prady4the4bady/Prady4OS/actions/runs/41434436902) | **O** only, `rejects=2` |
+| S3-3 | [41441841656](https://github.com/prady4the4bady/Prady4OS/actions/runs/41441841656) | **P** only, `rejects=4` |
+| S3-4 | [41443116765](https://github.com/prady4the4bady/Prady4OS/actions/runs/41443116765) | **Q** `opened=25` (want `64`). The probe then stops at `PRADYOS_SHM FAIL r_open=-28` (`-ENOSPC`): the leaked objects fill the table, so R cannot open one |
+| S3-5 | [41445828110](https://github.com/prady4the4bady/Prady4OS/actions/runs/41445828110) | **R** only, `child_hold=0x00` |
+| S3-6 | [41447493592](https://github.com/prady4the4bady/Prady4OS/actions/runs/41447493592) | **S** only, `dup_hold=0x00` |
+
+Every arm N–S is shown red on this head, each by the mutant designed for it. QEMU TCG only; **not verified on real hardware**.
+
 **NSI:** 116 `SYS_SHM_OPEN`.
 
 ## 7. Honesty labels
