@@ -53,6 +53,22 @@
 #define O_RDWR        2
 #define O_CREAT    0x40
 #define Q_CYCLES     64          /* twice SHM_MAX: a slot leak fails at 33 */
+#define SYS_READ       5         /* DDR-1178 Amendment 4 (P4) */
+#define SYS_OPEN       7
+#define SYS_LSEEK     10
+#define SYS_UNLINK    68
+#define SYS_RENAME    95
+#define SYS_MSYNC    119
+#define O_TRUNC    0x200
+#define MS_ASYNC       1
+#define MS_INVALIDATE  2
+#define MS_SYNC        4
+#define ENOMEM        12
+#define EBUSY         16
+#define FG_CYCLES     40         /* past SHM_MAX: a file object that outlives
+                                  * its last detach fails before cycle 33 */
+#define F_PATH  "/SHMFILE.BIN"
+#define FG_PATH "/SHMFG.BIN"
 #define SEG_PAGES   16
 #define RECLAIM_MIN (SEG_PAGES - 4)
 
@@ -128,6 +144,132 @@ static int reap(long kid) {
     long r = nsi(SYS_WAIT4, kid, (long)&st, 0);
     if (r != kid) fail("wait4", r);
     return st;
+}
+
+/* ---- DDR-1178 Amendment 4 (P4): shared file mappings, arms FA-FG ---------
+ * The probe is FAT-rooted (main.c). Every arm reads the FILE through a fresh
+ * fd, or after the writer is reaped, never through the mapping that wrote it,
+ * so a pass needs the bytes on disk, not only in the shared frame. */
+static void hexline(const char *a, unsigned v) {
+    char b[96], *p = str(b, a); p = hex2(p, v); *p++ = '\n'; *p = 0; wr(b);
+}
+
+/* One byte of `path` at `off`, through a new fd. */
+static unsigned pread1(const char *path, long off) {
+    long fd = nsi(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (fd < 0) fail("f_reopen", fd);
+    if (nsi(SYS_LSEEK, fd, off, 0) != off) fail("f_lseek", off);
+    unsigned char c = 0;
+    long n = nsi(SYS_READ, fd, (long)&c, 1);
+    nsi(SYS_CLOSE, fd, 0, 0);
+    if (n != 1) fail("f_read", n);
+    return c;
+}
+
+/* Create `path` with `n` zero bytes; returns the open O_RDWR fd. */
+static long make_file(const char *path, long n) {
+    long fd = nsi(SYS_OPEN, (long)path, O_RDWR | O_CREAT, 0);
+    if (fd < 0) fail("f_create", fd);
+    unsigned char z[512];
+    for (int i = 0; i < 512; i++) z[i] = 0;
+    for (long done = 0; done < n; done += 512)
+        if (nsi(SYS_WRITE, fd, (long)z, 512) != 512) fail("f_fill", done);
+    return fd;
+}
+
+static void file_arms(void) {
+    /* FA: msync writes a dirty page to the file. */
+    long ffd = make_file(F_PATH, 8192);
+    volatile unsigned char *fp = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 8192, PROT_RW, MAP_SHARED, ffd, 0);
+    if ((long)fp < 0) fail("fa_mmap", (long)fp);
+    fp[4096] = 0xa1;
+    long r = nsi(SYS_MSYNC, (long)fp, 8192, MS_SYNC);
+    if (r != 0) fail("fa_msync", r);
+    hexline("PRADYOS_SHM_FA msync=", pread1(F_PATH, 4096));
+
+    /* FB: the same page, dirtied again after that write-back. Passes only if
+     * write-back cleared D and dropped the TLB entry (A4.4 step 2). */
+    fp[4096] = 0xb2;
+    r = nsi(SYS_MSYNC, (long)fp, 8192, MS_ASYNC);
+    if (r != 0) fail("fb_msync", r);
+    hexline("PRADYOS_SHM_FB redirty=", pread1(F_PATH, 4096));
+
+    /* FC: a second, independent mmap of the file sees the first one's store
+     * with no write-back: one object per file. */
+    long f2 = nsi(SYS_OPEN, (long)F_PATH, O_RDWR, 0);
+    if (f2 < 0) fail("fc_open", f2);
+    volatile unsigned char *fq = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 8192, PROT_RW, MAP_SHARED, f2, 0);
+    if ((long)fq < 0) fail("fc_mmap", (long)fq);
+    fp[0] = 0xc3;
+    hexline("PRADYOS_SHM_FC shared=", fq[0]);
+    nsi(SYS_MUNMAP, (long)fq, 0, 0);
+    nsi(SYS_CLOSE, f2, 0, 0);
+
+    /* FD: munmap writes back, with no msync. */
+    fp[4097] = 0xd4;
+    nsi(SYS_MUNMAP, (long)fp, 0, 0);
+    hexline("PRADYOS_SHM_FD munmap=", pread1(F_PATH, 4097));
+    nsi(SYS_CLOSE, ffd, 0, 0);
+
+    /* FE: a child maps the file, stores and exits with neither msync nor
+     * munmap; its address space is released when it is reaped. */
+    long ek = nsi(SYS_FORK, 0, 0, 0);
+    if (ek < 0) fail("fe_fork", ek);
+    if (ek == 0) {
+        long cf = nsi(SYS_OPEN, (long)F_PATH, O_RDWR, 0);
+        if (cf < 0) nsi(SYS_EXIT, 2, 0, 0);
+        volatile unsigned char *cp = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 8192, PROT_RW, MAP_SHARED, cf, 0);
+        if ((long)cp < 0) nsi(SYS_EXIT, 3, 0, 0);
+        cp[4098] = 0xe5;
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    int est = reap(ek);
+    hexline("PRADYOS_SHM_FE exit=", est ? 0 : pread1(F_PATH, 4098));
+
+    /* FF: the refusals of A4.2. */
+    long frej = 0;
+    long ro = nsi(SYS_OPEN, (long)F_PATH, O_RDONLY, 0);
+    if (ro < 0) fail("ff_open", ro);
+    long rr = nsi6(SYS_MMAP, 0, 8192, PROT_RW, MAP_SHARED, ro, 0);
+    if (rr == -EACCES) frej++;
+    else if (rr >= 0) nsi(SYS_MUNMAP, rr, 0, 0);
+    nsi(SYS_CLOSE, ro, 0, 0);
+    long fw = nsi(SYS_OPEN, (long)F_PATH, O_RDWR, 0);
+    if (fw < 0) fail("ff_open2", fw);
+    if (nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, fw, 8192) == -EINVAL) frej++;
+    volatile unsigned char *fr = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 8192, PROT_RW, MAP_SHARED, fw, 0);
+    if ((long)fr < 0) fail("ff_mmap", (long)fr);
+    if (nsi(SYS_FTRUNCATE, fw, 4096, 0) == -EBUSY) frej++;
+    long tr = nsi(SYS_OPEN, (long)F_PATH, O_RDWR | O_TRUNC, 0);
+    if (tr == -EBUSY) frej++;
+    else if (tr >= 0) nsi(SYS_CLOSE, tr, 0, 0);
+    if (nsi(SYS_UNLINK, (long)F_PATH, 0, 0) == -EBUSY) frej++;
+    if (nsi(SYS_RENAME, (long)F_PATH, (long)"/SHMREN.BIN", 0) == -EBUSY) frej++;
+    if (nsi(SYS_MSYNC, (long)fr, 8192, MS_SYNC | MS_INVALIDATE) == -EINVAL) frej++;
+    if (nsi(SYS_MSYNC, 0x8E00F00000L, 4096, MS_SYNC) == -ENOMEM) frej++;
+    line2("PRADYOS_SHM_FF rejects=", frej);
+    nsi(SYS_MUNMAP, (long)fr, 0, 0);
+    nsi(SYS_CLOSE, fw, 0, 0);
+
+    /* FG: every cycle's object goes at its last detach. */
+    long gfd = make_file(FG_PATH, 4096);
+    nsi(SYS_CLOSE, gfd, 0, 0);
+    long opened = 0;
+    for (int c = 0; c < FG_CYCLES; c++) {
+        long g = nsi(SYS_OPEN, (long)FG_PATH, O_RDWR, 0);
+        if (g < 0) break;
+        volatile unsigned char *gp = (volatile unsigned char *)nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, g, 0);
+        if ((long)gp < 0) { nsi(SYS_CLOSE, g, 0, 0); break; }
+        opened++;
+        gp[0] = (unsigned char)c;
+        nsi(SYS_MUNMAP, (long)gp, 0, 0);
+        nsi(SYS_CLOSE, g, 0, 0);
+    }
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_FG cycles="); p = dec(p, FG_CYCLES);
+        p = str(p, " opened="); p = dec(p, opened); *p++ = '\n'; *p = 0; wr(b);
+    }
 }
 
 /* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The
@@ -516,6 +658,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     }
     if ((long)sq >= 0) nsi(SYS_MUNMAP, (long)sq, 0, 0);
     nsi(SYS_CLOSE, 20, 0, 0);
+
+    file_arms();
     wr("PRADYOS_SHM_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }

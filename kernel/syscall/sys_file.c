@@ -24,6 +24,27 @@
 
 #define PATH_MAX 256
 
+/* DDR-1178 A4.2: a file with a live shared mapping (a FILE object) is busy.
+ * Shrinking, removing or renaming it would leave its write-back aimed at freed
+ * clusters or a freed directory entry (fat32_write rewrites the entry, A4.1).
+ * Not atomic against an mmap racing this check; a single CPU cannot reach that
+ * window from one thread (recorded in A4.6). */
+static int file_busy(const struct vfs_file *f) {
+    uint64_t id;
+    if (!shm_file_any(f->mnt) || vfs_ident(f, &id) != 0)
+        return 0;
+    return shm_file_busy(f->mnt, id);
+}
+
+static int path_busy(struct tcb *t, const char *path) {
+    if (!shm_file_any(t->root_mnt))
+        return 0;
+    struct vfs_file tmp;
+    if (vfs_open(t->fs_cap, t->root_mnt, path, &tmp) != 0)
+        return 0;                              /* absent: nothing maps it */
+    return file_busy(&tmp);
+}
+
 static long sys_open(long upath, long flags, long mode, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)mode; (void)a4;
@@ -76,6 +97,10 @@ static long sys_open(long upath, long flags, long mode, long a4, long a5, long a
      * empty, so only an existing one is re-created. CAP_FS_WRITE is enforced by
      * vfs_unlink/vfs_create, so a read-only opener cannot truncate. */
     if (existed && (flags & O_TRUNC)) {
+        if (file_busy(f)) {                    /* DDR-1178 A4.2 */
+            kfree(f);
+            return -EBUSY;
+        }
         if (vfs_unlink(t->fs_cap, t->root_mnt, path) != 0 ||
             vfs_create(t->fs_cap, t->root_mnt, path, f) != 0) {
             kfree(f);
@@ -168,6 +193,8 @@ static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6)
     }
     if (e->kind != FD_VFS || !e->file)
         return -EINVAL;            /* console/pipe: no length to set */
+    if (file_busy(e->file))
+        return -EBUSY;             /* DDR-1178 A4.2: a mapped file keeps its size */
 
     /* e->cap, not the thread's caps: the capability is the one captured when
      * this fd was OPENED, so a descriptor opened read-only cannot be
@@ -219,6 +246,8 @@ static long sys_unlink(long upath, long a2, long a3, long a4, long a5, long a6) 
     char path[PATH_MAX];
     if (copyinstr(path, (const void __user *)(uintptr_t)upath, sizeof path, 0) < 0)
         return -EFAULT;
+    if (path_busy(t, path))
+        return -EBUSY;                        /* DDR-1178 A4.2 */
     int r = vfs_unlink(t->fs_cap, t->root_mnt, path);
     return (r == 0) ? 0 : -ENOENT;            /* backend rc collapses to -ENOENT */
 }
@@ -246,6 +275,8 @@ static long sys_rename(long uold, long unew, long a3, long a4, long a5, long a6)
         return -EFAULT;
     if (copyinstr(newp, (const void __user *)(uintptr_t)unew, sizeof newp, 0) < 0)
         return -EFAULT;
+    if (path_busy(t, oldp) || path_busy(t, newp))
+        return -EBUSY;             /* DDR-1178 A4.2: either end may be mapped */
     int r = vfs_rename(t->fs_cap, t->root_mnt, oldp, newp);
     if (r == 0)
         return 0;

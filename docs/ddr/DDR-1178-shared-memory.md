@@ -385,7 +385,7 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 - **New `SYS_MSYNC` = NSI 119**, `(addr, len, flags)`.
   - **Arguments.**
     - `addr` must be page-aligned (`-EINVAL`).
-    - `[addr, addr + len)` must lie inside one mapping (`-ENOMEM`, as POSIX).
+    - `[addr, addr + len)` must lie inside one mapping (`-ENOMEM`, as POSIX). `len` 0 checks the page at `addr`.
   - **Flags.**
     - Exactly one of `MS_ASYNC` (1) or `MS_SYNC` (4) must be set. Both write back synchronously before returning.
     - `MS_INVALIDATE` (2) is `-EINVAL`: not supported (§A4.6).
@@ -432,7 +432,9 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 - **Write-back runs at:**
   - `msync`;
   - `munmap`, before the unmap;
-  - `exec` and the last `mm_put`, from `shm_release_vmas`, before each detach.
+  - **`exec`**, from `shm_writeback_vmas` before the point of no return. After that point `mm->cr3` is already the new image's.
+  - **The last `mm_put`**, from `shm_writeback_vmas` just before `shm_release_vmas` detaches.
+  - At `munmap` and release only the D bit is tested: the mapping goes away right after, so nothing needs clearing.
   - It runs under `mm_lock` (sleeping), never under `g_shm_lock`. The lock order is `mm_lock` → `mnt_lock`.
 - **Errors.**
   - `msync` returns `-EIO`.
@@ -468,9 +470,9 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 | S4-2 | write-back clears D with no TLB invalidation | FB |
 | S4-3 | `mmap` skips the key lookup (a new object every time) | FC |
 | S4-4 | `munmap` skips write-back | FD |
-| S4-5 | `shm_release_vmas` skips write-back | FE |
+| S4-5 | the last `mm_put` skips `shm_writeback_vmas` | FE |
 | S4-6 | `PROT_WRITE` allowed on an `O_RDONLY` fd | FF |
-| S4-7 | the last detach of a file object keeps its slot | FG |
+| S4-7 | the last detach of a file object leaves its slot dead (`used = 3`) instead of free. A slot that stays live would be found again by its key and reused, so it would not leak. | FG |
 
 ### A4.6 Not in P4, recorded here
 

@@ -14,12 +14,22 @@
  * P3 (Amendment 3) reuses the table for shm_open(SHM_ANON): an FD_SHM fd entry
  * is a holder, the object starts EMPTY (npages 0) and ftruncate sizes it once.
  * A POSIX object is never marked; it goes at nattch == 0 && holders == 0.
+ *
+ * P4 (Amendment 4) adds FILE objects: the frames of one mapped file, keyed by
+ * (mount, vfs ident), so every MAP_SHARED mapping of the file shares them. A
+ * FILE object has no holders and is never marked, so it lives exactly while
+ * something maps it. Write-back (A4.4) copies PTE-dirty pages to the file with
+ * the capability each area captured at mmap (D4).
  */
 #include "shm.h"
 #include "mm.h"
 #include "kheap.h"
 #include "spinlock.h"
 #include "errno.h"
+#include "vfs.h"
+#include "vmm.h"
+#include "tlb.h"
+#include "console.h"      /* kline: one write per line (DDR-1055) */
 
 struct shm_obj {
     uint32_t used;                     /* 0 free, 1 live, 2 reclaiming, 3 dead (A2.4) */
@@ -28,8 +38,15 @@ struct shm_obj {
     uint32_t holders;
     uint32_t marked;
     uint32_t filling;                  /* P3: frames being allocated, lock dropped */
+    uint32_t kind;                     /* SHM_KIND_ANON (SysV, P3) or SHM_KIND_FILE */
+    uint64_t fident;                   /* A4.3: FILE key, with file.mnt */
+    uint64_t fsize;                    /* A4.3: file size in bytes at first mmap */
+    struct vfs_file file;              /* A4.3: copy taken at first mmap */
     uint64_t frames[SHM_MAX_PAGES];
 };
+
+#define SHM_KIND_ANON 0
+#define SHM_KIND_FILE 1
 
 static struct shm_obj g_shm[SHM_MAX];
 static spinlock_t g_shm_lock = SPINLOCK_INIT;
@@ -54,6 +71,7 @@ int shm_obj_reserve(void) {
         o->holders = 1;                /* the caller's fd or capability */
         o->marked = 0;
         o->filling = 0;
+        o->kind = SHM_KIND_ANON;
     }
     spin_unlock_irqrestore(&g_shm_lock, fl);
     return idx < 0 ? -ENOSPC : idx;
@@ -214,5 +232,210 @@ void shm_release_vmas(struct mm *mm) {
             shm_detach(v->shm - 1);
         v->shm = 0;
         v->shm_ro = 0;
+        v->pgoff = 0;
+        v->wcap = 0;
+    }
+}
+
+/* ---- DDR-1178 Amendment 4 (P4): FILE objects ---------------------------- */
+
+static int file_match(const struct shm_obj *o, int mnt, uint64_t ident) {
+    return o->used == 1 && o->kind == SHM_KIND_FILE &&
+           o->file.mnt == mnt && o->fident == ident;
+}
+
+int shm_file_attach(const struct vfs_file *f, uint64_t ident, cap_t rcap) {
+    uint64_t size = f->size;
+    if (size == 0)
+        return -EINVAL;
+    uint64_t np = (size + 4095) / 4096;
+    if (np > SHM_MAX_PAGES)
+        return -EFBIG;
+
+    /* A live, filled object for this file: attach it (A4.3 lookup). */
+    uint64_t fl = spin_lock_irqsave(&g_shm_lock);
+    for (int i = 0; i < SHM_MAX; i++) {
+        struct shm_obj *o = &g_shm[i];
+        if (file_match(o, f->mnt, ident) && !o->filling && o->npages) {
+            o->nattch++;
+            spin_unlock_irqrestore(&g_shm_lock, fl);
+            return i;
+        }
+    }
+    /* None: reserve a slot. `filling` hides it from lookups and from
+     * put_and_reclaim until its frames are read. */
+    int idx = -1;
+    for (int i = 0; i < SHM_MAX; i++)
+        if (!g_shm[i].used) { idx = i; break; }
+    if (idx >= 0) {
+        struct shm_obj *o = &g_shm[idx];
+        o->used = 1;
+        o->kind = SHM_KIND_FILE;
+        o->npages = 0;
+        o->nattch = 0;
+        o->holders = 0;
+        o->marked = 0;
+        o->filling = 1;
+        o->fident = ident;
+        o->fsize = size;
+        o->file = *f;
+    }
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    if (idx < 0)
+        return -ENOSPC;
+
+    /* Read the file eagerly, outside the lock (the read blocks). The tail past
+     * `size` stays zero: ptnode_alloc zeroes, as DDR-1112's private path. */
+    struct shm_obj *o = &g_shm[idx];
+    int rc = 0;
+    uint32_t got = 0;
+    for (; got < (uint32_t)np; got++) {
+        void *frame = ptnode_alloc();
+        if (!frame) { rc = -ENOMEM; break; }
+        o->frames[got] = (uint64_t)(uintptr_t)frame;
+        if (vfs_read(rcap, &o->file, (uint64_t)got * 4096, frame, 4096) < 0) {
+            got++;                     /* this frame is ours to free too */
+            rc = -EIO;
+            break;
+        }
+    }
+    if (rc < 0) {
+        free_frames(o->frames, got);
+        fl = spin_lock_irqsave(&g_shm_lock);
+        o->filling = 0;
+        o->used = 0;
+        spin_unlock_irqrestore(&g_shm_lock, fl);
+        return rc;
+    }
+
+    /* Publish, unless another first mapper published the same file meanwhile:
+     * then attach theirs and drop ours, so one file has one object. */
+    fl = spin_lock_irqsave(&g_shm_lock);
+    int other = -1;
+    for (int i = 0; i < SHM_MAX; i++)
+        if (i != idx && file_match(&g_shm[i], f->mnt, ident) &&
+            !g_shm[i].filling && g_shm[i].npages) { other = i; break; }
+    if (other >= 0) {
+        g_shm[other].nattch++;
+        o->filling = 0;
+        o->used = 2;                   /* reclaiming: no lookup sees it */
+    } else {
+        o->npages = (uint32_t)np;
+        o->nattch = 1;
+        o->filling = 0;
+    }
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    if (other >= 0) {
+        free_frames(o->frames, (uint32_t)np);
+        fl = spin_lock_irqsave(&g_shm_lock);
+        o->used = 0;
+        spin_unlock_irqrestore(&g_shm_lock, fl);
+        return other;
+    }
+    return idx;
+}
+
+int shm_file_busy(int mnt, uint64_t ident) {
+    int busy = 0;
+    uint64_t fl = spin_lock_irqsave(&g_shm_lock);
+    for (int i = 0; i < SHM_MAX && !busy; i++)
+        if (file_match(&g_shm[i], mnt, ident))
+            busy = 1;                  /* a filling object counts: it will map */
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    return busy;
+}
+
+int shm_file_any(int mnt) {
+    int any = 0;
+    uint64_t fl = spin_lock_irqsave(&g_shm_lock);
+    for (int i = 0; i < SHM_MAX && !any; i++)
+        if (g_shm[i].used == 1 && g_shm[i].kind == SHM_KIND_FILE && g_shm[i].file.mnt == mnt)
+            any = 1;
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    return any;
+}
+
+int shm_obj_is_file(int obj) {
+    return obj >= 0 && obj < SHM_MAX && g_shm[obj].kind == SHM_KIND_FILE;
+}
+
+/* A4.4. The area holds an attach, so the object, its frames and its file copy
+ * stay put while this runs; nothing here takes g_shm_lock, and the writes
+ * block on the filesystem (mm_lock -> mnt_lock order, A4.1). */
+int shm_vma_writeback(uint64_t cr3, const struct vm_area *v, uint64_t from,
+                      uint64_t to, int mode) {
+    if (!v->npages || !v->shm || !v->wcap || !cr3)
+        return 0;
+    int obj = v->shm - 1;
+    if (!shm_obj_is_file(obj))
+        return 0;
+    struct shm_obj *o = &g_shm[obj];
+    uint64_t vend = v->base + v->npages * 4096;
+    if (from < v->base) from = v->base;
+    if (to > vend)      to = vend;
+    if (from >= to)
+        return 0;
+    uint64_t npages = (to - from) / 4096;
+
+    /* Which pages this area dirtied. A page bitmap: an area is at most
+     * SHM_MAX_PAGES (256) pages. */
+    uint64_t dirty[SHM_MAX_PAGES / 64] = {0};
+    uint64_t ndirty = 0;
+    for (uint64_t i = 0; i < npages; i++)
+        if (vmm_dirty_op(cr3, from + i * 4096, VMM_DIRTY_TEST) == 1) {
+            dirty[i / 64] |= 1ull << (i % 64);
+            ndirty++;
+        }
+    if (!ndirty)
+        return 0;
+
+    if (mode == SHM_WB_MSYNC) {
+        /* msync pays as it goes (A4.2), before anything is cleared, so a
+         * refusal loses nothing. Then clear D and drop the TLB entries, so a
+         * store after this write-back dirties the page again (A4.4 step 2). */
+        if (vfs_write_prepay(ndirty * 4096) < 0)
+            return -EAGAIN;
+        for (uint64_t i = 0; i < npages; i++)
+            if (dirty[i / 64] & (1ull << (i % 64)))
+                vmm_dirty_op(cr3, from + i * 4096, VMM_DIRTY_CLEAR);
+        tlb_shoot(cr3, from, npages);
+    }
+
+    int err = 0;
+    for (uint64_t i = 0; i < npages; i++) {
+        if (!(dirty[i / 64] & (1ull << (i % 64))))
+            continue;
+        uint64_t va = from + i * 4096;
+        uint64_t pg = v->pgoff + (va - v->base) / 4096;
+        uint64_t off = pg * 4096;
+        if (off >= o->fsize || pg >= o->npages)
+            continue;                  /* the zero tail past EOF is never written */
+        uint32_t n = (o->fsize - off < 4096) ? (uint32_t)(o->fsize - off) : 4096u;
+        struct vfs_file fc = o->file;  /* the driver updates its copy's fields */
+        int r = vfs_write_prepaid((cap_t)v->wcap, &fc, off,
+                                  (const void *)(uintptr_t)o->frames[pg], n);
+        if (r != (int)n) {
+            err = -EIO;
+            if (mode == SHM_WB_MSYNC)
+                vmm_dirty_op(cr3, va, VMM_DIRTY_SET);   /* still to be written */
+            else {
+                kline k; kline_init(&k);
+                kline_s(&k, "[shm] writeback failed rc=");
+                kline_s(&k, r < 0 ? "-" : "");
+                kline_d(&k, (uint64_t)(r < 0 ? -(long)r : (long)r));
+                kline_s(&k, "\r\n");
+                kline_emit(&k);
+            }
+        }
+    }
+    return err;
+}
+
+void shm_writeback_vmas(struct mm *mm) {
+    for (int i = 0; i < VM_AREA_MAX; i++) {
+        struct vm_area *v = &mm->vma[i];
+        if (v->npages && v->shm && v->wcap)
+            shm_vma_writeback(mm->cr3, v, v->base, v->base + v->npages * 4096,
+                              SHM_WB_RELEASE);
     }
 }

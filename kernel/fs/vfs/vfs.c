@@ -247,15 +247,11 @@ int vfs_truncate(cap_t cap, struct vfs_file *f, uint64_t len) {
     return r;
 }
 
-int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
-    struct vfs_mount *m = mnt_get(f->mnt);
-    if (!m || !m->fs->write || !cap_ok(cap, CAP_FS_WRITE))
-        return -1;
-    /* ADR-032: token-bucket write rate limit. Lazily refill the thread's bucket
-     * from elapsed ticks (capped at the burst max), then require enough tokens.
-     * Refill only tops up a below-cap balance and never reduces a higher one, so
-     * a kernel self-test's `fs_write_budget = ~0ull` bypass is preserved. This
-     * bounds the write RATE (anti-flood) without a lifetime cap. */
+/* ADR-032: lazily refill the calling thread's write bucket from elapsed ticks,
+ * capped at the burst max. Refill only tops up a below-cap balance and never
+ * reduces a higher one, so a kernel self-test's `fs_write_budget = ~0ull`
+ * bypass is preserved. Shared by vfs_write and vfs_write_prepay (DDR-1178 A4). */
+static void budget_refill(void) {
     uint64_t now = g_ticks;
     if (current_thread->fs_write_budget < FS_WRITE_BURST_MAX &&
         now > current_thread->fs_budget_tick) {
@@ -265,6 +261,18 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
             (bal > FS_WRITE_BURST_MAX) ? FS_WRITE_BURST_MAX : bal;
     }
     current_thread->fs_budget_tick = now;
+}
+
+int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
+    struct vfs_mount *m = mnt_get(f->mnt);
+    if (!m || !m->fs->write || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    /* ADR-032: token-bucket write rate limit. Lazily refill the thread's bucket
+     * from elapsed ticks (capped at the burst max), then require enough tokens.
+     * Refill only tops up a below-cap balance and never reduces a higher one, so
+     * a kernel self-test's `fs_write_budget = ~0ull` bypass is preserved. This
+     * bounds the write RATE (anti-flood) without a lifetime cap. */
+    budget_refill();
     if (current_thread->fs_write_budget < len)
         /* DDR-1089: -EAGAIN, not a bare -1. This is a token-bucket RATE LIMIT
          * (ADR-032 / sec.INV.19) that refills from elapsed ticks, so "try again"
@@ -278,6 +286,42 @@ int vfs_write(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint
     mnt_unlock(m);
     if (r > 0)
         current_thread->fs_write_budget -= (uint64_t)r;
+    return r;
+}
+
+/* DDR-1178 A4.2: see vfs.h. ident is a pure function of the open-file
+ * fields, so it needs no mount lock. */
+int vfs_ident(const struct vfs_file *f, uint64_t *out) {
+    struct vfs_mount *m = mnt_get(f->mnt);
+    if (!m || !m->fs->ident)
+        return -ENODEV;
+    *out = m->fs->ident(m->ctx, f);
+    return 0;
+}
+
+int vfs_shared_write(int mnt) {
+    struct vfs_mount *m = mnt_get(mnt);
+    return m && m->fs->shared_write && m->fs->write;
+}
+
+int vfs_write_prepay(uint64_t len) {
+    budget_refill();
+    if (current_thread->fs_write_budget < len)
+        return -EAGAIN;              /* DDR-1089: the bucket's own answer */
+    current_thread->fs_write_budget -= len;
+    return 0;
+}
+
+/* The same write as vfs_write, minus the bucket: the bytes were prepaid
+ * (DDR-1178 A4.2), and this may run as wait4's caller or the reaper, whose
+ * buckets the mapper's write-back must not drain. */
+int vfs_write_prepaid(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
+    struct vfs_mount *m = mnt_get(f->mnt);
+    if (!m || !m->fs->write || !cap_ok(cap, CAP_FS_WRITE))
+        return -1;
+    if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
+    int r = m->fs->write(m->ctx, f, off, buf, len);
+    mnt_unlock(m);
     return r;
 }
 
