@@ -167,7 +167,7 @@ static inline int pbarrier_wait(pbarrier *b) {
     uint32_t g = __atomic_load_n(&b->gen, __ATOMIC_ACQUIRE);
     if (__atomic_add_fetch(&b->count, 1, __ATOMIC_ACQ_REL) == b->n) {
         __atomic_store_n(&b->count, 0, __ATOMIC_RELAXED);
-        __atomic_add_fetch(&b->gen, 1, __ATOMIC_RELEASE);
+        /* MUTANT Y5: gen is not bumped */
         ps_futex(&b->gen, PS_FUTEX_WAKE | b->priv, PS_WAKE_ALL);
         return 1;
     }
