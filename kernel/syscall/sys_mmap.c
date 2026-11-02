@@ -655,7 +655,7 @@ static long sys_msync_locked(long a_addr, long a_len, long a_flags, long a4, lon
             continue;
         uint64_t end = v->base + v->npages * PAGE_SIZE;
         if (addr >= v->base && addr + len <= end)
-            return shm_vma_writeback(t->cr3, v, addr, addr + len, SHM_WB_MSYNC);
+            return 0;   /* MUTANT S4-1: msync writes nothing */
     }
     return -ENOMEM;                              /* POSIX: not one mapping */
 }
