@@ -148,7 +148,7 @@ static long shm_fd_map(struct tcb *t, int obj, uint64_t addr, uint64_t len, int 
     if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
         return -EINVAL;
     uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint64_t first = (uint64_t)a_off / PAGE_SIZE;
+    uint64_t first = 0; (void)a_off;
     uint64_t base;
     int rc = mmap_pick_base(t, addr, npages, &base);
     if (rc < 0)
