@@ -205,7 +205,7 @@ static long file_shared_map(struct tcb *t, struct fd_entry *fe, uint64_t addr,
     /* Write-capable: an O_RDWR fd on a filesystem that overwrites in place
      * (D5). The check reads the stored open mode; DDR-1182 enforces it for
      * write(2) as well. */
-    int wok = acc == OF_RDWR && vfs_shared_write(fe->file->mnt);
+    int wok = vfs_shared_write(fe->file->mnt);   /* MUTANT S4-6: O_RDONLY may write */
     if ((prot & PROT_WRITE) && !wok)
         return -EACCES;
     if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
