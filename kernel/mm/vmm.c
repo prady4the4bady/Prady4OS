@@ -419,8 +419,18 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
      * range. Shared kernel entries (np[i] == kp[i]) are left intact. */
     for (unsigned i = 0; i < 512; i++) {
         uint64_t e = np[i];
-        if ((e & PTE_PRESENT) && e != kp[i])
+        if ((e & PTE_PRESENT) && e != kp[i]) {
+            if (i != 1 && i != 255) {          /* DIAG W1: a kernel slot differs */
+                kline k; kline_init(&k);
+                kline_s(&k, "[w1diag] destroy frees kernel slot=");
+                kline_d(&k, i);
+                kline_s(&k, " e="); kline_x(&k, e);
+                kline_s(&k, " master="); kline_x(&k, kp[i]);
+                kline_s(&k, "\r\n");
+                kline_emit(&k);
+            }
             free_subtree(e & PTE_ADDR, 3);
+        }
     }
     ptnode_free((void *)(uintptr_t)pml4_phys);
 }

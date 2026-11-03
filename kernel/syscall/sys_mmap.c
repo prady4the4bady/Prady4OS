@@ -119,8 +119,7 @@ static int mmap_pick_base(struct tcb *t, uint64_t addr, uint64_t npages, uint64_
     /* DDR-1196: bound base first, then the pages against the room left, so
      * no sum can wrap. `base + npages * PAGE_SIZE` wrapped for a hint near
      * 2^64 and passed, mapping a user page in the shared kernel half. */
-    if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
-        npages > (VMM_MMAP_TOP - base) / PAGE_SIZE)
+    if (base < VMM_MMAP_BASE || base + npages * PAGE_SIZE > VMM_MMAP_TOP)   /* DIAG W1: pre-DDR-1196 wrapping sum */
         return -EINVAL;                          /* outside the mmap arena */
     if (vma_overlaps(t, base, npages))
         return -EINVAL;                          /* no silent replace (baseline) */
