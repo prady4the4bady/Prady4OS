@@ -56,6 +56,8 @@ int  shm_file_attach(const struct vfs_file *f, uint64_t ident, uint64_t rcap);
 int  shm_file_busy(int mnt, uint64_t ident);
 /* 1 while any FILE object exists on `mnt` (a cheap pre-check). */
 int  shm_file_any(int mnt);
+int  shm_file_grow_busy(int mnt, uint64_t ident, uint64_t end);   /* A4.8 */
+int  shm_vfs_grow_refused(const struct vfs_file *f, uint64_t off, uint64_t len);
 int  shm_obj_is_file(int obj);
 
 /* A4.4: write back the pages of area `v` (address space `cr3`) inside

@@ -579,7 +579,7 @@ On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O ma
 - **Arm FI** (`PRADYOS_SHM_FI orphan=0xf1`):
   - A forks C1, and C1 forks C2, then C1 exits at once. A reaps C1, so C2 is an orphan.
   - C2 opens `/SHMFI.BIN`, maps it `MAP_SHARED`, stores `0xf1` and exits, with neither `msync` nor `munmap`. The reaper then reaps it.
-  - A polls the file with `read(2)` for up to 400 polls, yielding between them, until the byte appears.
+  - A polls the file with `read(2)` for up to 1000 polls, 20 yields apart, until the byte appears.
 - **Vacuity, checked before writing FI.** On `35bf1f8` the reaper's empty table fails `cap_authorize`, the write never happens, and A reads `0x00`. FI is red on the tree before the fix.
 - **Mutant S4-8:** puts back the `cap_ok(current_thread)` check in `vfs_write_prepaid`. It must be red on FI only. FE (exit reaped by the parent's `wait4`) still passes under it, because the forked child's table is a copy of the parent's.
 

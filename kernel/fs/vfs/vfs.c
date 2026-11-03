@@ -312,12 +312,19 @@ int vfs_write_prepay(uint64_t len) {
     return 0;
 }
 
-/* The same write as vfs_write, minus the bucket: the bytes were prepaid
- * (DDR-1178 A4.2), and this may run as wait4's caller or the reaper, whose
- * buckets the mapper's write-back must not drain. */
-int vfs_write_prepaid(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
+int vfs_write_authorized(cap_t cap) {
+    return cap_ok(cap, CAP_FS_WRITE) ? 1 : 0;
+}
+
+/* The same write as vfs_write, minus the bucket and minus the capability
+ * check. The bytes were prepaid (DDR-1178 A4.2), and the write authority was
+ * checked once at mmap in the mapper's context (D4, A4.8). This may run as
+ * wait4's caller or the reaper: resolving the mapper's handle in THEIR table
+ * would authorise against the wrong process (the reaper's is empty), so it
+ * resolves nothing. */
+int vfs_write_prepaid(struct vfs_file *f, uint64_t off, const void *buf, uint32_t len) {
     struct vfs_mount *m = mnt_get(f->mnt);
-    if (!m || !m->fs->write || !cap_ok(cap, CAP_FS_WRITE))
+    if (!m || !m->fs->write)
         return -1;
     if (!mnt_lock_live(m)) return -EIO;   /* DDR-954 */
     int r = m->fs->write(m->ctx, f, off, buf, len);

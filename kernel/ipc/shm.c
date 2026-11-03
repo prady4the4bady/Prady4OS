@@ -345,6 +345,33 @@ int shm_file_busy(int mnt, uint64_t ident) {
     return busy;
 }
 
+/* DDR-1178 A4.8: 1 if a FILE object maps (mnt, ident) and `end` lies past
+ * its mapped size. Write-back writes through the object's attach-time copy of
+ * the vfs_file, so a file grown meanwhile would be cut back to that size. */
+int shm_file_grow_busy(int mnt, uint64_t ident, uint64_t end) {
+    int refuse = 0;
+    uint64_t fl = spin_lock_irqsave(&g_shm_lock);
+    for (int i = 0; i < SHM_MAX; i++)
+        if (file_match(&g_shm[i], mnt, ident)) {
+            refuse = end > g_shm[i].fsize;
+            break;
+        }
+    spin_unlock_irqrestore(&g_shm_lock, fl);
+    return refuse;
+}
+
+/* A4.8: the write(2)/io_uring check. Saturates off + len, so a huge offset
+ * cannot wrap past the test. */
+int shm_vfs_grow_refused(const struct vfs_file *f, uint64_t off, uint64_t len) {
+    uint64_t ident;
+    if (!shm_file_any(f->mnt) || vfs_ident(f, &ident) != 0)
+        return 0;
+    uint64_t end = off + len;
+    if (end < off)
+        end = ~0ull;
+    return shm_file_grow_busy(f->mnt, ident, end);
+}
+
 int shm_file_any(int mnt) {
     int any = 0;
     uint64_t fl = spin_lock_irqsave(&g_shm_lock);
@@ -412,7 +439,7 @@ int shm_vma_writeback(uint64_t cr3, const struct vm_area *v, uint64_t from,
             continue;                  /* the zero tail past EOF is never written */
         uint32_t n = (o->fsize - off < 4096) ? (uint32_t)(o->fsize - off) : 4096u;
         struct vfs_file fc = o->file;  /* the driver updates its copy's fields */
-        int r = vfs_write_prepaid((cap_t)v->wcap, &fc, off,
+        int r = vfs_write_prepaid(&fc, off,
                                   (const void *)(uintptr_t)o->frames[pg], n);
         if (r != (int)n) {
             err = -EIO;

@@ -70,6 +70,9 @@
 #define F_PATH  "/SHMFILE.BIN"
 #define FG_PATH "/SHMFG.BIN"
 #define FH_PATH "/SHMFH.BIN"     /* DDR-1178 A4.7 */
+#define FI_PATH "/SHMFI.BIN"     /* DDR-1178 A4.8 */
+#define FJ_PATH "/SHMFJ.BIN"
+#define FI_POLLS  1000
 #define FH_ROUNDS   16
 #define FH_CPU_A     1           /* the msync thread (main) */
 #define FH_CPU_B     2           /* the writer thread; never the BSP */
@@ -263,6 +266,58 @@ static void fh_arm(void) {
     nsi(SYS_SCHED_CPU, 2, 0, 0);                       /* unpin */
 }
 
+/* FI (DDR-1178 A4.8): an orphan's exit write-back. C2's parent C1 is gone
+ * before C2 exits, so the reaper kernel thread does the last mm_put; the
+ * write-back must not need the reaper's (empty) capability table. */
+static void fi_arm(void) {
+    long hfd = make_file(FI_PATH, 4096);
+    nsi(SYS_CLOSE, hfd, 0, 0);
+    long c1 = nsi(SYS_FORK, 0, 0, 0);
+    if (c1 < 0) fail("fi_fork1", c1);
+    if (c1 == 0) {
+        long c2 = nsi(SYS_FORK, 0, 0, 0);
+        if (c2 == 0) {
+            for (int i = 0; i < 50; i++) nsi(SYS_YIELD, 0, 0, 0);   /* let C1 go */
+            long cf = nsi(SYS_OPEN, (long)FI_PATH, O_RDWR, 0);
+            if (cf < 0) nsi(SYS_EXIT, 2, 0, 0);
+            volatile unsigned char *cp = (volatile unsigned char *)
+                nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, cf, 0);
+            if ((long)cp < 0) nsi(SYS_EXIT, 3, 0, 0);
+            cp[0] = 0xf1;
+            nsi(SYS_EXIT, 0, 0, 0);                 /* no msync, no munmap */
+            for (;;) { }
+        }
+        nsi(SYS_EXIT, c2 < 0 ? 4 : 0, 0, 0);       /* C1 leaves C2 orphaned */
+        for (;;) { }
+    }
+    if (reap(c1)) fail("fi_c1", 0);
+    unsigned v = 0;
+    for (int p = 0; p < FI_POLLS && v != 0xf1; p++) {
+        for (int i = 0; i < 20; i++) nsi(SYS_YIELD, 0, 0, 0);
+        v = pread1(FI_PATH, 0);
+    }
+    hexline("PRADYOS_SHM_FI orphan=", v);
+}
+
+/* FJ (DDR-1178 A4.8): a mapped file may not grow by write(2); a write inside
+ * its mapped size is still allowed. */
+static void fj_arm(void) {
+    long jfd = make_file(FJ_PATH, 4096);
+    long m = nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, jfd, 0);
+    if (m < 0) fail("fj_mmap", m);
+    unsigned char b = 0x5a;
+    if (nsi(SYS_LSEEK, jfd, 4096, 0) != 4096) fail("fj_lseek", 4096);
+    long grow = nsi(SYS_WRITE, jfd, (long)&b, 1);
+    if (nsi(SYS_LSEEK, jfd, 0, 0) != 0) fail("fj_lseek", 0);
+    long inplace = nsi(SYS_WRITE, jfd, (long)&b, 1);
+    {
+        char o[96], *p = str(o, "PRADYOS_SHM_FJ grow="); p = dec(p, grow);
+        p = str(p, " inplace="); p = dec(p, inplace); *p++ = '\n'; *p = 0; wr(o);
+    }
+    nsi(SYS_MUNMAP, m, 0, 0);
+    nsi(SYS_CLOSE, jfd, 0, 0);
+}
+
 static void file_arms(void) {
     /* FA: msync writes a dirty page to the file. */
     long ffd = make_file(F_PATH, 8192);
@@ -358,6 +413,8 @@ static void file_arms(void) {
     }
 
     fh_arm();                   /* DDR-1178 A4.7 */
+    fi_arm();                   /* DDR-1178 A4.8 */
+    fj_arm();
 }
 
 /* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The

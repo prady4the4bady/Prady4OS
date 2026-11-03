@@ -90,7 +90,10 @@ int  vfs_truncate(cap_t cap, struct vfs_file *f, uint64_t len);
 int  vfs_ident(const struct vfs_file *f, uint64_t *out);
 int  vfs_shared_write(int mnt);
 int  vfs_write_prepay(uint64_t len);
-int  vfs_write_prepaid(cap_t cap, struct vfs_file *f, uint64_t off, const void *buf, uint32_t len);
+int  vfs_write_prepaid(struct vfs_file *f, uint64_t off, const void *buf, uint32_t len);
+/* DDR-1178 A4.8: CAP_FS_WRITE on `cap` in the CALLER's table. Called at mmap,
+ * in the mapper's own context; write-back never re-resolves the handle. */
+int  vfs_write_authorized(cap_t cap);
 const char *vfs_fs_name(int mnt);      /* mounted FS name for a mount id, or NULL */
 
 /* Atomic transactions (capability-gated, CAP_FS_WRITE). FS drivers that do not
