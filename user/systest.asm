@@ -348,6 +348,25 @@ _start:
     syscall
 .s6_after_off:
 
+    ; DDR-1196: a hint whose range wraps past 2^64 must be refused, not mapped
+    ; at the top of the kernel half and at VA 0.
+    mov     rax, SYS_MMAP
+    mov     rdi, 0xFFFFFFFFFFFFF000
+    mov     rsi, 8192
+    mov     rdx, 3
+    mov     r10, 0x22
+    mov     r8, -1
+    xor     r9, r9
+    syscall
+    cmp     rax, -EINVAL
+    jne     .s6_after_wrap
+    mov     rax, SYS_WRITE
+    mov     rdi, STDOUT
+    lea     rsi, [rel m_mmapwrap]
+    mov     rdx, m_mmapwrap_len
+    syscall
+.s6_after_wrap:
+
     mov     rax, SYS_MUNMAP        ; munmap, then re-mmap the same hint
     mov     rdi, r13
     mov     rsi, 4096
@@ -950,6 +969,8 @@ m_hellobytes: db "PRADYOS filesystem works!"
 m_hellobytes_len: equ $ - m_hellobytes
 m_mmapoff:   db "SYSMMAP OFF REJECTED", 10
 m_mmapoff_len: equ $ - m_mmapoff
+m_mmapwrap:  db "SYSMMAP WRAP REJECTED", 10
+m_mmapwrap_len: equ $ - m_mmapwrap
 m_munmap:    db "SYSMUNMAP OK", 10
 m_munmap_len: equ $ - m_munmap
 p_exec:      db "/EXECTEST.ELF", 0
