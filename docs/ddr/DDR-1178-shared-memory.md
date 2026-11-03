@@ -540,7 +540,7 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 **Not gated, and why:**
 - **`PROT_WRITE` on SFS or ext4 is `-EACCES`** (D5). `shmtest` is FAT-rooted and a process reaches only its root mount, so it cannot open an SFS or ext4 file. The refusal is the same `shared_write` test that FF's FAT32 checks pass through, but the SFS and ext4 values of the flag are read from the code, not run.
 - **The prepay `-EAGAIN`.** Reaching it needs the bucket drained first. The probe does not do that, so the path is reasoned, not run.
-- **Two concurrent first mappers of one file** (§A4.3). `smoke-shm` runs on one CPU.
+- **Two concurrent first mappers of one file** (§A4.3). No arm races two first mappers. `smoke-shm` boots with four CPUs since §A4.7, but nothing makes the race happen (§A4.8).
 
 **NSI:** 119 `SYS_MSYNC`.
 
@@ -568,11 +568,37 @@ On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O ma
 - **S4-2 mutant:** unchanged (no `tlb_shoot` in `shm_vma_writeback`, no local `invlpg` in `vmm_dirty_op`).
 - **QEMU only.** QEMU's TCG soft-TLB caches a writable entry the same way. Whether real CPUs hit this window is **not verified on real hardware**.
 
+### A4.8 Review of `35bf1f8` (CodeRabbit 4456289977, 4456289991, 4456289957): two defects, one stale assumption
+
+**Defect 1: release write-back is authorised against the wrong capability table (security boundary).**
+- **Where it happens.** At the last `mm_put`, `shm_writeback_vmas` writes back dirty pages through `vfs_write_prepaid` (§A4.4). That function calls `cap_ok`, which resolves the stored `wcap` handle in `current_thread->caps`. The last `mm_put` runs in whichever thread reaps the process:
+  - the parent's `wait4` (`sys_wait.c`), which resolves the handle in the parent's table;
+  - the `reaper` kernel thread, for an orphan (`sched.c`, `reaper_thread`). The reaper's table comes from `cap_table_create` and is empty, so `cap_authorize` fails. **An orphan's dirty file pages are never written back.** The only trace is a `[shm] writeback failed rc=-1` line.
+- **What D4 decided.** D4 says the capability is "captured at `mmap`", and that a re-check would only repeat the same check, because the kernel has no revocation model. The code did not do that. It re-resolved the handle at write-back time, in whatever table was current then.
+- **Fix.** `CAP_FS_WRITE` is checked once, at `mmap`, in the mapper's own context. That is when `current_thread` is the mapper. `wok` now also needs `vfs_write_authorized(fe->cap)`, so a mapper without write authority gets `-EACCES` for `PROT_WRITE`, as an `O_RDONLY` fd does. `vfs_write_prepaid` takes no capability and resolves nothing. The area's non-zero `wcap` is the record that write authority was granted at `mmap`.
+- **Arm FI** (`PRADYOS_SHM_FI orphan=0xf1`):
+  - A forks C1, and C1 forks C2, then C1 exits at once. A reaps C1, so C2 is an orphan.
+  - C2 opens `/SHMFI.BIN`, maps it `MAP_SHARED`, stores `0xf1` and exits, with neither `msync` nor `munmap`. The reaper then reaps it.
+  - A polls the file with `read(2)` for up to 400 polls, yielding between them, until the byte appears.
+- **Vacuity, checked before writing FI.** On `35bf1f8` the reaper's empty table fails `cap_authorize`, the write never happens, and A reads `0x00`. FI is red on the tree before the fix.
+- **Mutant S4-8:** puts back the `cap_ok(current_thread)` check in `vfs_write_prepaid`. It must be red on FI only. FE (exit reaped by the parent's `wait4`) still passes under it, because the forked child's table is a copy of the parent's.
+
+**Defect 2: a `write(2)` that grows a mapped FAT32 file is undone by write-back.**
+- **How it happens.** Write-back writes through the object's copy of the `vfs_file`, which was taken at attach (`o->file`, size `o->fsize`). `fat32_write` stores `max(end, f->size)` in the directory entry, using that copy's stale size. A file grown by `write(2)` while it is mapped is cut back at the next write-back. The clusters of the appended bytes then stay allocated past the recorded size.
+- **Fix:** the busy rule of §A4.2 extends to growth. While a file is mapped, a `write(2)` with `off + count > o->fsize` is `-EBUSY` (`shm_file_grow_busy`, called from the `FD_VFS` write path after the `O_APPEND` reposition). Writes inside the mapped size are still allowed. Their coherence with the mapping stays as §A4.6 records.
+- **Arm FJ** (`PRADYOS_SHM_FJ grow=-16 inplace=1`): with `/SHMFJ.BIN` (4096 B) mapped, a 1-byte `write` at offset 4096 must be `-EBUSY`, and a 1-byte `write` at offset 0 must return 1.
+- **Vacuity:** on `35bf1f8` the growing write succeeds (`grow=1`), so FJ is red.
+- **Mutant S4-9:** removes the refusal. It must be red on FJ only.
+
+**Stale assumption: `smoke-shm` is no longer one CPU.** Since §A4.7, `smoke-shm` boots with `QEMU_SMP=4`.
+- **Arms J and L.** Their windows were judged safe from a false pass because only one CPU ran (§7). With four CPUs, other CPUs may free pages inside those windows. **J's and L's cross-CPU false-pass risk is not gated.** Arms M and Q already measure with `pm_measure`, and that is unchanged.
+- **Two concurrent first mappers of one file** (§A4.6). Four CPUs now run, but no arm makes two first mappers race, so this is still **not gated**.
+
 ## 7. Honesty labels
 
 **Page counts in arms J, L, M and Q (DDR-1185).** All four read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
 - **M moves onto `pm_measure`.** Its window spans a fork, the child's run and exit, and the reap, so the scheduler runs other processes inside it. A burst that frees pages there could hide a leaked segment (a false pass). `reclaimed=1` now needs a conclusive trial with drop < `RECLAIM_MIN`; an inconclusive trial is red. The meter lines are printed as `[shm] M drop=` and `[shm] M meter`.
 - **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
-- **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
+- **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and when this was written smoke-shm ran on one CPU, where a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else inside one syscall. **Since §A4.7 smoke-shm boots with `QEMU_SMP=4`.** Other CPUs can now free pages inside those windows, so J's and L's cross-CPU false-pass risk is **not gated** (§A4.8).
 
 P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **gated by `smoke-shm` arms FA-FG** (Amendment 4): S4-1 and S4-3..S4-7 are shown red in CI; S4-2 is not, so the TLB invalidation step is **not gated**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
