@@ -532,6 +532,30 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 
 **NSI:** 119 `SYS_MSYNC`.
 
+### A4.7 Cross-CPU write/msync/write: arm FH, to show S4-2 red (2026-11-03, operator 6594717280 item 4)
+
+**Does a missing flush lose a later write? Yes, on more than one CPU.** This is reasoned from the code and the x86 rules, and not yet shown in CI:
+1. Thread B, on CPU 2, stores to a mapped page. The page walk sets D in the PTE. CPU 2 caches a **writable TLB entry with D already set**.
+2. Thread A, of the same `mm`, on CPU 1, calls `msync`. Write-back tests D, writes the page, and clears D in the PTE (§A4.4).
+3. With the shootdown, CPU 2's entry is invalidated. B's next store walks the tables and sets D again, so the next write-back writes it.
+4. **Without the shootdown (S4-2),** CPU 2 keeps the stale entry. B's next store hits it, and the CPU does not set D in the PTE again, because the entry already has D. The next `msync`, `munmap` or exit sees a clean PTE and skips the page. **The second store never reaches the file.**
+
+On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O makes the CPU switch to another address space. The CR3 write flushes the TLB, so FB stays green under S4-2 (§A4.5). FH puts the second writer on another CPU, which never switches address space during the round.
+
+**Arm FH** (same probe, `user/shmtest.c`; `smoke-shm` now boots with `QEMU_SMP=4`):
+- **Setup:** the main thread A pins itself to CPU 1 (`SYS_SCHED_CPU`). It maps one page of `/SHMFH.BIN` `MAP_SHARED` and `PROT_READ | PROT_WRITE`. It creates thread B, which pins itself to CPU 2. CPU 0 is left out because the BSP runs most kernel threads.
+- **One round `r`, 16 rounds:**
+  1. B stores `X_r` to the page and signals.
+  2. A calls `msync(MS_SYNC)`. That writes `X_r` and clears D. A then signals B.
+  3. B stores `Y_r` to the same byte and signals.
+  4. A calls `msync(MS_SYNC)` again, then reads the byte back with `read(2)`. A round is **lost** if the file does not hold `Y_r`.
+- **B never enters the scheduler in a round.** It waits by spinning on a flag on another page, with no syscall, so CPU 2 makes no CR3 write between its two stores. A never touches the mapped page.
+- **Sentinel:** `PRADYOS_SHM_FH rounds=16 lost=0 placed=16`. `placed` counts rounds in which A read CPU 1 and B read CPU 2 (`SYS_SCHED_CPU` op 0) around the stores. Fewer than 16 placed rounds fails the arm as **not placed**. A misplaced run is never counted as a pass.
+- **Vacuity, checked before writing it:** on the tree before P4 the probe has failed at FA already, so FH is never reached. On the P4 tree without the shootdown (S4-2), every round whose CPU 2 entry survives loses `Y_r`.
+- **The sensitivity is probabilistic.** Any CR3 write on CPU 2 between B's two stores also flushes the entry, for example a timer preemption to another address space. So under S4-2 a round can still pass. FH is red if **any** of the 16 rounds is lost. If S4-2 stays green on FH in CI, the shootdown stays labelled **not gated** and FH is reported as not shown red. It will not be counted.
+- **S4-2 mutant:** unchanged (no `tlb_shoot` in `shm_vma_writeback`, no local `invlpg` in `vmm_dirty_op`).
+- **QEMU only.** QEMU's TCG soft-TLB caches a writable entry the same way. Whether real CPUs hit this window is **not verified on real hardware**.
+
 ## 7. Honesty labels
 
 **Page counts in arms J, L, M and Q (DDR-1185).** All four read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
