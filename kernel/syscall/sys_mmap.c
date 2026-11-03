@@ -172,8 +172,7 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     /* DDR-1196: bound base first, then the pages against the room left, so
      * no sum can wrap. `base + npages * PAGE_SIZE` wrapped for a hint near
      * 2^64 and passed, mapping a user page in the shared kernel half. */
-    if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
-        npages > (VMM_MMAP_TOP - base) / PAGE_SIZE)
+    if (base < VMM_MMAP_BASE || base + npages * PAGE_SIZE > VMM_MMAP_TOP)   /* MUTANT W1 */
         return -EINVAL;                          /* outside the mmap arena */
     if (vma_overlaps(t, base, npages))
         return -EINVAL;                          /* no silent replace (baseline) */
