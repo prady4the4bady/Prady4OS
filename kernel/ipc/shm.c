@@ -425,7 +425,7 @@ int shm_vma_writeback(uint64_t cr3, const struct vm_area *v, uint64_t from,
         for (uint64_t i = 0; i < npages; i++)
             if (dirty[i / 64] & (1ull << (i % 64)))
                 vmm_dirty_op(cr3, from + i * 4096, VMM_DIRTY_CLEAR);
-        tlb_shoot(cr3, from, npages);
+        /* MUTANT S4-2: no shootdown */
     }
 
     int err = 0;
