@@ -124,7 +124,7 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
             e->off = e->file->size;
         /* DDR-1178 A4.8: a mapped file may not grow; write-back would cut it
          * back to the size it had when mapped. In-place writes stay allowed. */
-        if (shm_vfs_grow_refused(e->file, e->off, (uint64_t)count))
+        if (0 && shm_vfs_grow_refused(e->file, e->off, (uint64_t)count))   /* MUTANT S4-9 */
             return -EBUSY;
         uint64_t kp = pmm_alloc_page();
         if (!kp)
