@@ -46,10 +46,10 @@ Status: DONE. Needs: C0.1. Ref: DDR-1075, DDR-1077, DDR-1177.
 Exit gate: `smoke-tlbshoot` (in-kernel probe, arms A-C, 4 CPUs; DDR-1177 Amendment 2). M2 and M3 shown red in CI before merge.
 
 ### C1.3 Shared memory
-Status: IN PROGRESS (P1 merged; P2 #78 and P3 #80 open; P4 not started). Needs: C1.2. Ref: DDR-1038, DDR-1178.
+Status: IN PROGRESS (P1 merged; P2 merged as #78 `287ae93`; P3 #80 and P4 #103 open). Needs: C1.2. Ref: DDR-1038, DDR-1178.
 - [x] P1 anonymous `MAP_SHARED` across fork: #63 merged as `a2ac698` (the DDR from #62 rides in the same merge). Gate `smoke-shm` (shard 0), arms A-F, green on `3c6865a` (run 39425747997). Mutants M1-M7 red on `80889fd` (DDR-1178 §4). Emulated (TCG) only, not verified on real hardware.
-- [ ] P2/P3 SysV and POSIX shared memory: decisions D1-D3 recorded (DDR-1178 Amendment 1, #70 merged as `2bda85d`); P2 is #78, P3 is #80 (both green, waiting on merge)
-- [ ] P4 shared file mappings with write-back: decisions D4-D5 recorded in the same amendment (#70, `2bda85d`); not started
+- [ ] P2/P3 SysV and POSIX shared memory: decisions D1-D3 recorded (DDR-1178 Amendment 1, #70 merged as `2bda85d`); P2 is #78, merged as `287ae93` (head `1b51a36`, run [41581394086](https://github.com/prady4the4bady/Prady4OS/actions/runs/41581394086); S2-1 to S2-8 red per DDR-1178 A2.3/A2.4). P3 is #80. Ticked when P3 merges
+- [ ] P4 shared file mappings with write-back: decisions D4-D5 recorded in the same amendment (#70, `2bda85d`); implemented in #103 (DDR-1178 Amendment 4), open
 Exit gate: `smoke-shm` (P1 arms A-F; P2-P4 arms are added with their parts).
 
 ### C1.4 Threads and synchronization
