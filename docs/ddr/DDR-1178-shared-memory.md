@@ -346,6 +346,18 @@ Every arm N–S is shown red on this head, each by the mutant designed for it. Q
 - **S3-3 re-run** ([41475898640](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475898640)): re-applied on `6943d97` because arm P changed. Red on P only, `rejects=5`.
 - **S3-1, S3-2, S3-4, S3-5 and S3-6 were not re-run.** They stand on their runs on `093bbe4`. The only kernel change since then is this length bound: none of them touches it, and none of arms N, O, Q, R or S passes a length above the arena. That is a reading of the code, stated as such.
 
+**S3 re-run on #80's final head `e926ddd`** (operator 6594717280, step 3). The fixed tree is green on [41636299964](https://github.com/prady4the4bady/Prady4OS/actions/runs/41636299964), all 17 checks. Each mutant was re-applied on `e926ddd` as `mut/shm3-S3-N-r4`. In every run only shard 0 (`smoke-shm`) failed, and shard 8 passed:
+
+| Mutant | Run on `e926ddd` | Red on |
+|---|---|---|
+| S3-1 | [41636477913](https://github.com/prady4the4bady/Prady4OS/actions/runs/41636477913) | **N** `fdshared=0x00`. P is red too (`rejects=6`, want `7`): the same `first = 0` defect, seen through `shm_fd_map`'s size bound, as on `093bbe4` |
+| S3-2 | [41636483654](https://github.com/prady4the4bady/Prady4OS/actions/runs/41636483654) | **O** only, `rejects=2` |
+| S3-4 | [41641677772](https://github.com/prady4the4bady/Prady4OS/actions/runs/41641677772) | **Q** `opened=25`; then `PRADYOS_SHM FAIL r_open=-28`, the table full of leaked objects, as on `093bbe4` |
+| S3-5 | [41641757884](https://github.com/prady4the4bady/Prady4OS/actions/runs/41641757884) | **R** only, `child_hold=0x00` |
+| S3-6 | [41646354735](https://github.com/prady4the4bady/Prady4OS/actions/runs/41646354735) | **S** only, `dup_hold=0x00` |
+
+S3-3 stands on its `6943d97` run above. #80 merged as `9105001`. QEMU TCG only; **not verified on real hardware**.
+
 **NSI:** 116 `SYS_SHM_OPEN`.
 
 ## Amendment 4 (2026-11-02 UTC, after Amendment 3): P4 design, shared file mappings with write-back
