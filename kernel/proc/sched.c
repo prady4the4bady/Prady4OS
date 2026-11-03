@@ -877,10 +877,10 @@ void sched_set_init_pid(uint32_t pid) { g_init_pid = pid; }
 /* DDR-SMP-3c-locks-1: the scheduler's interrupt masking IS the scheduler
  * spinlock (irqsave variant — identical one-CPU semantics, cross-CPU exclusion
  * added). Defined here (not at schedule()) because sched_create's ring insert
- * and the topology paths (cap-2a) take it too. schedule() holds it ACROSS
- * context_switch; the resuming thread's irq_restore releases it (the switch-lock
- * handoff — test-and-set locks have no owner). A brand-new thread's first entry
- * has no resumed frame, so thread_trampoline releases the lock itself. */
+ * and the topology paths (cap-2a) take it. It is NOT held across
+ * context_switch any more: since rq-2 (below) schedule() only masks local IRQs
+ * and takes no g_sched_lock, which the futex lock order relies on (DDR-1181
+ * A1.3; DDR-1195 §4). */
 static inline uint64_t irq_save(void) {
     return spin_lock_irqsave(&g_sched_lock);
 }
