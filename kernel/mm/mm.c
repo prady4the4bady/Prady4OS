@@ -3,6 +3,7 @@
 #include "vmm.h"
 #include "kheap.h"
 #include "string.h"
+#include "shm.h"
 
 struct mm *mm_create(uint64_t cr3) {
     struct mm *mm = (struct mm *)kmalloc(sizeof *mm);
@@ -25,6 +26,7 @@ void mm_put(struct mm *mm) {
         return;
     if (__atomic_sub_fetch(&mm->refs, 1, __ATOMIC_ACQ_REL) != 0)
         return;
+    shm_release_vmas(mm);              /* DDR-1178 A2.2: exit is a detach */
     if (mm->cr3)
         vmm_destroy_address_space(mm->cr3);
     kfree(mm);

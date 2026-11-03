@@ -1,6 +1,7 @@
 /* kernel/sched.c — preemptive round-robin kernel scheduler (Phase 2c/2e). */
 #include "sched.h"
 #include "mm.h"           /* DDR-1181: struct mm */
+#include "shm.h"          /* DDR-1178 A2 */
 #include "uaccess.h"      /* DDR-1181 P1c: CLEARTID */
 #include "futex.h"        /* DDR-1181 A1.3: CLEARTID wake */
 #include "errno.h"     /* DDR-955: ETIMEDOUT for sched_block_timeout */
@@ -1392,6 +1393,7 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         } else {
             memcpy(cm->vma, parent->mm->vma, sizeof cm->vma);
             cm->mmap_next = parent->mm->mmap_next;
+            shm_fork_vmas(cm);   /* DDR-1178 A2.2: the copies are attachments */
             t->mm = cm;
         }
     }

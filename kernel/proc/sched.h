@@ -40,6 +40,8 @@ enum thread_state {
 struct vm_area {
     uint64_t base;     /* page-aligned start in the user mmap arena */
     uint64_t npages;   /* length in pages; 0 = free slot            */
+    int32_t  shm;      /* DDR-1178 A2.2: attached segment object + 1; 0 = none */
+    int32_t  shm_ro;   /* 1 if attached SHM_RDONLY (mprotect may not add write) */
 };
 
 /* DDR-872: 4096 covers x87+SSE (512), AVX (576), and the full AVX-512

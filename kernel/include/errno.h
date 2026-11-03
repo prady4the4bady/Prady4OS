@@ -22,6 +22,7 @@
 #define EINVAL         22   /* invalid argument                     */
 #define EEXIST         17   /* file/entry already exists            */
 #define EBUSY          16   /* resource busy (DDR-1181: exec with live threads) */
+#define EIDRM          43   /* identifier removed (DDR-1178 A2.2: shmat after IPC_RMID) */
 #define EMFILE         24   /* too many open files                  */
 #define EPIPE          32   /* broken pipe: write with no reader (DDR-787) */
 #define ESPIPE         29   /* illegal seek (non-seekable fd)       */

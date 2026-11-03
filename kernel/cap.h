@@ -62,6 +62,10 @@ typedef uint64_t cap_t;
 #define CAP_EXEC          (1u << 20)  /* PRAX   — ACTION_EXEC_CODE        */
 #define CAP_SCENE         (1u << 22)  /* IRIS   — ACTION_QUERY_SCENE      */
 #define CAP_NET_BROWSE    (1u << 23)  /* LUMYN  — ACTION_BROWSE_WEB       */
+/* DDR-1178 Amendment 2: a SysV shared-memory segment. The shmid IS this
+ * capability (A2.1), so a segment is reachable only from a table holding it. */
+#define CAP_SHM_R         (1u << 24)
+#define CAP_SHM_W         (1u << 25)
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u
@@ -78,6 +82,8 @@ typedef uint64_t cap_t;
  * CAP_* bit -- so a handle minted for one domain cannot authorize another even
  * if a caller passes the wrong handle. */
 #define RES_DOMAIN 5u
+/* DDR-1178 Amendment 2: res_id = the segment's object index (kernel/ipc/shm.c). */
+#define RES_SHM    6u
 #define DOMAIN_RES_OCR    0x4F435200ull   /* "OCR"  */
 #define DOMAIN_RES_SCENE  0x53434E00ull   /* "SCN"  */
 #define DOMAIN_RES_BROWSE 0x42525700ull   /* "BRW"  */
@@ -109,3 +115,8 @@ uint32_t cap_validate(struct cap_table *t, cap_t h, uint32_t required_rights);
  * (res_type, res_id) — binds authority to a specific resource. */
 uint32_t cap_authorize(struct cap_table *t, cap_t h, uint32_t res_type,
                        uint64_t res_id, uint32_t required_rights);
+/* DDR-1178 Amendment 2: 1 and *res_id / *rights filled if `h` is a valid handle
+ * of type `res_type` in `t`, else 0. For resources whose id the caller cannot
+ * know in advance (a shmid names its object only through the capability). */
+uint32_t cap_lookup(struct cap_table *t, cap_t h, uint32_t res_type,
+                    uint64_t *res_id, uint32_t *rights);
