@@ -52,7 +52,7 @@ if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
 `user/systest.asm` adds one call after the offset check: `mmap(0xFFFFFFFFFFFFF000, 8192, RW, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)`. It prints `SYSMMAP WRAP REJECTED` only if the call returns `-EINVAL`. The line is added to `smoke-sysmmap`'s sentinels.
 
 - **Vacuity.** On the tree before the fix the call returns `-ENOMEM` (§1 step 4), not `-EINVAL`. So the line is never printed and the gate is red, whatever else the call corrupts.
-- **Mutant W1** restores the wrapping sum. Run [41553380786](https://github.com/prady4the4bady/Prady4OS/actions/runs/41553380786) on `7b0c81b`: **red, though not at the designed sentinel.** All 10 boot shards fail with `NEXUS KERNEL PANIC`. In shard 5 the panic comes in the shard's first gate (`smoke-mprotect`), before `smoke-sysmmap` runs, so `SYSMMAP WRAP REJECTED` is never reached; the panic itself is §1 step 3's corruption. The fixed tree is green (see the PR).
+- **Mutant W1** restores the wrapping sum. Run [41553380786](https://github.com/prady4the4bady/Prady4OS/actions/runs/41553380786) on `7b0c81b`: **red, though not at the designed sentinel.** All 10 boot shards fail with `NEXUS KERNEL PANIC`. In shard 5 the panic comes in the shard's first gate (`smoke-mprotect`), before `smoke-sysmmap` runs, so `SYSMMAP WRAP REJECTED` is never reached. The panic is **likely** §1 step 3's corruption, which is not proven (§1). The fixed tree is green on `996d67b` ([41554913417](https://github.com/prady4the4bady/Prady4OS/actions/runs/41554913417), 16 of 16 jobs).
 
 ## 4. Where else it applies
 
