@@ -589,6 +589,7 @@ On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O ma
 - **Arm FJ** (`PRADYOS_SHM_FJ grow=-16 inplace=1`): with `/SHMFJ.BIN` (4096 B) mapped, a 1-byte `write` at offset 4096 must be `-EBUSY`, and a 1-byte `write` at offset 0 must return 1.
 - **Vacuity:** on `35bf1f8` the growing write succeeds (`grow=1`), so FJ is red.
 - **Mutant S4-9:** removes the refusal. It must be red on FJ only.
+- **Not gated:** the same refusal in the io_uring `IORING_OP_WRITE` path. FJ uses `write(2)` only, so the io_uring copy is reasoned from the code, not run.
 
 **Stale assumption: `smoke-shm` is no longer one CPU.** Since §A4.7, `smoke-shm` boots with `QEMU_SMP=4`.
 - **Arms J and L.** Their windows were judged safe from a false pass because only one CPU ran (§7). With four CPUs, other CPUs may free pages inside those windows. **J's and L's cross-CPU false-pass risk is not gated.** Arms M and Q already measure with `pm_measure`, and that is unchanged.
