@@ -69,6 +69,14 @@
                                   * its last detach fails before cycle 33 */
 #define F_PATH  "/SHMFILE.BIN"
 #define FG_PATH "/SHMFG.BIN"
+#define FH_PATH "/SHMFH.BIN"     /* DDR-1178 A4.7 */
+#define FH_ROUNDS   16
+#define FH_CPU_A     1           /* the msync thread (main) */
+#define FH_CPU_B     2           /* the writer thread; never the BSP */
+#define FH_SPIN  (1L << 31)      /* spin bound per wait, iterations */
+#define SYS_THREAD_CREATE 110    /* DDR-1181 */
+#define SYS_THREAD_EXIT   111
+#define SYS_SCHED_CPU     118    /* DDR-1186: op 0 GET, 1 PIN */
 #define SEG_PAGES   16
 #define RECLAIM_MIN (SEG_PAGES - 4)
 
@@ -177,6 +185,84 @@ static long make_file(const char *path, long n) {
     return fd;
 }
 
+/* DDR-1178 A4.7, arm FH. On fh_arm's stack (probes keep no mutable globals,
+ * DDR-826): a different page from the mapping, so B's spin never touches the
+ * page whose TLB entry is under test. */
+struct fh_state {
+    volatile unsigned char *page;
+    volatile long go, ack, bplaced, bfail;
+};
+
+static int fh_wait(volatile long *v, long want) {
+    for (long i = 0; i < FH_SPIN; i++) {
+        if (__atomic_load_n(v, __ATOMIC_ACQUIRE) == want) return 1;
+        __asm__ volatile("pause");
+    }
+    return 0;
+}
+
+/* Thread B: two stores per round, waiting between them by spinning with no
+ * syscall, so CPU FH_CPU_B makes no CR3 write between the stores. */
+__attribute__((noreturn, force_align_arg_pointer)) static void fh_writer(long arg) {
+    struct fh_state *f = (struct fh_state *)arg;
+    if (nsi(SYS_SCHED_CPU, 1, FH_CPU_B, 0) != 0) f->bfail = 1;
+    for (long r = 0; r < FH_ROUNDS && !f->bfail; r++) {
+        if (!fh_wait(&f->go, 2 * r + 1)) { f->bfail = 2; break; }
+        long on = nsi(SYS_SCHED_CPU, 0, 0, 0);
+        f->page[0] = (unsigned char)(0x10 + r);          /* X_r */
+        __atomic_store_n(&f->ack, 2 * r + 1, __ATOMIC_RELEASE);
+        if (!fh_wait(&f->go, 2 * r + 2)) { f->bfail = 3; break; }
+        f->page[0] = (unsigned char)(0x80 + r);          /* Y_r */
+        if (on == FH_CPU_B && nsi(SYS_SCHED_CPU, 0, 0, 0) == FH_CPU_B)
+            __atomic_add_fetch(&f->bplaced, 1, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&f->ack, 2 * r + 2, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&f->ack, -1, __ATOMIC_RELEASE);
+    nsi(SYS_THREAD_EXIT, 0, 0, 0);
+    for (;;) { }
+}
+
+/* FH (DDR-1178 A4.7): B on another CPU stores, A msyncs, B stores again,
+ * A msyncs again. Without the shootdown B's second store hits a stale TLB
+ * entry that already has D, the PTE stays clean, and the write is lost. */
+static void fh_arm(void) {
+    struct fh_state st = {0}, *f = &st;
+    if (nsi(SYS_SCHED_CPU, 1, FH_CPU_A, 0) != 0) fail("fh_pin", FH_CPU_A);
+    long hfd = make_file(FH_PATH, 4096);
+    long m = nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, hfd, 0);
+    if (m < 0) fail("fh_mmap", m);
+    f->page = (volatile unsigned char *)m;
+    long stk = nsi6(SYS_MMAP, 0, 16384, PROT_RW, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (stk < 0) fail("fh_stack", stk);
+    long tid = nsi6(SYS_THREAD_CREATE, (long)fh_writer, stk + 16384, (long)f, 0, 0, 0);
+    if (tid < 0) fail("fh_thread", tid);
+    long lost = 0, aplaced = 0;
+    for (long r = 0; r < FH_ROUNDS; r++) {
+        __atomic_store_n(&f->go, 2 * r + 1, __ATOMIC_RELEASE);
+        if (!fh_wait(&f->ack, 2 * r + 1)) fail("fh_x", f->bfail * 100 + r);
+        long on = nsi(SYS_SCHED_CPU, 0, 0, 0);
+        long rc = nsi(SYS_MSYNC, m, 4096, MS_SYNC);   /* writes X_r, clears D */
+        if (rc != 0) fail("fh_msync1", rc);
+        __atomic_store_n(&f->go, 2 * r + 2, __ATOMIC_RELEASE);
+        if (!fh_wait(&f->ack, 2 * r + 2)) fail("fh_y", f->bfail * 100 + r);
+        rc = nsi(SYS_MSYNC, m, 4096, MS_SYNC);        /* must write Y_r */
+        if (rc != 0) fail("fh_msync2", rc);
+        if (on == FH_CPU_A && nsi(SYS_SCHED_CPU, 0, 0, 0) == FH_CPU_A) aplaced++;
+        if (pread1(FH_PATH, 0) != (unsigned)(0x80 + r)) lost++;
+    }
+    if (!fh_wait(&f->ack, -1)) fail("fh_join", f->bfail);
+    nsi(SYS_MUNMAP, stk, 0, 0);                         /* B has exited */
+    long placed = aplaced < f->bplaced ? aplaced : f->bplaced;
+    {
+        char b[96], *p = str(b, "PRADYOS_SHM_FH rounds="); p = dec(p, FH_ROUNDS);
+        p = str(p, " lost="); p = dec(p, lost);
+        p = str(p, " placed="); p = dec(p, placed); *p++ = '\n'; *p = 0; wr(b);
+    }
+    nsi(SYS_MUNMAP, m, 0, 0);
+    nsi(SYS_CLOSE, hfd, 0, 0);
+    nsi(SYS_SCHED_CPU, 2, 0, 0);                       /* unpin */
+}
+
 static void file_arms(void) {
     /* FA: msync writes a dirty page to the file. */
     long ffd = make_file(F_PATH, 8192);
@@ -270,6 +356,8 @@ static void file_arms(void) {
         char b[96], *p = str(b, "PRADYOS_SHM_FG cycles="); p = dec(p, FG_CYCLES);
         p = str(p, " opened="); p = dec(p, opened); *p++ = '\n'; *p = 0; wr(b);
     }
+
+    fh_arm();                   /* DDR-1178 A4.7 */
 }
 
 /* One arm-C trial: CYCLES x (mmap, fork, child write+exit, wait, munmap). The
