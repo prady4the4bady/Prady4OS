@@ -439,7 +439,7 @@ int shm_vma_writeback(uint64_t cr3, const struct vm_area *v, uint64_t from,
             continue;                  /* the zero tail past EOF is never written */
         uint32_t n = (o->fsize - off < 4096) ? (uint32_t)(o->fsize - off) : 4096u;
         struct vfs_file fc = o->file;  /* the driver updates its copy's fields */
-        int r = vfs_write_prepaid(&fc, off,
+        int r = !vfs_write_authorized((cap_t)v->wcap) ? -1 : vfs_write_prepaid(&fc, off,   /* MUTANT S4-8 */
                                   (const void *)(uintptr_t)o->frames[pg], n);
         if (r != (int)n) {
             err = -EIO;
