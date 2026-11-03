@@ -194,6 +194,7 @@
 #define SYS_SHMAT          113 /* DDR-1178 A2: (shmid, addr, flags) -> va | -EINVAL|-EIDRM|-ENOMEM|-EPERM */
 #define SYS_SHMDT          114 /* DDR-1178 A2: (addr) -> 0 | -EINVAL */
 #define SYS_SHMCTL         115 /* DDR-1178 A2: (shmid, cmd, buf) -> 0 | -EINVAL|-EPERM; IPC_RMID only */
+#define SYS_SHM_OPEN       116 /* DDR-1178 A3: (SHM_ANON, O_RDWR, mode) -> fd | -EACCES|-EINVAL|-EMFILE|-ENOSPC|-EPERM */
 #define SYS_FUTEX          117 /* DDR-1181 A1: (uaddr, op, val, timespec*, -, -) -> 0|n | -EAGAIN|-ETIMEDOUT|-EINTR|-EINVAL|-EFAULT|-ENOSYS */
 #define SYS_SCHED_CPU      118 /* DDR-1186: (op, cpu) op 0 GET -> cpu index; 1 PIN -> 0|-EINVAL; 2 UNPIN -> 0 */
 #define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */

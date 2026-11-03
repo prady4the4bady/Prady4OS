@@ -31,7 +31,7 @@ Authority: OPERATOR ORDER (#45 comment 6256077528), Order 2. Stop conditions: "a
 |---|---|---|
 | P1 | `MAP_SHARED \| MAP_ANONYMOUS`, shared across `fork` | No (§3) |
 | P2 | SysV shared memory (`shmget`/`shmat`/`shmdt`/`shmctl`) | Decided in Amendment 1 (D1, D2) |
-| P3 | POSIX `shm_open`/`shm_unlink` | Decided in Amendment 1 (D1, D3) |
+| P3 | POSIX `shm_open`/`shm_unlink` | Decided in Amendment 1 (D1, D3); designed in Amendment 3 |
 | P4 | Shared file mappings with write-back (`msync`, plus write-back at `munmap`/exit) | Decided in Amendment 1 (D4, D5) |
 
 P1 creates no new way for unrelated processes to reach each other's memory. Only the process tree that `fork`ed from the mapper shares the pages, which is what POSIX anonymous shared memory means. P2-P4 do create new channels; Amendment 1 decides how each is bounded.
@@ -97,7 +97,7 @@ Arm C on correct code (the M5-M7 runs, where the shared path is unmutated): the 
   All three must carry `PTE_SW_SHMEM`, and arm E gates the `mprotect` one. The fork walk must carry `PTE_SW_SHMEM` explicitly, or the child's copy loses it and the next fork COWs it, which is exactly M1. The implementation PR lists every `0xFFF` mask site and how it is handled.
 - **Refcount width.** It is 16 bits. A shared page inherited by more than 65,535 processes would wrap. Fork depth is bounded by the process table today; the bound is recorded in the implementation PR.
 - **Huge pages.** None are used for user memory. `PG_PS` entries are skipped by the walk, unchanged.
-- **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range. **Correction (CodeRabbit 4441673086):** an earlier version of this line said a partial `munmap` is refused. It is not. `sys_munmap_locked` ignores the length and removes the whole region that contains `addr`, for every mapping. This was already so on `dev/phase1` before P1. For a P2 attachment that makes a partial `munmap` a full detach (A2.2). Linux would unmap only the requested pages. The behaviour is unchanged here and is not gated; length checking is a separate item.
+- **Not covered by P1:** cross-process sharing between unrelated processes (P2/P3), file coherence (P4), `MAP_FIXED` replace, partial `munmap` of a shared range. **Correction (CodeRabbit 4441673086):** an earlier version of this line said a partial `munmap` is refused. It is not. `sys_munmap_locked` ignores the length and removes the whole region that contains `addr`, for every mapping. This was already so on `dev/phase1` before P1. For a P2 attachment, or a P3 mapping of an `FD_SHM` fd, that makes a partial `munmap` a full detach (A2.2, A3.2). Linux would unmap only the requested pages. The behaviour is unchanged here and is not gated; length checking is a separate item.
 
 ## 6. Owner decisions required before P2-P4 (stop condition, #45/6256077528); decided in Amendment 1
 
@@ -178,7 +178,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **NSI:** 112 `SYS_SHMGET`, 113 `SYS_SHMAT`, 114 `SYS_SHMDT`, 115 `SYS_SHMCTL` (110 and 111 are DDR-1181's).
 
-### A2.3 Gate: `smoke-shm` arms G-L (same probe, `user/shmtest.c`)
+### A2.3 Gate: `smoke-shm` arms G-M (same probe, `user/shmtest.c`)
 
 | Arm | Sentinel | What it shows |
 |---|---|---|
@@ -233,7 +233,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **Defect, from a real artefact.** S3-5 (`fd_clone` takes no hold) stayed green in run [40322396520](https://github.com/prady4the4bady/prady4os/actions/runs/40322396520). The diagnostic build `mut/shm3-S3-5-diag` (`83bb3e9`, run [40470702205](https://github.com/prady4the4bady/prady4os/actions/runs/40470702205), never merged) printed every hold and put. In arm R the object's `holders` went from 1 to 4 across the `fork`, although the mutant's `fd_clone` took no hold, so the parent's `close` left 3 and the child's `mmap` succeeded. The three extra holds are `cap_fork` (`kernel/cap.c`) copying three RES_SHM capabilities: the three shmids the probe removes with `IPC_RMID` earlier in the same process (`id` of arms H-J, `id2` of K, `id3` of L).
 
-**Mechanism.** `put_and_reclaim` destroyed a marked, unmapped segment and set `used = 0` while capabilities still named it (`marked || holders == 0`). A capability stores only the slot index, so after `shm_obj_create` reused the slot (it takes the lowest free one), every old shmid resolved to the **new** object:
+**Mechanism.** `put_and_reclaim` destroyed a marked, unmapped segment and set `used = 0` while capabilities still named it (`marked || holders == 0`). A RES_SHM capability stores only the shared-memory object index (`res_id`), with no object generation. After `shm_obj_create` reused that object slot (it takes the lowest free one), every old shmid resolved to the **new** object:
 
 - `shmat(old_shmid)` mapped the new object, which can belong to another process. That breaks D1(c): a segment is reachable only through a capability its creator's table was given.
 - The old capabilities' holds and unholds (`cap_fork`, table teardown) counted against the new object, so its `holders` drifted. In arm R that kept a P3 object alive after its last fd had closed, which is why S3-5 could not turn R red.
@@ -244,12 +244,115 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **Mutant S2-8:** `put_and_reclaim` frees the slot of a marked segment whatever `holders` is (the pre-A2.4 rule). Want red on T only.
 
-**S2-8 run** on `551b562`: [41426419602](https://github.com/prady4the4bady/Prady4OS/actions/runs/41426419602), red on T only, `PRADYOS_SHM_T stale=153` (want `-22`). The fixed tree passes T on [41405761144](https://github.com/prady4the4bady/Prady4OS/actions/runs/41405761144). A2.4 is gated by arm T, in QEMU TCG only, and is **not verified on real hardware**.
+**S2-8 run:** [40537012413](https://github.com/prady4the4bady/prady4os/actions/runs/40537012413) (`3cbdf3f`), red on T only: `PRADYOS_SHM_T stale=153` (want `-22`), every other arm on the sentinel. The head with A2.4, `45af5b6`, is green ([40536969423](https://github.com/prady4the4bady/prady4os/actions/runs/40536969423)) with `stale=-22`. A2.4 is **gated by arm T**.
+
+**S2-8 re-run** on `551b562`: [41426419602](https://github.com/prady4the4bady/Prady4OS/actions/runs/41426419602), red on T only, `PRADYOS_SHM_T stale=153` (want `-22`). The fixed tree passes T on [41405761144](https://github.com/prady4the4bady/Prady4OS/actions/runs/41405761144). A2.4 is gated by arm T, in QEMU TCG only, and is **not verified on real hardware**.
+
+## Amendment 3 (2026-10-21 UTC, after Amendment 2): P3 design, POSIX `shm_open(SHM_ANON)` under D1(c)
+
+**Security boundary: review before merge.** P3 lets processes share memory through a file descriptor.
+
+### A3.1 The interface
+
+- **`SYS_SHM_OPEN` = NSI 116** takes `(name, oflag, mode)` and returns an fd or `-errno`.
+  - `name` must be exactly `SHM_ANON`, which is `(const char *)1` (the FreeBSD form). Any other value is `-EACCES`, including a real string and `NULL` (D1(c)). The kernel never dereferences `name`.
+  - The access mode in `oflag` must be `O_RDWR`; any other mode is `-EINVAL`. Without a namespace, a read-only fd could only name an object nobody can fill. `O_CREAT` and `O_EXCL` are accepted and ignored: every call creates a new object. Any other `oflag` bit is `-EINVAL`. `mode` is ignored, because nothing can open the object by name.
+  - Agents get `-EPERM`, as in A2.2.
+- **No `shm_unlink` syscall.** With no names there is nothing to unlink; a libc returns `-ENOENT` itself. This is recorded, not hidden.
+- **Reachability.** The fd reaches other processes only by `fork` (and by `SYS_THREAD_CREATE`, which copies the fd table). The kernel has no fd-passing operation today, so D1(c)'s "explicit fd passing" is not reachable either. A future fd-passing operation must take a hold on the object, as `fork` does.
+
+### A3.2 Objects and lifetime (D3: reuses the A2.2 table)
+
+- **New fd kind `FD_SHM`.** The entry stores the object index in `fd_entry.mnt`, which only `FD_VFS` uses otherwise. That keeps `struct fd_entry`, and with it `struct tcb`, the same size, so the pinned signal offsets (DDR-1181) do not move.
+- **Created empty.** `shm_open` reserves an object with `npages == 0` and one holder (the fd). `ftruncate(fd, len)` sets the size **exactly once**: `0 < len <= 1 MiB`, rounded up to pages, frames allocated zeroed. A second `ftruncate`, or `ftruncate` with 0 or more than 1 MiB, is `-EINVAL`. Growing or shrinking a mapped object would need to remap every attachment; P3 does not do it. A concurrent second `ftruncate` is refused by a `filling` state taken under the table lock.
+- **Holders are fd entries.** Each `FD_SHM` entry holds the object once:
+  - `shm_open` takes the first hold;
+  - `fork`/thread creation (`fd_clone`) and `dup2` take one more for each entry copied;
+  - `close`/`fd_free` (which also runs at exit) drops one.
+  An object is destroyed when `nattch == 0 && holders == 0`, the A2.2 rule with `marked` never set. A POSIX object is anonymous, so it is already "unlinked".
+  - An object that was never sized is reclaimed the same way, so the A2.2 condition no longer requires `npages != 0`.
+- **`mmap(addr, len, prot, MAP_SHARED, fd, off)`** on an `FD_SHM` fd maps pages `off/4096 .. off/4096 + npages(len) - 1` of the object:
+  - `off` must be page-aligned, and `off + len` must not exceed the object's size. An unsized object is `-EINVAL`.
+  - It is an attach (`shm_attach_begin`, `vm_area.shm`), so `munmap`, `exec`, the last `mm_put` and `fork` all use the A2.2 paths unchanged. Each frame gets `pmm_incref` and `PTE_SW_SHMEM`.
+  - `PROT_WRITE` is allowed because the fd is always `O_RDWR`. `PROT_EXEC` is refused (W^X, unchanged).
+  - **`MAP_PRIVATE` on an `FD_SHM` fd is `-EINVAL`.** A private copy of a shared object is a COW path that P3 does not need.
+  - The address hint follows the `mmap` rules, not `shmat`'s: 0 means the arena bump pointer, and a non-zero hint must be page-aligned, inside the arena and not overlapping.
+  - Shared pages are not charged to `aether_mem_charge` (agents cannot create them), as in A2.2.
+- **Other fd operations.**
+  - `fstat` reports `st_size = npages * 4096`.
+  - `read`, `write`, `lseek`, the io_uring reads and writes, and `mmap` of a non-`FD_SHM` fd with `MAP_SHARED` keep their existing answers: every one already returns `-EBADF`, `-EINVAL` or `-ENODEV` for a kind it does not know. P3 adds no byte I/O on a shm fd.
+  - `epoll` reports a shm fd as not pollable, as it does for every non-pipe, non-console kind.
+
+### A3.3 Gate: `smoke-shm` arms N-S (same probe)
+
+| Arm | Sentinel | What it shows |
+|---|---|---|
+| N | `PRADYOS_SHM_N fdshared=0x66` | The parent runs `shm_open`, sizes the object to 2 pages, maps both and writes `0x55` to page 1, then forks. The child maps **only page 1** through the inherited fd (`off = 4096`), checks that it reads `0x55`, writes `0x66` and exits. The parent reads `0x66` through its own mapping. This proves that the fd names the object and that `off` selects the page. |
+| O | `PRADYOS_SHM_O rejects=4` | `shm_open` with a real name is `-EACCES`; with `NULL` it is `-EACCES`; with `O_RDONLY` it is `-EINVAL`; with an unknown `oflag` bit it is `-EINVAL`. |
+| P | `PRADYOS_SHM_P rejects=7` | All of these are `-EINVAL`: `mmap` before `ftruncate`; a second `ftruncate`; `ftruncate(0)`; `ftruncate` over 1 MiB on a fresh object; `mmap` with `off + len` past the size; `MAP_PRIVATE` on the fd; `mmap` with `len = -1` (A3.4). |
+| Q | `PRADYOS_SHM_Q cycles=64 opened=64 leaked_ok=1` | 64 cycles of: `shm_open`, `ftruncate(4 pages)`, `mmap`, write, `close` **while mapped**, read back, then `munmap`. The value must survive the `close` (the mapping keeps the object). The table has 32 slots, so a leak of one object per cycle fails `opened` at cycle 33. The free-page drop must stay under 128 pages; a frame leak would be 256 pages. |
+| R | `PRADYOS_SHM_R child_hold=0x77` | The parent sizes and maps an object, writes `0x77` and **unmaps it before forking**, so the child inherits the fd but no mapping. The child waits on a P1 flag page. The parent **closes its fd**, then sets the flag. The child, whose fd is now the only holder, maps the object and reads `0x77`. This proves `fd_clone` takes a hold. An inherited mapping would keep the object alive by itself, which is why there is none. |
+| S | `PRADYOS_SHM_S dup_hold=0x88` | `dup2(fd, 20)`, `close(fd)`, then `mmap` through fd 20 reads the `0x88` written earlier through the old mapping (unmapped before the `mmap`). This proves `dup2` takes a hold. |
+
+**Vacuity:** before P3, `SYS_SHM_OPEN` is `-ENOSYS`. The probe prints `PRADYOS_SHM FAIL shm_open=-38` (forbidden), and arms N–S are absent, so the gate is red. Arms O and P are boundary arms. They pass trivially only if `shm_open` itself fails, and that case is caught by the `FAIL` line.
+
+**Mutants (each lands on a different arm and is shown red in CI before merge):**
+
+| Mutant | Change | Arm |
+|---|---|---|
+| S3-1 | `mmap` ignores `off` (always maps from page 0) | N |
+| S3-2 | the name check accepts any pointer | O |
+| S3-3 | `ftruncate` may resize an object that is already sized | P |
+| S3-4 | `fd_free` does not drop the hold (every closed object leaks its slot) | Q (`opened`) |
+| S3-5 | `fd_clone` does not take a hold | R |
+| S3-6 | `dup2` does not take a hold | S |
+
+**S3 mutant runs.** S3-1 [40322278330](https://github.com/prady4the4bady/prady4os/actions/runs/40322278330) red on N (`fdshared=0x00`); S3-2 [40322308133](https://github.com/prady4the4bady/prady4os/actions/runs/40322308133) red on O (`rejects=2`); S3-3 [40322337823](https://github.com/prady4the4bady/prady4os/actions/runs/40322337823) red on P (`rejects=4`); S3-4 [40322367227](https://github.com/prady4the4bady/prady4os/actions/runs/40322367227) red on Q (`opened=30`); S3-6 [40322426930](https://github.com/prady4the4bady/prady4os/actions/runs/40322426930) red on S (`dup_hold=0x00`). **S3-5 survived** ([40322396520](https://github.com/prady4the4bady/prady4os/actions/runs/40322396520), green). The cause was the P2 defect recorded in A2.4, not arm R: the probe's three removed SysV shmids held the P3 object through `cap_fork`, so the child's fd was not the only hold. With A2.4 those shmids pin their own dead slots. **S3-5 re-run** on the merged head `c5a26b8` (mutant `759dc46`, run [40545214807](https://github.com/prady4the4bady/prady4os/actions/runs/40545214807)): red on R only, `PRADYOS_SHM_R child_hold=0x00` (want `0x77`), every other arm on the sentinel. S3-1 to S3-6 are now all red on their designed arms.
+
+**S3 re-run on the merged head `093bbe4`** (P3 plus #78 `551b562`, which carries `dev/phase1` through `9306963`; fixed tree green on [41434076815](https://github.com/prady4the4bady/Prady4OS/actions/runs/41434076815)). Each mutant was re-applied on `093bbe4`, builds with 0 warnings, and gives its own `kernel.bin`. Only `smoke-shm` (shard 0) failed in each run:
+
+| Mutant | Run on `093bbe4` | Red on |
+|---|---|---|
+| S3-1 | [41434433917](https://github.com/prady4the4bady/Prady4OS/actions/runs/41434433917) | **N** `fdshared=0x00`. P is red too (`rejects=5`, want `6`). The mutated line sets `first = 0`, and `shm_fd_map` uses `first` in its size bound, so the `off + len` past-the-size `mmap` in P is accepted. That is the same defect, seen by a second arm. |
+| S3-2 | [41434436902](https://github.com/prady4the4bady/Prady4OS/actions/runs/41434436902) | **O** only, `rejects=2` |
+| S3-3 | [41441841656](https://github.com/prady4the4bady/Prady4OS/actions/runs/41441841656) | **P** only, `rejects=4` |
+| S3-4 | [41443116765](https://github.com/prady4the4bady/Prady4OS/actions/runs/41443116765) | **Q** `opened=25` (want `64`). The probe then stops at `PRADYOS_SHM FAIL r_open=-28` (`-ENOSPC`): the leaked objects fill the table, so R cannot open one |
+| S3-5 | [41445828110](https://github.com/prady4the4bady/Prady4OS/actions/runs/41445828110) | **R** only, `child_hold=0x00` |
+| S3-6 | [41447493592](https://github.com/prady4the4bady/Prady4OS/actions/runs/41447493592) | **S** only, `dup_hold=0x00` |
+
+Every arm N–S is shown red on this head, each by the mutant designed for it. QEMU TCG only; **not verified on real hardware**.
+
+### A3.4 A length that wraps to zero pages (CodeRabbit 4443548860)
+
+**Defect, found in review.**
+- `sys_mmap_locked` refused only `len == 0`.
+- For `len` within a page of 2^64, `(len + PAGE_SIZE - 1) / PAGE_SIZE` wraps to 0. `shm_fd_map` then:
+  - takes an attach (`shm_attach_begin`);
+  - passes the size check (`first + 0`);
+  - stores an area with `npages = 0`.
+- Every VMA walker treats `npages == 0` as a free slot: `munmap`, `shm_release_vmas` and `shm_fork_vmas`. So the attach is never detached, `nattch` never reaches 0, and the slot leaks.
+- One unprivileged process can fill the 32-slot table this way.
+
+**Fix.** `len > VMM_MMAP_TOP - VMM_MMAP_BASE` is `-EINVAL`, checked before any path rounds `len` to pages.
+- No mapping can exceed the arena anyway; `mmap_pick_base` already refused larger ones with `-EINVAL`.
+- This covers every `mmap` path: anonymous, private file, `FD_SHM` and the P4 file path.
+
+**Gate.** Arm P gains `mmap(len = -1)` on the fd and now wants `rejects=7`.
+- **Vacuity:** on the tree before the fix the call returns an address, so it is not counted, and P prints `rejects=6`: red.
+- **Mutant S3-7:** remove the bound. It must be red on P.
+
+**Runs on `6943d97`** (fixed tree green on [41464838400](https://github.com/prady4the4bady/Prady4OS/actions/runs/41464838400), P `rejects=7`):
+- **S3-7** ([41464834933](https://github.com/prady4the4bady/Prady4OS/actions/runs/41464834933)): red on P only, `rejects=6`. Every other arm A–T is on its sentinel.
+- **S3-3 re-run** ([41475898640](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475898640)): re-applied on `6943d97` because arm P changed. Red on P only, `rejects=5`.
+- **S3-1, S3-2, S3-4, S3-5 and S3-6 were not re-run.** They stand on their runs on `093bbe4`. The only kernel change since then is this length bound: none of them touches it, and none of arms N, O, Q, R or S passes a length above the arena. That is a reading of the code, stated as such.
+
+**NSI:** 116 `SYS_SHM_OPEN`.
 
 ## 7. Honesty labels
 
-**Page counts in arms J, L and M (DDR-1185).** All three read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
+**Page counts in arms J, L, M and Q (DDR-1185).** All four read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
 - **M moves onto `pm_measure`.** Its window spans a fork, the child's run and exit, and the reap, so the scheduler runs other processes inside it. A burst that frees pages there could hide a leaked segment (a false pass). `reclaimed=1` now needs a conclusive trial with drop < `RECLAIM_MIN`; an inconclusive trial is red. The meter lines are printed as `[shm] M drop=` and `[shm] M meter`.
+- **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
 - **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 and P4 are **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.

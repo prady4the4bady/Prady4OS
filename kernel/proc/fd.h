@@ -28,12 +28,15 @@ enum fd_kind {
     FD_VFS,            /* regular file backed by the VFS (slice 4)        */
     FD_PIPE,           /* anonymous pipe end (PROC-A)                     */
     FD_EPOLL,          /* epoll instance (PROC-B)                         */
+    FD_SHM,            /* shm_open(SHM_ANON) object (DDR-1178 A3); the
+                        * object index is kept in `mnt`, so the entry and
+                        * struct tcb keep their size                     */
 };
 
 struct fd_entry {
     int              kind;     /* enum fd_kind                            */
     uint64_t         off;      /* current byte offset (FD_VFS)            */
-    int              mnt;      /* owning mount id (FD_VFS)                */
+    int              mnt;      /* owning mount id (FD_VFS) / object (FD_SHM) */
     struct vfs_file *file;     /* heap-allocated open-file state (FD_VFS) */
     struct pipe     *pipe;     /* shared pipe object (FD_PIPE)            */
     struct epoll    *epoll;    /* epoll instance (FD_EPOLL)               */
