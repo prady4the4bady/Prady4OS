@@ -31,6 +31,15 @@ So the check passes. `vma_overlaps` computes the same wrapped end, so it sees no
 
 **Why the reasoning above is believed (W1 run 41553380786):** with the check restored and this probe call in `systest`, every boot shard that runs `systest` panics. Shard 5's panic is `#GP` in `list_remove` (`kernel/mm/pmm.c`, the buddy free list), at RIP `0xFFFFFFFF80011442` = `list_remove+0x32`. That RIP was resolved against a local build of the same commit `7b0c81b`, not against the CI artefact. A freed shared table node (step 3) would corrupt the allocator in exactly this way. That link is **likely, not proven**.
 
+**A second hazard, at teardown (CodeRabbit 4450365007; read from `vmm.c`, not run).**
+- **How a top-level entry gets promoted.** Each address space has its own PML4 page, whose kernel slots are copies of the kernel master's entries.
+  - `descend` promotes the entry it walks through *in this copy* to `VMM_USER`. That happens for `PML4[511]` on page 0's walk, and for `PML4[0]` on page 1's walk, before the 2 MiB page refuses it.
+  - The promoted slot then no longer equals the master's entry.
+- **What teardown does with it.** `vmm_destroy_address_space` (`vmm.c:418-423`) frees the subtree of every slot whose entry differs from the master (`np[i] != kp[i]`), on the rule that such a slot is private.
+  - So when this process's address space is destroyed, it frees the kernel's *shared* PDPT/PD/PT tables under `PML4[0]` and `PML4[511]`.
+  - That needs no rollback at all, so it also follows from a wrapping call whose page 1 had mapped.
+- **Not shown to be W1's cause.** No teardown trace from W1 shows this path either, so it is a second candidate cause for the panic. Neither is proven.
+
 Any ring-3 process can do this with one `mmap` call. The result is user-accessible entries in the shared kernel page tables, and possibly a freed kernel table node.
 
 ## 2. The fix
@@ -52,7 +61,7 @@ if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
 `user/systest.asm` adds one call after the offset check: `mmap(0xFFFFFFFFFFFFF000, 8192, RW, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)`. It prints `SYSMMAP WRAP REJECTED` only if the call returns `-EINVAL`. The line is added to `smoke-sysmmap`'s sentinels.
 
 - **Vacuity.** On the tree before the fix the call returns `-ENOMEM` (§1 step 4), not `-EINVAL`. So the line is never printed and the gate is red, whatever else the call corrupts.
-- **Mutant W1** restores the wrapping sum. Run [41553380786](https://github.com/prady4the4bady/Prady4OS/actions/runs/41553380786) on `7b0c81b`: **red, though not at the designed sentinel.** All 10 boot shards fail with `NEXUS KERNEL PANIC`. In shard 5 the panic comes in the shard's first gate (`smoke-mprotect`), before `smoke-sysmmap` runs, so `SYSMMAP WRAP REJECTED` is never reached; the panic itself is §1 step 3's corruption. The fixed tree is green (see the PR).
+- **Mutant W1** restores the wrapping sum. Run [41553380786](https://github.com/prady4the4bady/Prady4OS/actions/runs/41553380786) on `7b0c81b`: **red, though not at the designed sentinel.** All 10 boot shards fail with `NEXUS KERNEL PANIC`. In shard 5 the panic comes in the shard's first gate (`smoke-mprotect`), before `smoke-sysmmap` runs, so `SYSMMAP WRAP REJECTED` is never reached. The panic is **likely** §1 step 3's corruption, which is not proven (§1). The fixed tree is green on `996d67b` ([41554913417](https://github.com/prady4the4bady/Prady4OS/actions/runs/41554913417), 16 of 16 jobs).
 
 ## 4. Where else it applies
 
@@ -63,5 +72,5 @@ if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
 ## 5. Honesty labels
 
 - **Gated** by `smoke-sysmmap`, `SYSMMAP WRAP REJECTED`. QEMU TCG only, **not verified on real hardware**.
-- **Not gated:** what the unfixed kernel does to its page tables (§1 steps 1 and 3). The gate checks only that the call is refused with `-EINVAL`.
+- **Not gated:** what the unfixed kernel does to its page tables (§1 steps 1 and 3, and the teardown hazard). The gate checks only that the call is refused with `-EINVAL`.
 - **Not fixed here, recorded:** `descend` promotes any entry it walks to `VMM_USER`. After this fix no user mapping can reach a kernel-half entry through `mmap`. Whether other callers of `vmm_map_in` can reach one is not audited in this record.

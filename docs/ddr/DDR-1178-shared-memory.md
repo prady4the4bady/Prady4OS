@@ -178,7 +178,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **NSI:** 112 `SYS_SHMGET`, 113 `SYS_SHMAT`, 114 `SYS_SHMDT`, 115 `SYS_SHMCTL` (110 and 111 are DDR-1181's).
 
-### A2.3 Gate: `smoke-shm` arms G-L (same probe, `user/shmtest.c`)
+### A2.3 Gate: `smoke-shm` arms G-M (same probe, `user/shmtest.c`)
 
 | Arm | Sentinel | What it shows |
 |---|---|---|
@@ -233,7 +233,7 @@ D1(c) says a segment "is reachable only through what the creator holds: the shmi
 
 **Defect, from a real artefact.** S3-5 (`fd_clone` takes no hold) stayed green in run [40322396520](https://github.com/prady4the4bady/prady4os/actions/runs/40322396520). The diagnostic build `mut/shm3-S3-5-diag` (`83bb3e9`, run [40470702205](https://github.com/prady4the4bady/prady4os/actions/runs/40470702205), never merged) printed every hold and put. In arm R the object's `holders` went from 1 to 4 across the `fork`, although the mutant's `fd_clone` took no hold, so the parent's `close` left 3 and the child's `mmap` succeeded. The three extra holds are `cap_fork` (`kernel/cap.c`) copying three RES_SHM capabilities: the three shmids the probe removes with `IPC_RMID` earlier in the same process (`id` of arms H-J, `id2` of K, `id3` of L).
 
-**Mechanism.** `put_and_reclaim` destroyed a marked, unmapped segment and set `used = 0` while capabilities still named it (`marked || holders == 0`). A capability stores only the slot index, so after `shm_obj_create` reused the slot (it takes the lowest free one), every old shmid resolved to the **new** object:
+**Mechanism.** `put_and_reclaim` destroyed a marked, unmapped segment and set `used = 0` while capabilities still named it (`marked || holders == 0`). A RES_SHM capability stores only the shared-memory object index (`res_id`), with no object generation. After `shm_obj_create` reused that object slot (it takes the lowest free one), every old shmid resolved to the **new** object:
 
 - `shmat(old_shmid)` mapped the new object, which can belong to another process. That breaks D1(c): a segment is reachable only through a capability its creator's table was given.
 - The old capabilities' holds and unholds (`cap_fork`, table teardown) counted against the new object, so its `holders` drifted. In arm R that kept a P3 object alive after its last fd had closed, which is why S3-5 could not turn R red.
