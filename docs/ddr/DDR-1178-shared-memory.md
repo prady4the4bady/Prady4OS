@@ -341,6 +341,11 @@ Every arm N–S is shown red on this head, each by the mutant designed for it. Q
 - **Vacuity:** on the tree before the fix the call returns an address, so it is not counted, and P prints `rejects=6`: red.
 - **Mutant S3-7:** remove the bound. It must be red on P.
 
+**Runs on `6943d97`** (fixed tree green on [41464838400](https://github.com/prady4the4bady/Prady4OS/actions/runs/41464838400), P `rejects=7`):
+- **S3-7** ([41464834933](https://github.com/prady4the4bady/Prady4OS/actions/runs/41464834933)): red on P only, `rejects=6`. Every other arm A–T is on its sentinel.
+- **S3-3 re-run** ([41475898640](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475898640)): re-applied on `6943d97` because arm P changed. Red on P only, `rejects=5`.
+- **S3-1, S3-2, S3-4, S3-5 and S3-6 were not re-run.** They stand on their runs on `093bbe4`. The only kernel change since then is this length bound: none of them touches it, and none of arms N, O, Q, R or S passes a length above the arena. That is a reading of the code, stated as such.
+
 **NSI:** 116 `SYS_SHM_OPEN`.
 
 ## Amendment 4 (2026-11-02 UTC, after Amendment 3): P4 design, shared file mappings with write-back
@@ -493,6 +498,25 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 | S4-6 | `PROT_WRITE` allowed on an `O_RDONLY` fd | FF |
 | S4-7 | the last detach of a file object leaves its slot dead (`used = 3`) instead of free. A slot that stays live would be found again by its key and reused, so it would not leak. | FG |
 
+**S4 runs** on `dda8bf0` (P4 plus #80's `6943d97`; fixed tree green on [41475702132](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475702132)). Each mutant builds with 0 warnings and gives its own `kernel.bin`. Only `smoke-shm` (shard 0) failed in each red run.
+
+| Mutant | Run | Result |
+|---|---|---|
+| S4-1 | [41475905429](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475905429) | **red on FA** `msync=0x00`. FB is red too (`redirty=0x00`), because FB also reads the file after an `msync`. Same defect. |
+| S4-2 | [41482000288](https://github.com/prady4the4bady/Prady4OS/actions/runs/41482000288) | **green: not shown red.** See below. |
+| S4-3 | [41482218024](https://github.com/prady4the4bady/Prady4OS/actions/runs/41482218024) | **red on FC** only, `shared=0x00` |
+| S4-4 | [41501319306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41501319306) | **red on FD** only, `munmap=0x00` |
+| S4-5 | [41501322606](https://github.com/prady4the4bady/Prady4OS/actions/runs/41501322606) | **red on FE** only, `exit=0x00` |
+| S4-6 | [41501328002](https://github.com/prady4the4bady/Prady4OS/actions/runs/41501328002) | **red on FF** only, `rejects=7` |
+| S4-7 | [41526232483](https://github.com/prady4the4bady/Prady4OS/actions/runs/41526232483) | **red on FG** only, `opened=23` |
+
+**S4-2 stayed green, so the TLB invalidation of §A4.4 step 2 is not gated.**
+- FB does gate that a second `msync` writes the newer value, and S4-1 shows FB red. It does not gate the invalidation itself.
+- **Likely reason, not verified:** `msync`'s write-back blocks on disk I/O, the scheduler switches address space, and the CR3 reload drops the stale writable TLB entry. A missing `invlpg` then has no visible effect on this platform.
+- The invalidation stays in the code because it is what x86 requires when no context switch intervenes. It is labelled **not gated**.
+
+**Why these runs still stand on the current head.** Since `dda8bf0` the only kernel change is #80's DDR-1196 arena bound in `mmap_pick_base`. Arms FA–FG pass `addr = 0` and lengths of a few pages, so they never reach the new branch. None of the S4 mutants touches it. That is a reading of the code, stated as such.
+
 ### A4.6 Not in P4, recorded here
 
 - `MS_INVALIDATE`, so `write(2)` does not reach an existing mapping. Until a page cache exists (checklist "page cache with dirty-page write-back"), `read(2)` and `write(2)` are not coherent with a shared mapping:
@@ -515,4 +539,4 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 - **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
 - **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **designed** (Amendment 4: arms FA-FG, mutants S4-1..S4-7), **not implemented and not gated**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **gated by `smoke-shm` arms FA-FG** (Amendment 4): S4-1 and S4-3..S4-7 are shown red in CI; S4-2 is not, so the TLB invalidation step is **not gated**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
