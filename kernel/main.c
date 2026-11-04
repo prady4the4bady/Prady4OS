@@ -3180,13 +3180,17 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] SIGSEM probe FAILED to load\r\n");
                     }
                 }
-                /* DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. */
+                /* DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork.
+                 * A4.5 (P4): FAT-rooted, so arms FA-FG map a FAT32 file (a
+                 * process reaches only its root mount); arms A-T touch no
+                 * files. Root before unblock, as fat32mc. */
                 if (probe_enabled("shm")) {
                     struct tcb *sm = 0;
                     uint64_t smlen = (uint64_t)(uintptr_t)shmtest_elf_end -
                                      (uint64_t)(uintptr_t)shmtest_elf;
                     if (elf_load((void *)(uintptr_t)shmtest_elf, smlen,
                                  "SHMTEST", &sm) == ELF_OK && sm) {
+                        sm->root_mnt = mnt;
                         sched_unblock(sm);
                         kputs("[user] SHM probe spawned\r\n");
                     } else {

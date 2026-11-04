@@ -197,6 +197,7 @@
 #define SYS_SHM_OPEN       116 /* DDR-1178 A3: (SHM_ANON, O_RDWR, mode) -> fd | -EACCES|-EINVAL|-EMFILE|-ENOSPC|-EPERM */
 #define SYS_FUTEX          117 /* DDR-1181 A1: (uaddr, op, val, timespec*, -, -) -> 0|n | -EAGAIN|-ETIMEDOUT|-EINTR|-EINVAL|-EFAULT|-ENOSYS */
 #define SYS_SCHED_CPU      118 /* DDR-1186: (op, cpu) op 0 GET -> cpu index; 1 PIN -> 0|-EINVAL; 2 UNPIN -> 0 */
+#define SYS_MSYNC          119 /* DDR-1178 A4: (addr, len, flags) -> 0 | -EINVAL|-ENOMEM|-EAGAIN|-EIO */
 #define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */

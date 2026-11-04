@@ -139,6 +139,12 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     if (rc != ELF_OK)
         return -ENOEXEC;
 
+    /* DDR-1178 A4.4: write back the old image's shared file mappings while
+     * its address space is still t->cr3 (mm->cr3 moves to new_as below) and
+     * the filesystem may still block. Only this thread runs in the mm (the
+     * refs check above), so nothing dirties a page after this. */
+    shm_writeback_vmas(t->mm);
+
     /* ---- point of no return: commit the new image (IF is clear here) ---- */
     for (int fd = 3; fd < FD_MAX; fd++)
         fd_free(t, fd);                        /* keep stdio (0/1/2) across exec */
