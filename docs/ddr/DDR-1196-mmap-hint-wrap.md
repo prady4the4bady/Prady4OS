@@ -73,7 +73,7 @@ if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
 
 - **Gated** by `smoke-sysmmap`, `SYSMMAP WRAP REJECTED`. QEMU TCG only, **not verified on real hardware**.
 - **Not gated:** what the unfixed kernel does to its page tables (§1 steps 1 and 3, and the teardown hazard). The gate checks only that the call is refused with `-EINVAL`.
-- **Not fixed here, recorded:** `descend` promotes any entry it walks to `VMM_USER`. After this fix no user mapping can reach a kernel-half entry through `mmap`. Whether other callers of `vmm_map_in` can reach one is not audited in this record.
+- **Not fixed here, recorded:** `descend` promotes any entry it walks to `VMM_USER`. After this fix no user mapping can reach a kernel-half entry through `mmap`. DDR-1198 audits the other callers of `vmm_map_in`: after this fix, none can start a promotion of a shared kernel entry. Fork can still spread one made earlier into a child, with the same teardown hazard (DDR-1198 §2).
 
 ## Amendment 1 (2026-11-03): W1's panic cause, named from a diagnostic run
 
