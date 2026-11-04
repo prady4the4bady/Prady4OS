@@ -4415,8 +4415,8 @@ smoke-tlbshoot: $(IMG) fat-image sfs-image
 # DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. Arms A-F (DDR-1178 §4).
 smoke-shm: $(IMG) fat-image sfs-image
 	@rm -f build/shm.log
-	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_PROBES=shm \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_G key=-13\nPRADYOS_SHM_H shared=0x66\nPRADYOS_SHM_I forged=0\nPRADYOS_SHM_J eidrm=-43 freed_ok=1\nPRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13\nPRADYOS_SHM_L nattch_fork=1\nPRADYOS_SHM_M reclaimed=1\nPRADYOS_SHM_T stale=-22\nPRADYOS_SHM_N fdshared=0x66\nPRADYOS_SHM_O rejects=4\nPRADYOS_SHM_P rejects=7\nPRADYOS_SHM_Q cycles=64 opened=64 leaked_ok=1\nPRADYOS_SHM_R child_hold=0x77\nPRADYOS_SHM_S dup_hold=0x88\nPRADYOS_SHM_DONE')" \
+	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_SMP=4 QEMU_PROBES=shm \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_G key=-13\nPRADYOS_SHM_H shared=0x66\nPRADYOS_SHM_I forged=0\nPRADYOS_SHM_J eidrm=-43 freed_ok=1\nPRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13\nPRADYOS_SHM_L nattch_fork=1\nPRADYOS_SHM_M reclaimed=1\nPRADYOS_SHM_T stale=-22\nPRADYOS_SHM_N fdshared=0x66\nPRADYOS_SHM_O rejects=4\nPRADYOS_SHM_P rejects=7\nPRADYOS_SHM_Q cycles=64 opened=64 leaked_ok=1\nPRADYOS_SHM_R child_hold=0x77\nPRADYOS_SHM_S dup_hold=0x88\nPRADYOS_SHM_FA msync=0xa1\nPRADYOS_SHM_FB redirty=0xb2\nPRADYOS_SHM_FC shared=0xc3\nPRADYOS_SHM_FD munmap=0xd4\nPRADYOS_SHM_FE exit=0xe5\nPRADYOS_SHM_FF rejects=8\nPRADYOS_SHM_FG cycles=40 opened=40\nPRADYOS_SHM_FH rounds=16 lost=0 placed=16\nPRADYOS_SHM_FI orphan=0xf1\nPRADYOS_SHM_FJ grow=-16 inplace=1\nPRADYOS_SHM_DONE')" \
 	FORBIDDEN_SENTINEL="PRADYOS_SHM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[shm\]" build/shm.log || true

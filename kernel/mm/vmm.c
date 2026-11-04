@@ -490,6 +490,30 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable) 
     return 1;
 }
 
+/* DDR-1178 A4.4: the hardware dirty bit of the user leaf PTE for `virt`.
+ * VMM_DIRTY_TEST reads it, VMM_DIRTY_CLEAR clears it and returns what it was,
+ * VMM_DIRTY_SET sets it again (a failed write-back keeps the page dirty).
+ * Atomic, because the MMU sets D with a locked update on another CPU. A clear
+ * in the ACTIVE address space also drops this CPU's TLB entry: a cached
+ * writable entry would let a later store skip setting D. The caller shoots
+ * down the other CPUs (tlb_shoot). Returns 1 dirty, 0 clean, -1 no user page. */
+int vmm_dirty_op(uint64_t cr3, uint64_t virt, int op) {
+    uint64_t *pte = leaf_pte(cr3 & PTE_ADDR, virt);
+    if (!pte || !(*pte & PTE_PRESENT) || !(*pte & VMM_USER))
+        return -1;
+    uint64_t old;
+    if (op == VMM_DIRTY_CLEAR) {
+        old = __atomic_fetch_and(pte, ~VMM_DIRTY, __ATOMIC_SEQ_CST);
+        if ((old & VMM_DIRTY) && (read_cr3() & PTE_ADDR) == (cr3 & PTE_ADDR))
+            invlpg(virt);
+    } else if (op == VMM_DIRTY_SET) {
+        old = __atomic_fetch_or(pte, VMM_DIRTY, __ATOMIC_SEQ_CST);
+    } else {
+        old = __atomic_load_n(pte, __ATOMIC_SEQ_CST);
+    }
+    return (old & VMM_DIRTY) ? 1 : 0;
+}
+
 uint64_t vmm_resolve_pte(uint64_t cr3, uint64_t virt) {
     uint64_t *pte = leaf_pte(cr3 & PTE_ADDR, virt);
     return pte ? *pte : 0;

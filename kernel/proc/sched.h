@@ -42,6 +42,10 @@ struct vm_area {
     uint64_t npages;   /* length in pages; 0 = free slot            */
     int32_t  shm;      /* DDR-1178 A2.2: attached segment object + 1; 0 = none */
     int32_t  shm_ro;   /* 1 if attached SHM_RDONLY (mprotect may not add write) */
+    uint32_t pgoff;    /* DDR-1178 A4.3: first object page this area maps    */
+    uint32_t pad0;
+    uint64_t wcap;     /* DDR-1178 A4.3 (D4): the fd's cap_t, captured at mmap,
+                        * for write-back of a FILE object; 0 = read-only area */
 };
 
 /* DDR-872: 4096 covers x87+SSE (512), AVX (576), and the full AVX-512

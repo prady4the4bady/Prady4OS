@@ -137,5 +137,12 @@ void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
  * at `cr3` (4 KiB leaf), or 0 if not present. Used by sys_munmap to find the
  * frame to free after clearing the PTE. */
 uint64_t vmm_resolve(uint64_t cr3, uint64_t virt);
+/* DDR-1178 A4.4: the hardware dirty bit (bit 6) of a user leaf PTE. See
+ * vmm.c. Returns 1 dirty, 0 clean, -1 when no user page is mapped there. */
+#define VMM_DIRTY        0x40ull
+#define VMM_DIRTY_TEST   0
+#define VMM_DIRTY_CLEAR  1
+#define VMM_DIRTY_SET    2
+int vmm_dirty_op(uint64_t cr3, uint64_t virt, int op);
 /* DDR-1181 A1.2: the whole leaf PTE (flags included) for `virt`, or 0. */
 uint64_t vmm_resolve_pte(uint64_t cr3, uint64_t virt);

@@ -19,6 +19,7 @@
 #include "errno.h"
 #include "pmm.h"                 /* DDR-764: 4 KiB bounce page for FD_VFS writes */
 #include "aether.h"              /* DDR-1170: per-task byte budget */
+#include "shm.h"                 /* DDR-1178 A4.8: no growth of a mapped file */
 
 /* Write `count` (> 0) bytes from the user buffer at `uptr` to fd `e`, via the
  * validated copyin path (never a raw user dereference). Returns bytes written
@@ -121,6 +122,10 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
          * append cannot give when writers share a file. */
         if (e->flags & O_APPEND)
             e->off = e->file->size;
+        /* DDR-1178 A4.8: a mapped file may not grow; write-back would cut it
+         * back to the size it had when mapped. In-place writes stay allowed. */
+        if (shm_vfs_grow_refused(e->file, e->off, (uint64_t)count))
+            return -EBUSY;
         uint64_t kp = pmm_alloc_page();
         if (!kp)
             return -ENOMEM;
