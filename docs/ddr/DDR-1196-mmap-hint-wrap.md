@@ -74,3 +74,51 @@ if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
 - **Gated** by `smoke-sysmmap`, `SYSMMAP WRAP REJECTED`. QEMU TCG only, **not verified on real hardware**.
 - **Not gated:** what the unfixed kernel does to its page tables (§1 steps 1 and 3, and the teardown hazard). The gate checks only that the call is refused with `-EINVAL`.
 - **Not fixed here, recorded:** `descend` promotes any entry it walks to `VMM_USER`. After this fix no user mapping can reach a kernel-half entry through `mmap`. Whether other callers of `vmm_map_in` can reach one is not audited in this record.
+
+## Amendment 1 (2026-11-03): W1's panic cause, named from a diagnostic run
+
+Asked by: operator, #45 comment 6594717280, step 5 ("explain or fix W1's panic").
+
+**The cause is the teardown hazard (§1, second hazard), not the rollback (§1 step 3).** The diagnostic build was branch `diag/w1-r1`, commit `51e62ea`, never merged. It is `dev/phase1` `9105001` with two changes:
+- W1's wrapping bound restored in `mmap_pick_base`;
+- one `kline` in `vmm_destroy_address_space` for every kernel PML4 slot (any slot but 1 and 255) that it frees because the slot differs from the master.
+
+Run: [41739506343](https://github.com/prady4the4bady/Prady4OS/actions/runs/41739506343).
+
+**What shard 5 printed, in order, just before the panic** (the rest of the boot was normal):
+
+```text
+[w1diag] destroy frees kernel slot=0 e=0x0000000000301027 master=0x0000000000301023
+[pmm] DOUBLE FREE rejected addr=0x0000000000302000 caller=0xFFFFFFFF80011529
+*** NEXUS KERNEL PANIC ***
+  exception: #GP general protection  RIP=0xFFFFFFFF80011442
+```
+
+**What each line means:**
+1. **The process's `PML4[0]` had been promoted.** It differs from the master's only in bit 2, `VMM_USER` (`…027` against `…023`). That is `descend`'s promotion, made by page 1's walk to VA 0 (§1 step 2).
+2. **The teardown that frees it runs in `sys_execve`** (backtrace below): an exec drops the calling process's old address space. Which process exec'd is not printed. That it was `systest`, the process that made the wrapping call, is likely, not shown.
+3. **`free_subtree` then walks the boot loader's shared low identity map.** `boot/stage2/stage2.asm` lines 60–62 place it at PML4 `0x300000`, PDPT `0x301000` and PD `0x302000`.
+   - It first frees the PD at `0x302000`, which `pmm` rejects as a double free.
+   - It then frees the PDPT at `0x301000`, and that free faults in the buddy free list.
+   - None of these pages came from the PMM. They are stage 2's static tables, mapped and shared by every address space.
+
+**The panic RIP and backtrace** were resolved against a local build of the same commit `51e62ea` with `tools/ci/sym_at.sh`, not against the CI artefact. The chain is consistent in itself:
+- RIP `0xFFFFFFFF80011442` is `list_remove+0x32`.
+- The backtrace, innermost first: `pmm_free_pages+0x21d`, `pmm_free_page+0x19`, `ptnode_free+0x25`, `free_subtree+0xda`, `free_subtree+0x8d`, `vmm_destroy_address_space+0x177`, `sys_execve+0x4fd`.
+
+**Across the shards** (every boot shard runs `systest`):
+
+| Shards | What they printed |
+|---|---|
+| 2, 3, 4, 5, 6, 7, 8 | The same three lines: `slot=0`, the double free of `0x302000`, and the `#GP` at the same RIP |
+| 9 | The double free and the `#GP` at the same RIP. The `[w1diag]` line is not in the captured context. |
+| 0 | Failed in `smoke-iso-userspace` (`ps header`), with no panic line in the capture |
+| 1 | Failed in `smoke-compositor` (`key-driven mode flip not confirmed`), with no panic line in the capture |
+
+**Not attributed:** shards 0 and 1. Their failures may follow from the same corrupted allocator, but nothing in their logs shows it.
+
+**Not shown:**
+- Whether `PML4[511]` was also promoted. The loop reaches slot 0 first, and the panic stops it. Page 0's walk under slot 511 is reasoned in §1 and not shown here.
+- The rollback path (§1 step 3) is not shown to free anything shared in this run.
+
+**This changes no gate.** `SYSMMAP WRAP REJECTED` still gates the fix. The W1 status in §3 stands: red, though not at the designed sentinel. Its cause is now named by this run. QEMU TCG only, **not verified on real hardware**.
