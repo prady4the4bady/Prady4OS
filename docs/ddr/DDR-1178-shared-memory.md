@@ -346,13 +346,292 @@ Every arm N–S is shown red on this head, each by the mutant designed for it. Q
 - **S3-3 re-run** ([41475898640](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475898640)): re-applied on `6943d97` because arm P changed. Red on P only, `rejects=5`.
 - **S3-1, S3-2, S3-4, S3-5 and S3-6 were not re-run.** They stand on their runs on `093bbe4`. The only kernel change since then is this length bound: none of them touches it, and none of arms N, O, Q, R or S passes a length above the arena. That is a reading of the code, stated as such.
 
+**S3 re-run on #80's final head `e926ddd`** (operator 6594717280, step 3). The fixed tree is green on [41636299964](https://github.com/prady4the4bady/Prady4OS/actions/runs/41636299964), all 17 checks. Each mutant was re-applied on `e926ddd` as `mut/shm3-S3-N-r4`. In every run only shard 0 (`smoke-shm`) failed, and shard 8 passed:
+
+| Mutant | Run on `e926ddd` | Red on |
+|---|---|---|
+| S3-1 | [41636477913](https://github.com/prady4the4bady/Prady4OS/actions/runs/41636477913) | **N** `fdshared=0x00`. P is red too (`rejects=6`, want `7`): the same `first = 0` defect, seen through `shm_fd_map`'s size bound, as on `093bbe4` |
+| S3-2 | [41636483654](https://github.com/prady4the4bady/Prady4OS/actions/runs/41636483654) | **O** only, `rejects=2` |
+| S3-4 | [41641677772](https://github.com/prady4the4bady/Prady4OS/actions/runs/41641677772) | **Q** `opened=25`; then `PRADYOS_SHM FAIL r_open=-28`, the table full of leaked objects, as on `093bbe4` |
+| S3-5 | [41641757884](https://github.com/prady4the4bady/Prady4OS/actions/runs/41641757884) | **R** only, `child_hold=0x00` |
+| S3-6 | [41646354735](https://github.com/prady4the4bady/Prady4OS/actions/runs/41646354735) | **S** only, `dup_hold=0x00` |
+
+S3-3 stands on its `6943d97` run above. #80 merged as `9105001`. QEMU TCG only; **not verified on real hardware**.
+
 **NSI:** 116 `SYS_SHM_OPEN`.
+
+## Amendment 4 (2026-11-02 UTC, after Amendment 3): P4 design, shared file mappings with write-back
+
+Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It reuses the A2.2 object table and the A3.2 attach path.
+
+**Security boundary: review before merge.** A writable shared file mapping writes the file later, with the capability captured at `mmap` (D4). The write can happen long after the fd is closed.
+
+### A4.1 What exists today (read from `ead9246`)
+
+- **The `mmap` path.** File-backed `MAP_SHARED` is refused (`sys_mmap.c`, the DDR-1178 P1 comment). File-backed `MAP_PRIVATE` is eager: DDR-1112 reads each page with `vfs_read` at `mmap` time.
+- **No page cache.** `read(2)` and `write(2)` go to the filesystem driver directly (`sys_io.c` → `vfs_write`). Each `open` has its own heap `struct vfs_file`, holding its own copy of `size`.
+- **Which filesystems can write.**
+  - FAT32 and pdrive write in place.
+  - SFS is append-only (D5).
+  - ext4 has no `write` op.
+- **There is no common inode number.** `struct vfs_file` has `cookie`, `dirent_clus` and `dirent_off`:
+  - ext4 and SFS store the inode in `cookie`. SFS also stores a snapshot root in `dirent_clus`.
+  - FAT32 stores the file's first cluster in `cookie`. That is 0 for an empty file and changes on the first write, so it does not identify the file. The file is identified by `dirent_clus` and `dirent_off`.
+  - pdrive stores its table index in `cookie`.
+- **Locks.**
+  - `mm_lock` is a `kmutex` (sleeping).
+  - `mnt_lock` is a sleeping mutex.
+  - `g_shm_lock` is a spinlock taken with IRQs off.
+  - The filesystem paths copy through kernel buffers and never take an `mm` lock. So the order `mm_lock` → `mnt_lock` is safe, and no I/O may happen under `g_shm_lock`.
+- **Where an address space is released.** The last `mm_put` (and with it `shm_release_vmas`) runs in `wait4` (`sys_wait.c`), in `exec` (`elf.c`) and in the reaper thread (`sched.c`). All three are thread context with IRQs on, so they may block.
+- **`fat32_write` always rewrites the file's directory entry** (`dirent_update` at `dirent_clus`/`dirent_off`, step 4), even for a write inside the file. So a write through a stale `struct vfs_file` corrupts the disk:
+  - after `unlink`, the clusters and the dirent slot are free and may belong to another file;
+  - after `rename`, the old dirent slot is free;
+  - after a truncate, the clusters past the new end are free.
+- **`vfs_write` charges the calling thread's write budget** (ADR-032: a 1 MiB bucket that refills at 256 KiB per tick). It returns `-EAGAIN` when the bucket is short. Write-back at reap time runs as the parent or the reaper thread, not as the mapper.
+- **The fd access mode is stored but not enforced.** `fd_entry.flags` keeps the open flags, but `sys_file.c` notes that every `FD_VFS` fd is writable. Enforcement is DDR-1182 (#72, not merged).
+- **A process reaches only its root mount** (`vfs_rename`: no path-to-mount resolution). `shmtest` runs on `vfs_default_mnt()`.
+
+### A4.2 Interface
+
+- **`mmap(addr, len, prot, MAP_SHARED, fd, off)` on an `FD_VFS` fd.**
+  - **Agents** get `-EPERM`, as in A2.2.
+  - **The filesystem must name the file.**
+    - The driver must provide a new optional `vfs_fs_ops.ident(ctx, f) -> uint64_t`:
+      - FAT32: `dirent_clus << 16 | dirent_off`;
+      - ext4 and SFS: `cookie | (uint64_t)dirent_clus << 32`;
+      - pdrive: `cookie`.
+    - The key is `(mnt, ident)`.
+    - A driver without `ident` gives `-ENODEV`.
+  - **Bounds.**
+    - `off` must be page-aligned.
+    - `off + len` must not pass the file's size rounded up to a page; otherwise `-EINVAL`. POSIX would allow the mapping and raise `SIGBUS` on access; refusing is simpler and cannot corrupt the file.
+    - A file larger than `SHM_MAX_PAGES` (1 MiB) is `-EFBIG`.
+    - An empty file is `-EINVAL`.
+  - **Read and write permission.**
+    - Any mapping needs an fd open for reading: an `O_WRONLY` fd is `-EACCES`.
+    - `PROT_WRITE` needs the fd open `O_RDWR` and a filesystem with in-place write. A new `vfs_fs_ops.shared_write` flag is set by FAT32 and pdrive only. Otherwise it is `-EACCES`. That covers an `O_RDONLY` fd, an SFS file (D5) and an ext4 file.
+    - The check reads `fd_entry.flags`. Until DDR-1182 enforces the access mode for `write(2)` too, it is consistent with the open mode but is not, on its own, a boundary.
+  - **Write budget (ADR-032).**
+    - A `PROT_WRITE` mapping prepays its whole size, `npages * 4096` bytes, from the mapper's write bucket at `mmap`. If the bucket is short, `mmap` fails with `-EAGAIN`.
+    - Write-back at `munmap`, `exec` and release is then not charged again. That write-back is at most the area's size, which was prepaid, so it cannot be used to write faster than the bucket allows.
+    - `msync` charges its own writes in the caller's context, like `write(2)`.
+    - `PROT_EXEC` is refused (W^X).
+    - A mapping made without write permission is recorded as read-only (`vm_area.shm_ro = 1`). `mprotect` then cannot add `PROT_WRITE`; this is the A2.2 rule, gated by arm K.
+- **New `SYS_MSYNC` = NSI 119**, `(addr, len, flags)`.
+  - **Arguments.**
+    - `addr` must be page-aligned (`-EINVAL`).
+    - `[addr, addr + len)` must lie inside one mapping (`-ENOMEM`, as POSIX). `len` 0 checks the page at `addr`.
+  - **Flags.**
+    - Exactly one of `MS_ASYNC` (1) or `MS_SYNC` (4) must be set. Both write back synchronously before returning.
+    - `MS_INVALIDATE` (2) is `-EINVAL`: not supported (§A4.6).
+  - **Effect.**
+    - It writes back the dirty pages of that range.
+    - On an anonymous, SysV or P3 mapping there is nothing to write, and it returns 0.
+    - A write-back error returns `-EIO`.
+- **A mapped file is busy.** While a FILE object exists for a file, each of these is `-EBUSY`:
+  - `ftruncate`;
+  - `open` with `O_TRUNC` (which is unlink plus create, DDR-782);
+  - `unlink`;
+  - `rename`, of the file or onto it.
+
+  Each would make a later write-back use freed clusters or a freed directory entry (§A4.1). POSIX allows all four; Linux keeps the pages alive and raises `SIGBUS` past the end. Until a page cache owns file identity, P4 refuses them.
+
+### A4.3 Objects and frames (D5's frame table, on the A2.2 table)
+
+- **One object per mapped file.**
+  - A file object is an A2.2 slot with `kind = FILE`, holding:
+    - the key;
+    - a copy of the `struct vfs_file` taken at first `mmap`;
+    - `npages = ceil(size / 4096)`, with the frames read eagerly from the file. The tail past `size` is zero.
+  - A file object has no id and no fd hold. `holders` stays 0, so it lives while it is attached (`nattch > 0`). The last detach frees it, and the next `mmap` reads the file again.
+  - It shares the 32-slot table with SysV and P3 objects.
+- **Lookup.**
+  - `mmap` finds a live object with the same key under `g_shm_lock` and attaches it. So two mappers of one file share frames: each sees the other's writes at once, with no `msync`. This is what D5 asks for.
+  - If there is no such object, a new one is created. Its frames are read with `vfs_read` **outside** `g_shm_lock`. The slot is published only after the read.
+  - Two concurrent first mappers can both read. The second to publish finds the first's object, drops its own frames, and attaches the first's object.
+- **The attach is the A3.2 path.** It goes through `shm_attach_begin` and `vm_area.shm`, with `pmm_incref` and `PTE_SW_SHMEM` on each frame. So `fork`, `exec`, `munmap` and the last `mm_put` reuse the A2.2 detach paths. A4.4 adds a write-back step in front of them.
+- **The capability (D4).**
+  - Each attaching `vm_area` records the fd's `cap` in a new field `vm_area.wcap`. It is 0 for a read-only mapping.
+  - `fork` copies it with the area.
+  - Write-back of an area's dirty pages uses that area's `wcap` and the object's `vfs_file` copy.
+  - `vm_area` lives in `struct mm`, not in `struct tcb`, so the pinned `tcb` offsets (DDR-1181) do not move.
+
+### A4.4 Write-back
+
+- **Dirty means the PTE's D bit.** Each mapper has its own PTE for a shared frame, so each area writes back the pages that *it* dirtied.
+- **Steps, per page in the range:**
+  1. Under `mm_lock`, test and clear D in that area's PTE.
+  2. Invalidate the TLB entry on every CPU that may hold it: the existing shootdown for this `mm`.
+     - Without this step the CPU keeps a writable TLB entry whose D bit is already set. A later write would not set D in the PTE again, and the next write-back would miss it.
+  3. Write the page with `vfs_write(wcap, &obj->file, page_off, frame, n)`. `n` is clipped to the size recorded at first `mmap`, so write-back never extends the file.
+- **Write-back runs at:**
+  - `msync`;
+  - `munmap`, before the unmap;
+  - **`exec`**, from `shm_writeback_vmas` before the point of no return. After that point `mm->cr3` is already the new image's.
+  - **The last `mm_put`**, from `shm_writeback_vmas` just before `shm_release_vmas` detaches.
+  - At `munmap` and release only the D bit is tested: the mapping goes away right after, so nothing needs clearing.
+  - It runs under `mm_lock` (sleeping), never under `g_shm_lock`. The lock order is `mm_lock` → `mnt_lock`.
+- **Errors.**
+  - `msync` returns `-EIO`.
+  - `munmap` and exit cannot report one. They print `[shm] writeback failed rc=<n>` once per page and continue. That line is not forbidden; arms FD and FE detect lost data by reading the file.
+- **When exit data lands.** Write-back at exit happens when the address space is released. For a child that is when its parent reaps it in `wait4`. An orphan is reparented to init (PID 1, `sched_exit`) and released when init's `wait4` reaps it. The `reaper` kernel thread releases only tcbs with no user parent: a thread's tcb, a kernel-spawned process, or any orphan in a boot with no init (A4.8, corrected). A reader that reads the file before the writer is reaped can see old data. A second mapper of the file sees the new data at once, because the frames are shared.
+
+### A4.5 Gate: `smoke-shm` arms FA-FG (same probe, now FAT-rooted)
+
+- `main.c` spawns `shmtest` with `root_mnt` set to the FAT volume, as it does for the FAT32 probes (`fat32mc`).
+- Arms A–T touch no files, so the root change does not reach them.
+- The probe creates `/SHMFILE.BIN` and, for FG, `/SHMFG.BIN`.
+
+| Arm | Sentinel | What it shows |
+|---|---|---|
+| FA | `PRADYOS_SHM_FA msync=0xa1` | Write 2 pages of `0x00` with `write(2)`. Map them `MAP_SHARED` RW, store `0xa1` at page 1, `msync(MS_SYNC)`. `pread` page 1 through a **second fd** reads `0xa1`. |
+| FB | `PRADYOS_SHM_FB redirty=0xb2` | After FA, store `0xb2` at the same byte, `msync` again, `pread` reads `0xb2`. This shows D is cleared **and** the stale TLB entry is dropped (§A4.4 step 2). |
+| FC | `PRADYOS_SHM_FC shared=0xc3` | Open the file a second time and `mmap` it again in the same process. Store `0xc3` through the first mapping. The second mapping reads `0xc3` with no `msync`, so the two `mmap`s share one object. |
+| FD | `PRADYOS_SHM_FD munmap=0xd4` | Store `0xd4`, `munmap` with no `msync`, then `pread` reads `0xd4`. |
+| FE | `PRADYOS_SHM_FE exit=0xe5` | A child opens and maps the file, stores `0xe5`, and exits with no `msync` or `munmap`. The parent's `wait4` reaps it, then `pread` reads `0xe5`. |
+| FF | `PRADYOS_SHM_FF rejects=8` | Each of these is refused: `PROT_WRITE` on an `O_RDONLY` fd (`-EACCES`); `off + len` past the file (`-EINVAL`); on a mapped file, `ftruncate`, `open(O_TRUNC)`, `unlink` and `rename` (each `-EBUSY`); `msync` with `MS_INVALIDATE` (`-EINVAL`); `msync` of an unmapped address (`-ENOMEM`). |
+| FG | `PRADYOS_SHM_FG cycles=40 opened=40` | 40 cycles of `open`, `mmap`, store, `munmap`, `close`. The table has 32 slots, so a file object that outlives its last detach fails `opened` at cycle 33. |
+
+**Vacuity, checked against the tree before P4 (`ead9246`):**
+- File-backed `MAP_SHARED` is refused there. The probe prints `PRADYOS_SHM FAIL fa_mmap=-22`, which is forbidden, and arms FA-FG are absent. The gate is red.
+- Each arm reads the file through a separate fd or after a reap, never through the mapping that wrote it, so it cannot pass on the frame alone.
+- **FB depends on how QEMU caches TLB entries.** If a syscall entry or exit reloads CR3 (flushing the TLB) on this kernel, S4-2 may stay green. If S4-2 is not red in CI, FB will be reported as not shown red and redesigned. It will not be counted.
+
+**Mutants (one per arm; each must be shown red in CI before merge):**
+
+| Mutant | Change | Arm |
+|---|---|---|
+| S4-1 | `msync` returns 0 without writing | FA |
+| S4-2 | write-back clears D with no TLB invalidation | FB |
+| S4-3 | `mmap` skips the key lookup (a new object every time) | FC |
+| S4-4 | `munmap` skips write-back | FD |
+| S4-5 | the last `mm_put` skips `shm_writeback_vmas` | FE |
+| S4-6 | `PROT_WRITE` allowed on an `O_RDONLY` fd | FF |
+| S4-7 | the last detach of a file object leaves its slot dead (`used = 3`) instead of free. A slot that stays live would be found again by its key and reused, so it would not leak. | FG |
+
+**S4 runs** on `dda8bf0` (P4 plus #80's `6943d97`; fixed tree green on [41475702132](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475702132)). Each mutant builds with 0 warnings and gives its own `kernel.bin`. Only `smoke-shm` (shard 0) failed in each red run.
+
+| Mutant | Run | Result |
+|---|---|---|
+| S4-1 | [41475905429](https://github.com/prady4the4bady/Prady4OS/actions/runs/41475905429) | **red on FA** `msync=0x00`. FB is red too (`redirty=0x00`), because FB also reads the file after an `msync`. Same defect. |
+| S4-2 | [41482000288](https://github.com/prady4the4bady/Prady4OS/actions/runs/41482000288) | **green: not shown red.** See below. |
+| S4-3 | [41482218024](https://github.com/prady4the4bady/Prady4OS/actions/runs/41482218024) | **red on FC** only, `shared=0x00` |
+| S4-4 | [41501319306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41501319306) | **red on FD** only, `munmap=0x00` |
+| S4-5 | [41501322606](https://github.com/prady4the4bady/Prady4OS/actions/runs/41501322606) | **red on FE** only, `exit=0x00` |
+| S4-6 | [41501328002](https://github.com/prady4the4bady/Prady4OS/actions/runs/41501328002) | **red on FF** only, `rejects=7` |
+| S4-7 | [41526232483](https://github.com/prady4the4bady/Prady4OS/actions/runs/41526232483) | **red on FG** only, `opened=23` |
+
+**S4-2 stayed green, so the TLB invalidation of §A4.4 step 2 is not gated.**
+- FB does gate that a second `msync` writes the newer value, and S4-1 shows FB red. It does not gate the invalidation itself.
+- **Likely reason, not verified:** `msync`'s write-back blocks on disk I/O, the scheduler switches address space, and the CR3 reload drops the stale writable TLB entry. A missing `invlpg` then has no visible effect on this platform.
+- The invalidation stays in the code because it is what x86 requires when no context switch intervenes. It is labelled **not gated**.
+
+**Why these runs still stand on the current head.** Since `dda8bf0` the only kernel change is #80's DDR-1196 arena bound in `mmap_pick_base`. Arms FA–FG pass `addr = 0` and lengths of a few pages, so they never reach the new branch. None of the S4 mutants touches it. That is a reading of the code, stated as such.
+
+### A4.6 Not in P4, recorded here
+
+- `MS_INVALIDATE`, so `write(2)` does not reach an existing mapping. Until a page cache exists (checklist "page cache with dirty-page write-back"), `read(2)` and `write(2)` are not coherent with a shared mapping:
+  - `read(2)` sees mapped writes only after write-back;
+  - a page dirtied both through the mapping and by `write(2)` ends as the mapping's copy at write-back.
+- Lazy (demand) paging, mappings past end of file, files over 1 MiB, and resizing a mapped file.
+- Write-back of SFS (append-only) and ext4 (no write), which are read-only shared mappings only.
+
+**Not gated, and why:**
+- **`PROT_WRITE` on SFS or ext4 is `-EACCES`** (D5). `shmtest` is FAT-rooted and a process reaches only its root mount, so it cannot open an SFS or ext4 file. The refusal is the same `shared_write` test that FF's FAT32 checks pass through, but the SFS and ext4 values of the flag are read from the code, not run.
+- **The prepay `-EAGAIN`.** Reaching it needs the bucket drained first. The probe does not do that, so the path is reasoned, not run.
+- **Two concurrent first mappers of one file** (§A4.3). No arm races two first mappers. `smoke-shm` boots with four CPUs since §A4.7, but nothing makes the race happen (§A4.8).
+
+**NSI:** 119 `SYS_MSYNC`.
+
+### A4.7 Cross-CPU write/msync/write: arm FH, to show S4-2 red (2026-11-03, operator 6594717280 item 4)
+
+**Does a missing flush lose a later write? Yes, on more than one CPU.** This is reasoned from the code and the x86 rules, and not yet shown in CI:
+1. Thread B, on CPU 2, stores to a mapped page. The page walk sets D in the PTE. CPU 2 caches a **writable TLB entry with D already set**.
+2. Thread A, of the same `mm`, on CPU 1, calls `msync`. Write-back tests D, writes the page, and clears D in the PTE (§A4.4).
+3. With the shootdown, CPU 2's entry is invalidated. B's next store walks the tables and sets D again, so the next write-back writes it.
+4. **Without the shootdown (S4-2),** CPU 2 keeps the stale entry. B's next store hits it, and the CPU does not set D in the PTE again, because the entry already has D. The next `msync`, `munmap` or exit sees a clean PTE and skips the page. **The second store never reaches the file.**
+
+On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O makes the CPU switch to another address space. The CR3 write flushes the TLB, so FB stays green under S4-2 (§A4.5). FH puts the second writer on another CPU, which never switches address space during the round.
+
+**Arm FH** (same probe, `user/shmtest.c`; `smoke-shm` now boots with `QEMU_SMP=4`):
+- **Setup:** the main thread A pins itself to CPU 1 (`SYS_SCHED_CPU`). It maps one page of `/SHMFH.BIN` `MAP_SHARED` and `PROT_READ | PROT_WRITE`. It creates thread B, which pins itself to CPU 2. CPU 0 is left out because the BSP runs most kernel threads.
+- **One round `r`, 16 rounds:**
+  1. B stores `X_r` to the page and signals.
+  2. A calls `msync(MS_SYNC)`. That writes `X_r` and clears D. A then signals B.
+  3. B stores `Y_r` to the same byte and signals.
+  4. A calls `msync(MS_SYNC)` again, then reads the byte back with `read(2)`. A round is **lost** if the file does not hold `Y_r`.
+- **B never enters the scheduler in a round.** It waits by spinning on a flag on another page, with no syscall, so CPU 2 makes no CR3 write between its two stores. A never touches the mapped page.
+- **Sentinel:** `PRADYOS_SHM_FH rounds=16 lost=0 placed=16`. `placed` counts rounds in which A read CPU 1 and B read CPU 2 (`SYS_SCHED_CPU` op 0) around the stores. Fewer than 16 placed rounds fails the arm as **not placed**. A misplaced run is never counted as a pass.
+- **Vacuity, checked before writing it:** on the tree before P4 the probe has failed at FA already, so FH is never reached. On the P4 tree without the shootdown (S4-2), every round whose CPU 2 entry survives loses `Y_r`.
+- **The sensitivity is probabilistic.** Any CR3 write on CPU 2 between B's two stores also flushes the entry, for example a timer preemption to another address space. So under S4-2 a round can still pass. FH is red if **any** of the 16 rounds is lost. If S4-2 stays green on FH in CI, the shootdown stays labelled **not gated** and FH is reported as not shown red. It will not be counted.
+- **S4-2 mutant:** unchanged (no `tlb_shoot` in `shm_vma_writeback`, no local `invlpg` in `vmm_dirty_op`).
+- **QEMU only.** QEMU's TCG soft-TLB caches a writable entry the same way. Whether real CPUs hit this window is **not verified on real hardware**.
+
+### A4.8 Review of `35bf1f8` (CodeRabbit 4456289977, 4456289991, 4456289957): two defects, one stale assumption
+
+**Defect 1: release write-back is authorised against the wrong capability table (security boundary).**
+- **Where it happens.** At the last `mm_put`, `shm_writeback_vmas` writes back dirty pages through `vfs_write_prepaid` (§A4.4). That function calls `cap_ok`, which resolves the stored `wcap` handle in `current_thread->caps`. The last `mm_put` runs in whichever thread reaps the process:
+  - the parent's `wait4` (`sys_wait.c`), which resolves the handle in the parent's table;
+  - the `reaper` kernel thread (`sched.c`, `reaper_thread`). It reaps only tcbs with no user parent: a thread's tcb (`parent_pid 0`, `sched_create_user_thread`), a kernel-spawned process, or an orphan in a boot with **no** init. The reaper's table comes from `cap_table_create` and is empty, so `cap_authorize` fails, and that process's dirty file pages are never written back. The only trace is a `[shm] writeback failed rc=-1` line.
+  - **Correction (CI run 41659209478, below):** an earlier version of this item said the reaper reaps orphans. In these boots it does not. `INIT.ELF` is PID 1 (`main.c`, `sched_set_init_pid`), `sched_exit` reparents orphans to it, and **init's `wait4`** reaps them. Init's table is a different one, but its `fs_cap` handle has the same number as the mapper's, because every ELF that is exec'd creates `fs_cap` first in a fresh table (`elf.c:337`). So the old check passed there by coincidence.
+- **What D4 decided.** D4 says the capability is "captured at `mmap`", and that a re-check would only repeat the same check, because the kernel has no revocation model. The code did not do that. It re-resolved the handle at write-back time, in whatever table was current then.
+- **Fix.** `CAP_FS_WRITE` is checked once, at `mmap`, in the mapper's own context. That is when `current_thread` is the mapper. `wok` now also needs `vfs_write_authorized(fe->cap)`, so a mapper without write authority gets `-EACCES` for `PROT_WRITE`, as an `O_RDONLY` fd does. `vfs_write_prepaid` takes no capability and resolves nothing. The area's non-zero `wcap` is the record that write authority was granted at `mmap`.
+- **Arm FI** (`PRADYOS_SHM_FI orphan=0xf1`). FI is a **positive arm only: it checks that an orphan's dirty pages reach the file.** It does not gate the authorization-context fix (see S4-8 below).
+  - A forks C1, and C1 forks C2, then C1 exits at once. A reaps C1, so C2 is an orphan.
+  - C2 opens `/SHMFI.BIN`, maps it `MAP_SHARED`, stores `0xf1` and exits, with neither `msync` nor `munmap`. C2 is reparented to init, and **init's `wait4`** reaps it. An earlier version of this item said the reaper did.
+  - A polls the file with `read(2)` for up to 1000 polls, 20 yields apart, until the byte appears.
+- **Vacuity: the earlier claim was wrong.** It said that on `35bf1f8` the reaper's empty table makes FI red. Because init's `wait4` reaps FI's orphan, FI passes on the tree before the fix as well. S4-8 shows this (below).
+- **Mutant S4-8:** puts back the `cap_ok(current_thread)` check in `vfs_write_prepaid`. **It survived: green on FI** ([41659209478](https://github.com/prady4the4bady/Prady4OS/actions/runs/41659209478), `orphan=0xf1`). It is kept on record as a surviving mutant, not as a gate.
+- **FI is not vacuous for what it does check.** S4-5 (no write-back at the last `mm_put`) makes FI red, `orphan=0x00` ([41676234880](https://github.com/prady4the4bady/Prady4OS/actions/runs/41676234880)).
+- **Not gated: the authorization-context fix**, meaning write authority is checked once at `mmap` and never in the reaping thread's table.
+  - The fix is correct for every reaping context, by reading the code.
+  - No arm reaches the reaper with a dirty file mapping, so no run shows the fix matters.
+  - A reaper-path gate is a separate follow-up item (operator #45 6618228303). It must:
+    - make the reaper do the last `mm_put`;
+    - check the byte reached the file;
+    - pass on the fixed code;
+    - be red under S4-8.
+
+**Defect 2: a `write(2)` that grows a mapped FAT32 file is undone by write-back.**
+- **How it happens.** Write-back writes through the object's copy of the `vfs_file`, which was taken at attach (`o->file`, size `o->fsize`). `fat32_write` stores `max(end, f->size)` in the directory entry, using that copy's stale size. A file grown by `write(2)` while it is mapped is cut back at the next write-back. The clusters of the appended bytes then stay allocated past the recorded size.
+- **Fix:** the busy rule of §A4.2 extends to growth. While a file is mapped, a `write(2)` with `off + count > o->fsize` is `-EBUSY` (`shm_file_grow_busy`, called from the `FD_VFS` write path after the `O_APPEND` reposition). Writes inside the mapped size are still allowed. Their coherence with the mapping stays as §A4.6 records.
+- **Arm FJ** (`PRADYOS_SHM_FJ grow=-16 inplace=1`): with `/SHMFJ.BIN` (4096 B) mapped, a 1-byte `write` at offset 4096 must be `-EBUSY`, and a 1-byte `write` at offset 0 must return 1.
+- **Vacuity:** on `35bf1f8` the growing write succeeds (`grow=1`), so FJ is red.
+- **Mutant S4-9:** removes the refusal. It must be red on FJ only.
+- **Not gated:** the same refusal in the io_uring `IORING_OP_WRITE` path. FJ uses `write(2)` only, so the io_uring copy is reasoned from the code, not run.
+
+**Stale assumption: `smoke-shm` is no longer one CPU.** Since §A4.7, `smoke-shm` boots with `QEMU_SMP=4`.
+- **Arms J and L.** Their windows were judged safe from a false pass because only one CPU ran (§7). With four CPUs, other CPUs may free pages inside those windows. **J's and L's cross-CPU false-pass risk is not gated.** Arms M and Q already measure with `pm_measure`, and that is unchanged.
+- **Two concurrent first mappers of one file** (§A4.6). Four CPUs now run, but no arm makes two first mappers race, so this is still **not gated**.
+
+### A4.9 Runs on `b244eea` (the A4.7 and A4.8 head)
+
+The fixed tree is green on [41658933698](https://github.com/prady4the4bady/Prady4OS/actions/runs/41658933698): all 17 checks, `smoke-shm` on `QEMU_SMP=4`, FA–FJ on their sentinels. Each mutant was re-applied on `b244eea` as `mut/shm4-S4-N-r4`. In every run only shard 0 (`smoke-shm`) failed:
+
+| Mutant | Run | Red on |
+|---|---|---|
+| S4-1 | [41665782951](https://github.com/prady4the4bady/Prady4OS/actions/runs/41665782951) | **FA** `0x00`. FB and FH are red too, through the same missing write. |
+| S4-2 | [41659116275](https://github.com/prady4the4bady/Prady4OS/actions/runs/41659116275) | **FH only**, `lost=9 placed=16`. **The TLB invalidation of §A4.4 step 2 is now gated** (§A4.7). |
+| S4-3 | [41670800696](https://github.com/prady4the4bady/Prady4OS/actions/runs/41670800696) | **FC only**, `shared=0x00` |
+| S4-4 | [41671942306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41671942306) | **FD only**, `munmap=0x00` |
+| S4-5 | [41676234880](https://github.com/prady4the4bady/Prady4OS/actions/runs/41676234880) | **FE** `exit=0x00` and **FI** `orphan=0x00`. Both need write-back at the last `mm_put`. |
+| S4-6 | [41677334492](https://github.com/prady4the4bady/Prady4OS/actions/runs/41677334492) | **FF only**, `rejects=7` |
+| S4-7 | [41679997306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41679997306) | **FG** `opened=23`. The leaked objects then fill the table, and FH's `mmap` fails with `-ENOSPC`. |
+| S4-8 | [41659209478](https://github.com/prady4the4bady/Prady4OS/actions/runs/41659209478) | **survived: green.** See §A4.8: FI's orphan is reaped by init's `wait4`, not by the reaper. |
+| S4-9 | [41665423861](https://github.com/prady4the4bady/Prady4OS/actions/runs/41665423861) | **FJ only**, `grow=1` |
+
+These runs stand on the head that follows them. That head changes only this record and the PR text.
 
 ## 7. Honesty labels
 
 **Page counts in arms J, L, M and Q (DDR-1185).** All four read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
 - **M moves onto `pm_measure`.** Its window spans a fork, the child's run and exit, and the reap, so the scheduler runs other processes inside it. A burst that frees pages there could hide a leaked segment (a false pass). `reclaimed=1` now needs a conclusive trial with drop < `RECLAIM_MIN`; an inconclusive trial is red. The meter lines are printed as `[shm] M drop=` and `[shm] M meter`.
 - **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
-- **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and smoke-shm runs on one CPU (`rqcpus=1`, no `QEMU_SMP`). Foreign code can enter that window only through a timer preemption at syscall return, and a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else in that instant. That path is judged far-fetched; it is recorded here, **not** measured.
+- **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and when this was written smoke-shm ran on one CPU, where a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else inside one syscall. **Since §A4.7 smoke-shm boots with `QEMU_SMP=4`.** Other CPUs can now free pages inside those windows, so J's and L's cross-CPU false-pass risk is **not gated** (§A4.8).
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **not started**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **gated by `smoke-shm` arms FA-FJ** (Amendment 4). S4-1 to S4-7 and S4-9 are shown red in CI on `b244eea` (A4.9); S4-2 is red on FH, so the TLB invalidation step is gated. **Not gated:**
+- the authorization-context fix of A4.8: S4-8 survived, and no arm reaches the reaper;
+- the io_uring growth refusal;
+- J's and L's cross-CPU false-pass risk;
+- two concurrent first mappers. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.

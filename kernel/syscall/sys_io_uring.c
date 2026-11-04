@@ -22,6 +22,7 @@
 #include "console.h"
 #include "errno.h"
 #include "aether.h"     /* DDR-1170: per-task byte budget */
+#include "shm.h"        /* DDR-1178 A4.8 */
 
 #define IORING_ENTRIES   8
 #define IORING_OP_READ   0
@@ -96,6 +97,8 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
         if (e->kind == FD_VFS && e->file) {
             if (e->flags & FD_RB_RO)
                 return -EPERM;       /* DDR-1171: rollback task, existing file */
+            if (shm_vfs_grow_refused(e->file, e->off, len))
+                return -EBUSY;       /* DDR-1178 A4.8: a mapped file may not grow */
             int n = vfs_write(e->cap, e->file, e->off, kbuf, len);
             if (n > 0) e->off += (uint64_t)n;
             return n;
