@@ -267,8 +267,9 @@ static void fh_arm(void) {
 }
 
 /* FI (DDR-1178 A4.8): an orphan's exit write-back. C2's parent C1 is gone
- * before C2 exits, so the reaper kernel thread does the last mm_put; the
- * write-back must not need the reaper's (empty) capability table. */
+ * before C2 exits, so C2 is reparented to init and init's wait4 does the last
+ * mm_put. A positive arm only: it does not reach the reaper, so the A4.8
+ * authorization-context fix is not gated by it (S4-8 survived). */
 static void fi_arm(void) {
     long hfd = make_file(FI_PATH, 4096);
     nsi(SYS_CLOSE, hfd, 0, 0);

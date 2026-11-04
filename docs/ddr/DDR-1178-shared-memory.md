@@ -475,7 +475,7 @@ Status: **design**. The code follows in the same PR. P4 stacks on P3 (#80). It r
 - **Errors.**
   - `msync` returns `-EIO`.
   - `munmap` and exit cannot report one. They print `[shm] writeback failed rc=<n>` once per page and continue. That line is not forbidden; arms FD and FE detect lost data by reading the file.
-- **When exit data lands.** Write-back at exit happens when the address space is released. For a child that is when its parent reaps it in `wait4`, or when the reaper thread frees an orphan. A reader that reads the file before the writer is reaped can see old data. A second mapper of the file sees the new data at once, because the frames are shared.
+- **When exit data lands.** Write-back at exit happens when the address space is released. For a child that is when its parent reaps it in `wait4`. An orphan is reparented to init (PID 1, `sched_exit`) and released when init's `wait4` reaps it. The `reaper` kernel thread releases only tcbs with no user parent: a thread's tcb, a kernel-spawned process, or any orphan in a boot with no init (A4.8, corrected). A reader that reads the file before the writer is reaped can see old data. A second mapper of the file sees the new data at once, because the frames are shared.
 
 ### A4.5 Gate: `smoke-shm` arms FA-FG (same probe, now FAT-rooted)
 
@@ -573,15 +573,25 @@ On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O ma
 **Defect 1: release write-back is authorised against the wrong capability table (security boundary).**
 - **Where it happens.** At the last `mm_put`, `shm_writeback_vmas` writes back dirty pages through `vfs_write_prepaid` (§A4.4). That function calls `cap_ok`, which resolves the stored `wcap` handle in `current_thread->caps`. The last `mm_put` runs in whichever thread reaps the process:
   - the parent's `wait4` (`sys_wait.c`), which resolves the handle in the parent's table;
-  - the `reaper` kernel thread, for an orphan (`sched.c`, `reaper_thread`). The reaper's table comes from `cap_table_create` and is empty, so `cap_authorize` fails. **An orphan's dirty file pages are never written back.** The only trace is a `[shm] writeback failed rc=-1` line.
+  - the `reaper` kernel thread (`sched.c`, `reaper_thread`). It reaps only tcbs with no user parent: a thread's tcb (`parent_pid 0`, `sched_create_user_thread`), a kernel-spawned process, or an orphan in a boot with **no** init. The reaper's table comes from `cap_table_create` and is empty, so `cap_authorize` fails, and that process's dirty file pages are never written back. The only trace is a `[shm] writeback failed rc=-1` line.
+  - **Correction (CI run 41659209478, below):** an earlier version of this item said the reaper reaps orphans. In these boots it does not. `INIT.ELF` is PID 1 (`main.c`, `sched_set_init_pid`), `sched_exit` reparents orphans to it, and **init's `wait4`** reaps them. Init's table is a different one, but its `fs_cap` handle has the same number as the mapper's, because every ELF that is exec'd creates `fs_cap` first in a fresh table (`elf.c:337`). So the old check passed there by coincidence.
 - **What D4 decided.** D4 says the capability is "captured at `mmap`", and that a re-check would only repeat the same check, because the kernel has no revocation model. The code did not do that. It re-resolved the handle at write-back time, in whatever table was current then.
 - **Fix.** `CAP_FS_WRITE` is checked once, at `mmap`, in the mapper's own context. That is when `current_thread` is the mapper. `wok` now also needs `vfs_write_authorized(fe->cap)`, so a mapper without write authority gets `-EACCES` for `PROT_WRITE`, as an `O_RDONLY` fd does. `vfs_write_prepaid` takes no capability and resolves nothing. The area's non-zero `wcap` is the record that write authority was granted at `mmap`.
-- **Arm FI** (`PRADYOS_SHM_FI orphan=0xf1`):
+- **Arm FI** (`PRADYOS_SHM_FI orphan=0xf1`). FI is a **positive arm only: it checks that an orphan's dirty pages reach the file.** It does not gate the authorization-context fix (see S4-8 below).
   - A forks C1, and C1 forks C2, then C1 exits at once. A reaps C1, so C2 is an orphan.
-  - C2 opens `/SHMFI.BIN`, maps it `MAP_SHARED`, stores `0xf1` and exits, with neither `msync` nor `munmap`. The reaper then reaps it.
+  - C2 opens `/SHMFI.BIN`, maps it `MAP_SHARED`, stores `0xf1` and exits, with neither `msync` nor `munmap`. C2 is reparented to init, and **init's `wait4`** reaps it. An earlier version of this item said the reaper did.
   - A polls the file with `read(2)` for up to 1000 polls, 20 yields apart, until the byte appears.
-- **Vacuity, checked before writing FI.** On `35bf1f8` the reaper's empty table fails `cap_authorize`, the write never happens, and A reads `0x00`. FI is red on the tree before the fix.
-- **Mutant S4-8:** puts back the `cap_ok(current_thread)` check in `vfs_write_prepaid`. It must be red on FI only. FE (exit reaped by the parent's `wait4`) still passes under it, because the forked child's table is a copy of the parent's.
+- **Vacuity: the earlier claim was wrong.** It said that on `35bf1f8` the reaper's empty table makes FI red. Because init's `wait4` reaps FI's orphan, FI passes on the tree before the fix as well. S4-8 shows this (below).
+- **Mutant S4-8:** puts back the `cap_ok(current_thread)` check in `vfs_write_prepaid`. **It survived: green on FI** ([41659209478](https://github.com/prady4the4bady/Prady4OS/actions/runs/41659209478), `orphan=0xf1`). It is kept on record as a surviving mutant, not as a gate.
+- **FI is not vacuous for what it does check.** S4-5 (no write-back at the last `mm_put`) makes FI red, `orphan=0x00` ([41676234880](https://github.com/prady4the4bady/Prady4OS/actions/runs/41676234880)).
+- **Not gated: the authorization-context fix**, meaning write authority is checked once at `mmap` and never in the reaping thread's table.
+  - The fix is correct for every reaping context, by reading the code.
+  - No arm reaches the reaper with a dirty file mapping, so no run shows the fix matters.
+  - A reaper-path gate is a separate follow-up item (operator #45 6618228303). It must:
+    - make the reaper do the last `mm_put`;
+    - check the byte reached the file;
+    - pass on the fixed code;
+    - be red under S4-8.
 
 **Defect 2: a `write(2)` that grows a mapped FAT32 file is undone by write-back.**
 - **How it happens.** Write-back writes through the object's copy of the `vfs_file`, which was taken at attach (`o->file`, size `o->fsize`). `fat32_write` stores `max(end, f->size)` in the directory entry, using that copy's stale size. A file grown by `write(2)` while it is mapped is cut back at the next write-back. The clusters of the appended bytes then stay allocated past the recorded size.
@@ -595,6 +605,24 @@ On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O ma
 - **Arms J and L.** Their windows were judged safe from a false pass because only one CPU ran (§7). With four CPUs, other CPUs may free pages inside those windows. **J's and L's cross-CPU false-pass risk is not gated.** Arms M and Q already measure with `pm_measure`, and that is unchanged.
 - **Two concurrent first mappers of one file** (§A4.6). Four CPUs now run, but no arm makes two first mappers race, so this is still **not gated**.
 
+### A4.9 Runs on `b244eea` (the A4.7 and A4.8 head)
+
+The fixed tree is green on [41658933698](https://github.com/prady4the4bady/Prady4OS/actions/runs/41658933698): all 17 checks, `smoke-shm` on `QEMU_SMP=4`, FA–FJ on their sentinels. Each mutant was re-applied on `b244eea` as `mut/shm4-S4-N-r4`. In every run only shard 0 (`smoke-shm`) failed:
+
+| Mutant | Run | Red on |
+|---|---|---|
+| S4-1 | [41665782951](https://github.com/prady4the4bady/Prady4OS/actions/runs/41665782951) | **FA** `0x00`. FB and FH are red too, through the same missing write. |
+| S4-2 | [41659116275](https://github.com/prady4the4bady/Prady4OS/actions/runs/41659116275) | **FH only**, `lost=9 placed=16`. **The TLB invalidation of §A4.4 step 2 is now gated** (§A4.7). |
+| S4-3 | [41670800696](https://github.com/prady4the4bady/Prady4OS/actions/runs/41670800696) | **FC only**, `shared=0x00` |
+| S4-4 | [41671942306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41671942306) | **FD only**, `munmap=0x00` |
+| S4-5 | [41676234880](https://github.com/prady4the4bady/Prady4OS/actions/runs/41676234880) | **FE** `exit=0x00` and **FI** `orphan=0x00`. Both need write-back at the last `mm_put`. |
+| S4-6 | [41677334492](https://github.com/prady4the4bady/Prady4OS/actions/runs/41677334492) | **FF only**, `rejects=7` |
+| S4-7 | [41679997306](https://github.com/prady4the4bady/Prady4OS/actions/runs/41679997306) | **FG** `opened=23`. The leaked objects then fill the table, and FH's `mmap` fails with `-ENOSPC`. |
+| S4-8 | [41659209478](https://github.com/prady4the4bady/Prady4OS/actions/runs/41659209478) | **survived: green.** See §A4.8: FI's orphan is reaped by init's `wait4`, not by the reaper. |
+| S4-9 | [41665423861](https://github.com/prady4the4bady/Prady4OS/actions/runs/41665423861) | **FJ only**, `grow=1` |
+
+These runs stand on the head that follows them. That head changes only this record and the PR text.
+
 ## 7. Honesty labels
 
 **Page counts in arms J, L, M and Q (DDR-1185).** All four read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
@@ -602,4 +630,8 @@ On one CPU this cannot happen while `msync` blocks: the write-back's disk I/O ma
 - **Q (P3) moves onto `pm_measure` too.** Its `Q_CYCLES` loop of `shm_open`, `ftruncate`, `mmap`, `close` and `munmap` is a long multi-syscall window, the same exposure as arm C. `leaked_ok=1` now needs a conclusive trial (`q_run`, no tcbs) with drop < `LEAK_BOUND`; printed as `[shm] Q meter`.
 - **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and when this was written smoke-shm ran on one CPU, where a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else inside one syscall. **Since §A4.7 smoke-shm boots with `QEMU_SMP=4`.** Other CPUs can now free pages inside those windows, so J's and L's cross-CPU false-pass risk is **not gated** (§A4.8).
 
-P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **gated by `smoke-shm` arms FA-FG** (Amendment 4): S4-1 and S4-3..S4-7 are shown red in CI; S4-2 is not, so the TLB invalidation step is **not gated**. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
+P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **gated by `smoke-shm` arms FA-FJ** (Amendment 4). S4-1 to S4-7 and S4-9 are shown red in CI on `b244eea` (A4.9); S4-2 is red on FH, so the TLB invalidation step is gated. **Not gated:**
+- the authorization-context fix of A4.8: S4-8 survived, and no arm reaches the reaper;
+- the io_uring growth refusal;
+- J's and L's cross-CPU false-pass risk;
+- two concurrent first mappers. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
