@@ -79,7 +79,7 @@ if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
 
 Asked by: operator, #45 comment 6594717280, step 5 ("explain or fix W1's panic").
 
-**The cause is the teardown hazard (§1, second hazard), not the rollback (§1 step 3).** The diagnostic build was branch `diag/w1-r1`, commit `51e62ea`, never merged. It is `dev/phase1` `9105001` with two changes:
+**The observed fault is the teardown hazard (§1, second hazard). The rollback (§1 step 3) is not shown either way:** this run instrumented only teardown, so it cannot rule out that the rollback also freed or corrupted shared state earlier (CodeRabbit r4462220874). The diagnostic build was branch `diag/w1-r1`, commit `51e62ea`, never merged. It is `dev/phase1` `9105001` with two changes:
 - W1's wrapping bound restored in `mmap_pick_base`;
 - one `kline` in `vmm_destroy_address_space` for every kernel PML4 slot (any slot but 1 and 255) that it frees because the slot differs from the master.
 
@@ -119,6 +119,6 @@ Run: [41739506343](https://github.com/prady4the4bady/Prady4OS/actions/runs/41739
 
 **Not shown:**
 - Whether `PML4[511]` was also promoted. The loop reaches slot 0 first, and the panic stops it. Page 0's walk under slot 511 is reasoned in §1 and not shown here.
-- The rollback path (§1 step 3) is not shown to free anything shared in this run.
+- The rollback path (§1 step 3) is **unresolved**. It was not instrumented, so this run neither shows nor rules out a free of shared state there.
 
 **This changes no gate.** `SYSMMAP WRAP REJECTED` still gates the fix. The W1 status in §3 stands: red, though not at the designed sentinel. Its cause is now named by this run. QEMU TCG only, **not verified on real hardware**.
