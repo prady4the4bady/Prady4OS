@@ -35,11 +35,11 @@ SURFDESTROY FAIL: reuse slot not reused
 `sys_surface_create` hands out the **lowest free** slot (`for (i = 0; i < SURFACE_MAX; i++) if (!g_surf[i].used)`). The test's own header says it runs alongside the compositor and `surfacetest`. In the logs above, `surfacetest` (`a=1 b=0`) prints its result just before.
 
 **Likely mechanism, not proven.** Another surface user changes the table between A's close and B's create:
-- `surfacetest` creates and closes surfaces (lines 75, 147 and 227). A slot below `a` freed in that window makes `b < a`.
+- `surfacetest` creates and closes surfaces: `make_window` creates each window (`SYS_SURFACE_CREATE`), and `main` later closes window A and then window C (`SYS_SURFACE_CLOSE`). A slot below `a` freed in that window makes `b < a`.
 - A slot taken in that window makes `b > a`.
 
 Either way `b != a` with no kernel fault. Two facts support this:
-- **Both failures were in `smoke-numa-steal`.** It is the gate that boots two CPUs, one per NUMA node (`QEMU_NUMA=1`, `boot_test.sh` around line 280). With two CPUs the three processes really do run in parallel. Most other gates boot one CPU.
+- **Both failures were in `smoke-numa-steal`.** It is the gate that boots two CPUs, one per NUMA node (`QEMU_NUMA=1`, `boot_test.sh` around line 280). With two CPUs the three processes **can** run in parallel; no log shows that they overlapped in these runs. Most other gates boot one CPU.
 - **Neither branch touches `sys_surface.c` or the clients.**
 
 The ids `a` and `b` are not printed, so the logs cannot confirm the mechanism. **The failure is unexplained, with one candidate. It is not a known kernel defect, and it is not closed.**
@@ -52,7 +52,7 @@ The ids `a` and `b` are not printed, so the logs cannot confirm the mechanism. *
 
 ## 4. Proposed logging (not done here; each item needs its own PR)
 
-1. **`surfdestroytest` step 2 prints the ids on failure.** For example `SURFDESTROY FAIL: reuse slot not reused a=<a> b=<b>`, using a small hex writer on the stack (the probe has no writable globals). That would show which way the race went (`b < a` or `b > a`), or rule the race out if `b == a` cannot be reached at all.
+1. **`surfdestroytest` step 2 prints the ids on failure.** For example `SURFDESTROY FAIL: reuse slot not reused a=<a> b=<b>`, using a small hex writer on the stack (the probe has no writable globals). It prints only after `b != a`, so it shows which way the ids differ (`b < a` or `b > a`). On its own it cannot tell a race from a kernel allocation fault; item 2 is needed for that.
 2. **The kernel says who held the slot.** Under a diagnostic flag, `sys_surface_create` and `sys_surface_close` print `[surf] create id=<n> pid=<p>` and `[surf] close id=<n> pid=<p>`, off by default. With those lines, the next occurrence would show which process used the table between A's close and B's create.
 3. **If (1) and (2) confirm the race,** step 2's assertion is wrong under concurrency, not the kernel. The fix would make the test's check true by construction, for example by asserting the slot is reused when no other surface user exists, or by gating the probe to run alone. That is a gate change, so it needs its own DDR, vacuity check and mutant. It must not weaken the test.
 
