@@ -22,6 +22,9 @@
  *  - Inherited kernel divergences (DDR-1181 §3.6): fd tables and signal
  *    dispositions are per thread; execve with more than one thread is -EBUSY.
  *
+ * The guard page under each thread stack is read-only (writes fault, reads do
+ * not): the kernel refuses PROT_NONE (DDR-1031 §3).
+ *
  * Not provided: cancellation, pthread_sigmask, rwlocks, spinlocks, robust or PI
  * mutexes, timed waits, ELF __thread (C1.6), attributes other than stack size
  * and detach state, recursive and error-checking mutexes.
@@ -51,7 +54,7 @@
 #define PTHR_EINVAL   22
 #define PTHR_EDEADLK  35
 
-#define PTHR__PROT_NONE  0x0
+#define PTHR__PROT_READ  0x1
 #define PTHR__PROT_RW    0x3
 #define PTHR__MAP_PRIV   0x02
 #define PTHR__MAP_ANON   0x20
@@ -296,7 +299,11 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     unsigned long len = PTHR_PAGE + ss + PTHR_PAGE;   /* guard, stack, block */
     long base = pthr__mmap(len);
     if (base < 0) return base;
-    long pr = pradyos_syscall(SYS_MPROTECT, base, (long)PTHR_PAGE, PTHR__PROT_NONE);
+    /* The guard is READ-ONLY, not PROT_NONE: the kernel refuses PROT_NONE
+     * (DDR-1031 §3, it would collide with stack demand paging). A stack
+     * overflow writes (every call pushes), so it faults here; a stray read
+     * below the stack is not caught (DDR-1197 Amendment 1 item 9). */
+    long pr = pradyos_syscall(SYS_MPROTECT, base, (long)PTHR_PAGE, PTHR__PROT_READ);
     if (pr != 0) { pthr__munmap((uintptr_t)base, len); return pr; }
     uintptr_t stack_top = (uintptr_t)base + PTHR_PAGE + ss;
     struct pthr *t = (struct pthr *)stack_top;        /* the block sits above the stack */

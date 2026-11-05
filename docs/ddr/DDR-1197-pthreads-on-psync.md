@@ -21,7 +21,7 @@ Read from the code at `71ecbb6`:
   - So a joiner that waits **without** `FUTEX_PRIVATE_FLAG` is woken wherever the word lives. A joiner that waits with the flag on a word in `MAP_SHARED` memory would never be woken.
 - **Futex and the sync primitives.** `SYS_FUTEX` (117) has `WAIT`, `WAKE` and private and shared keys. `user/include/psync.h` (DDR-1193, #101) gives `pmutex`, `psem`, `pcond` and `pbarrier`, gated by `smoke-thread` SA, SW, SB, SC, SH and SD.
 - **TLS register.** `SYS_SET_TLS` (27) sets the caller's FS base. `SYS_THREAD_CREATE` sets the new thread's FS base from `tls`. `smoke-thread` arm B checks a `%fs:0` self-pointer per thread.
-- **Guard pages are possible.** `SYS_MPROTECT` (97, DDR-1031) can make a page `PROT_NONE`.
+- **Guard pages are possible.** `SYS_MPROTECT` (97, DDR-1031) can make a page `PROT_NONE`. *(Wrong: DDR-1031 refuses `PROT_NONE`. The guard is read-only; see Amendment 1 item 9.)*
 - **musl is in the tree, single-threaded.** `tools/build_musl.sh` builds a subset for `init`, PRISM and `cmusl`. Its thread files are `__lock.c`, `__wait.c`, `default_attr.c` and `pthread_self.c`. There is no `pthread_create`.
   - A musl program's FS base points at musl's own `struct pthread` (`third_party/musl-overlay/__set_thread_area.s`).
 - **Probes have no writable globals.** `user/user.ld` emits one R+X segment (DDR-826, ADR-021). Any library state must live in memory the program maps.
@@ -64,7 +64,7 @@ Header-only and freestanding, like `psync.h`. It uses GCC `__atomic` builtins wi
 
 | Part | Size | Protection | Purpose |
 |---|---|---|---|
-| guard | 1 page | `PROT_NONE` (`SYS_MPROTECT`) | an overflow faults instead of writing into the next mapping |
+| guard | 1 page | read-only (`SYS_MPROTECT` `PROT_READ`; `PROT_NONE` is refused, Amendment 1 item 9) | an overflow faults instead of writing into the next mapping |
 | stack | `stacksize`, default 64 KiB, at least 16 KiB, page-rounded | RW | `stack_top` = the end of this part, 16-byte aligned |
 | thread block | 1 page | RW | `struct pthr` (below); FS points here |
 
@@ -308,7 +308,14 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
 | R2 | the join loop calls `SYS_YIELD` instead of `FUTEX_WAIT` |
 | R3 | `pthr_join`'s `munmap` is removed |
 | R4 | `pthr_reap`'s `munmap` (and its count) is removed |
-| R5 | `pthr_create`'s `mprotect` becomes `pr = 0` |
+| R5 | `pthr_create`'s `mprotect` becomes `pr = 0` (no guard) |
 | R6 | `pthr_setspecific` and `pthr_getspecific` use the main thread's block |
 | R7 | `pthr_once` runs `fn` whenever it reads 0; there is no state 1 |
 | R8 | `pthr_getspecific` drops the generation check |
+
+9. **The guard page is read-only, not `PROT_NONE`.** Found by the first P4b run ([42046256442](https://github.com/prady4the4bady/Prady4OS/actions/runs/42046256442), shard 2): every arm printed `PTHR FAIL: <arm> create`.
+   - `sys_mprotect` refuses `PROT_NONE` with `-EINVAL` (`kernel/syscall/sys_mmap.c`, DDR-1031 §3). An absent user page would collide with the demand-paged stack (ADR-038), which faults absent pages in. §3.1 assumed `PROT_NONE`; that was wrong, and no reading of DDR-1031 was done before writing it.
+   - `munmap` is whole-region only (`sys_munmap` ignores the length and unmaps the area containing the address), so a hole cannot be cut out of one mapping either.
+   - So the guard is `mprotect(PROT_READ)`. It is present and NX, with no write bit, and not marked COW. A write to it, which is how a stack overflow begins (`call` and `push` write), faults and kills the process.
+   - **What it does not catch:** a stray *read* below the stack. Stated, not gated.
+   - PG still writes one byte into the guard, so the arm and R5 are unchanged. Changing the kernel to allow `PROT_NONE` would be a kernel change, which 6655226539 does not allow here.
