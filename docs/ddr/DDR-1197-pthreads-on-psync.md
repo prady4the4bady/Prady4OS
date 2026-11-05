@@ -48,7 +48,10 @@ The operator's newest order (6647074754 item 4) is a **pthreads library on `psyn
 
 **D3. `pthr.h` is for freestanding programs only (those linked with `user/user.ld`).**
 - It sets FS to its own thread block. In a musl program that would replace musl's `struct pthread`, and `errno`, `stdio` locks and `pthread_self` would break.
-- So the header refuses to compile next to musl's `pthread.h`: `#ifdef PTHREAD_CREATE_JOINABLE` → `#error`.
+- So use from a musl program is excluded by a **build-mode contract**, not by include order (CodeRabbit on #109):
+  - `pthr.h` begins with `#ifndef PTHR_FREESTANDING` → `#error`. Only the Makefile rule for a freestanding probe passes `-DPTHR_FREESTANDING`. In P4b that is the `pthrtest` rule, which links with `$(USER_LD)` (`user/user.ld`) and no `$(MUSL_CRT)` or `$(MUSL_LIB)`.
+  - A translation unit that includes `pthr.h` must not be linked with the musl runtime. The macro is the mechanism; the rule above is the only place that sets it.
+  - `#ifdef PTHREAD_CREATE_JOINABLE` → `#error` stays as a second check, for musl's `pthread.h` included first.
 - musl programs get threads in P7.
 
 ## 3. Design: `user/include/pthr.h`
@@ -94,7 +97,13 @@ Header-only and freestanding, like `psync.h`. It uses GCC `__atomic` builtins wi
   2. Fill the block: `self`, `start`, `arg`, `rt`, and `ctid = 1`. `ctid` is set **before** the syscall, because the thread may exit before `SYS_THREAD_CREATE` returns.
   3. Call `SYS_THREAD_CREATE(trampoline, stack_top, block, block, &block->ctid)`.
   4. On a negative return, unmap and return the error (`-EAGAIN` at 64 threads).
-- **Trampoline.** It runs `ret = start(arg)`, then the exit path below.
+- **Trampoline and stack alignment.**
+  - The kernel enters `entry` with `RSP = stack_top`, which `SYS_THREAD_CREATE` requires to be 16-byte aligned, and with nothing pushed.
+  - The SysV x86-64 ABI expects `RSP ≡ 8 (mod 16)` at a function's first instruction, because a `call` has just pushed a return address. Entering a compiled C function directly would leave every 16-byte-aligned spill in that frame misaligned by 8 (CodeRabbit on #109).
+  - So `entry` is a naked assembly shim (`__attribute__((naked))`, so the header stays header-only): it clears `%rbp` (the frame-chain end), keeps `%rdi` (the thread block), executes `andq $-16, %rsp`, then `call pthr_start_c`, and finally `ud2`, since `pthr_start_c` never returns.
+  - At the `call`, RSP is 16-aligned, so `pthr_start_c` starts with `RSP ≡ 8 (mod 16)`, as the ABI requires.
+  - A naked function may hold only basic `asm` (no operands or clobbers). A shim of exactly this shape compiles with `-O2 -ffreestanding -mcmodel=large -Wall -Wextra -Werror` on the container's GCC 13.3. The disassembly is `endbr64` (which GCC adds), `xor %ebp,%ebp`, `and $-16,%rsp`, `call`, `ud2`. That is a compile check only; nothing has run it.
+  - `pthr_start_c(block)` runs `ret = start(arg)`, then the exit path below.
 - **Exit** (`pthr_exit(ret)`, or a return from `start`):
   1. run the key destructors (§3.5);
   2. store `ret` with release order;
@@ -103,7 +112,9 @@ Header-only and freestanding, like `psync.h`. It uses GCC `__atomic` builtins wi
 - **Join** (`pthr_join(t, &ret)`):
   - `while (load_acquire(t->ctid) != 0) FUTEX_WAIT(&t->ctid, current value)`, **without** the private flag. That matches the kernel's CLEARTID wake key in every case (§1).
   - Then read `t->ret` and unmap the whole mapping. One joiner per thread, as in POSIX.
-  - `pthr_join` on a detached thread returns `-EINVAL`, and on itself `-EDEADLK` (35, the Linux value), as POSIX specifies.
+  - `pthr_join` on itself returns `-EDEADLK` (35, the Linux value). Its own block is always mapped.
+  - `pthr_join` on a **detached** thread is undefined, as in POSIX ("the behavior is undefined if the value specified by the thread argument to `pthread_join()` does not refer to a joinable thread"). After `pthr_detach(t)`, the handle `t` may be unmapped by any later reap, so the library promises no `-EINVAL` there (CodeRabbit on #109).
+  - **`pthr_join` never reaps.** Reaping inside join could unmap a detached block that the caller wrongly passed in, before join reads it. A joinable target is never on the detached list, so no reap can unmap it while it is joinable.
 - **Memory order.**
   - The exiting thread's `ret` store comes before its syscall.
   - The kernel's 0 store and wake come after that.
@@ -115,16 +126,22 @@ Header-only and freestanding, like `psync.h`. It uses GCC `__atomic` builtins wi
 A detached thread cannot unmap its own stack while it runs on it.
 - `pthr_detach(t)` (or the detached attribute at create) puts the block on the runtime's **detached list**, under `rt_lock`. The list is the **only** owner of a detached block, so exactly one place frees it.
 - `pthr_reap()` takes `rt_lock` and unmaps every listed block whose `ctid` reads 0.
-  - It also runs at the start of each `pthr_create` and `pthr_join`.
+  - It also runs at the start of each `pthr_create`. It does not run in `pthr_join` (§3.3).
 - **Bound, stated:** the memory of detached threads that exited since the last reap stays mapped until the next reap.
 - Detaching a thread that already exited is still correct: the next reap finds `ctid == 0`.
 
 ### 3.5 Thread-specific data (keys)
 
 - `pthr_key_create(&k, dtor)` takes a free slot out of 32, under `rt_lock`. It returns `-EAGAIN` when all are used.
-- `pthr_setspecific` and `pthr_getspecific` read and write `self->spec[k]`. That is per thread, so no lock is needed.
+- **Keys carry a generation** (CodeRabbit on #109). Without one, a value stored under a deleted key would be visible to, and passed to the destructor of, a new key that reuses the slot.
+  - A key handle is `(gen << 8) | slot`. The runtime keeps `gen[slot]`, and `pthr_key_delete` increments it.
+  - A thread stores `spec[slot] = {gen, value}`.
+  - `pthr_getspecific` returns the value only when the stored generation equals the handle's; otherwise it returns NULL.
+  - At exit, a destructor runs only for a value whose stored generation equals the slot's current generation in an in-use slot.
+  - No cross-thread clearing is needed, so delete takes `rt_lock` only to bump the generation and clear the in-use bit.
+- `pthr_setspecific` and `pthr_getspecific` touch only `self->spec`, so they take no lock. They read `gen[slot]` with acquire order.
 - **At exit:** for up to `PTHR_DESTRUCTOR_ITERATIONS` (4) rounds, each non-NULL value whose key has a destructor is set to NULL and passed to that destructor (POSIX order).
-- `pthr_key_delete` frees the slot and runs no destructors (POSIX).
+- `pthr_key_delete` frees the slot, bumps its generation, and runs no destructors (POSIX).
 - **Not provided:** ELF thread-local storage (`__thread`, `PT_TLS`). The ELF loader (`kernel/exec/elf.c`) maps no TLS template, and `user.ld` has no `.tdata`. That belongs with C1.6's loader. The checklist row is worded accordingly (§8).
 
 ### 3.6 `pthr_once`
@@ -166,12 +183,12 @@ Raw kernel values, no `errno`, like `pradyos.h` and `psync.h`. POSIX returns a p
 | PR reclaim | `PRADYOS_PTHR_R rounds=200 leak_ok=1 conclusive=1` | 200 create-and-join rounds, more than the 64-thread limit, so ids and blocks must be reused. The free-page drop is measured with `pagemeter.h` (DDR-1185): a drop of at most 8 pages passes. |
 | PD detach and reap | `PRADYOS_PTHR_D detached=32 reclaimed=32 timeout=0` | 32 threads are created detached and exit. Once every `ctid` reads 0 (bounded poll), `pthr_reap` must report 32 unmapped blocks. |
 | PG guard page | `PRADYOS_PTHR_G guard_fault=1` | In a child, a thread writes one byte at its stack base minus 1, inside its own guard page. The child must die with a page fault, which the parent sees as death by signal. |
-| PK keys | `PRADYOS_PTHR_K iso_ok=4 dtor=4 placed_ok=1` | 4 threads, one per CPU, set the same key to distinct values and read them back after a barrier. Each exits with a non-NULL value; the destructor counts calls into the probe's shared page. |
+| PK keys | `PRADYOS_PTHR_K iso_ok=4 dtor=4 stale=0 placed_ok=1` | 4 threads, one per CPU, set the same key to distinct values and read them back after a barrier. Each exits with a non-NULL value; the destructor counts calls into the probe's shared page. Then the main thread sets a value under key `k1`, deletes `k1`, creates `k2` (which gets the same slot, since it is the only free one), and reads `k2`: `stale=1` if it sees the old value. |
 | PO once | `PRADYOS_PTHR_O runs=1 waited_ok=4 placed_ok=1` | 4 threads, one per CPU, call `pthr_once` together after a barrier. The routine lingers one vDSO tick and then sets `done`. Each caller checks `done == 1` on return (`waited_ok`). |
 
 All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAIL` as `FORBIDDEN_SENTINEL`. `GLOBAL_FORBIDDEN` is not touched.
 
-### 4.1 Mutants (one per arm; each must be shown red in CI before the gate merges)
+### 4.1 Mutants (at least one per arm; each must be shown red on its own arm in CI before the gate merges)
 
 | Mutant | Change in `pthr.h` | Red on | Expected value |
 |---|---|---|---|
@@ -182,6 +199,7 @@ All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAI
 | R5 | no `mprotect` on the guard page | PG | `guard_fault=0` |
 | R6 | `getspecific`/`setspecific` use one slot in the runtime, not per thread | PK | `iso_ok` < 4 |
 | R7 | `pthr_once` without state 1 (callers that find 0 run the routine; callers that find 1 return at once) | PO | `runs` > 1 or `waited_ok` < 4 |
+| R8 | `pthr_getspecific` ignores the generation | PK | `stale=1` |
 
 **Vacuity, per arm, before any arm is written:**
 - **PA.** Each thread lingers one tick before it returns, and the main thread joins right after creating. A join that does not wait (R1) therefore reads `ret` before it is written. `total` re-checks `pmutex` across `pthr` threads; it is not the target of any mutant here (Y1 owns that).
@@ -190,12 +208,12 @@ All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAI
 - **PR.** About 18 pages a round leak under R3, 3 600 in all, far over the 8-page bound. The 200 rounds also exceed the 64-thread limit, so a leak of thread slots would show as `THREAD FAIL`-style create errors (printed as `PTHR FAIL: create`).
 - **PD.** `reclaimed` counts real `munmap` returns of 0. R4 gives 0.
 - **PG.** Without the guard, the byte below the stack is still inside the thread's own mapping, so the write succeeds and the child lives. With the guard it faults. The result is deterministic, not timing-based.
-- **PK.** With one shared slot, the last writer wins, so at most one of the 4 reads back its own value.
+- **PK.** With one shared slot (R6), the last writer wins, so at most one of the 4 reads back its own value. For R8, the slot reuse is forced: the probe uses one key slot and frees it, so `k2` must land in it, and an unchecked read returns `k1`'s value.
 - **PO.** The routine lingers a tick while others arrive, so without state 1 a second caller either runs the routine too or returns before `done`.
 
 ## 5. What is gated, and what is not
 
-- **Gated (after P4b merges with R1–R7 red):** create, join and return value, sleeping join, reclaim, detach and reap, guard page, keys and destructors, once. QEMU TCG only, **not verified on real hardware**.
+- **Gated (after P4b merges with R1–R8 red):** create, join and return value, sleeping join, reclaim, detach and reap, guard page, keys and destructors, once. QEMU TCG only, **not verified on real hardware**.
 - **Gated elsewhere, reused:** mutex, condition variable, barrier and semaphore (`smoke-thread` SA–SD, Y1–Y6).
 - **Not provided and not gated:**
   - cancellation;
@@ -211,7 +229,12 @@ All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAI
 - **Separate fd tables.** A file opened in one thread is not visible in the others.
 - **Separate signal dispositions.** A signal sent to the process's pid goes to the tcb with that pid only.
 - **`execve` with more than one thread returns `-EBUSY`.** POSIX would end the other threads.
-- **`fork` from a threaded program.** The child has one thread and inherits the caller's FS base (`sched.c`, "child inherits the thread pointer") and a copy of the runtime. Detached-list entries for threads that do not exist in the child never read `ctid == 0`, so they are never reaped there. The leak is bounded by the list's length at fork; stated, not gated.
+- **`fork` after `pthr_init`: no `pthr_*` call in the child** (CodeRabbit on #109).
+  - The child has one thread, and inherits the caller's FS base (`sched.c`, "child inherits the thread pointer") and a copy of the runtime.
+  - That copy may hold `rt_lock` taken by a thread that does not exist in the child, so any call that takes it (create, reap, detach, key create or delete) could block forever. Detached-list entries for absent threads would also never read `ctid == 0`.
+  - So the contract is: after `fork`, the child may not call any `pthr_*` function or any primitive whose state another thread could have held. It may call `execve` or `exit`.
+  - There is no `pthr_atfork` and no post-fork reinitialisation. Stated, not gated.
+  - `pthrtest` follows this: the probe forks each arm's child **before** `pthr_init`, and the child calls `pthr_init` itself.
 - The library documents these in its header. Fixing the kernel ones is kernel work (P7, §7).
 
 ## 7. Order of work
@@ -222,7 +245,7 @@ All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAI
    - `user/pthrtest.c`;
    - the `smoke-pthread` target and its shard;
    - one green run on its exact head;
-   - R1–R7 dispatched (at most 3 in CI at once), each shown red on its own arm.
+   - R1–R8 dispatched (at most 3 in CI at once), each shown red on its own arm.
 
    It follows the five conditions of 6594914166. It touches no kernel code, so it is not a security boundary.
 3. **P7**, later, its own DDR:

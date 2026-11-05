@@ -13,7 +13,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
   - #108: the reaper-path gate.
   - A DDR, gate and mutant for the `map_core` guard proposed in DDR-1198.
   - DDR-1197 §10: `execve` may keep the old FS base (not verified); its own DDR.
-- **Next item:** C1.4 P4b (`pthr.h`, `pthrtest`, `smoke-pthread`, R1–R7 red), after DDR-1197 merges.
+- **Next item:** C1.4 P4b (`pthr.h`, `pthrtest`, `smoke-pthread`, R1–R8 red), after DDR-1197 merges.
 - **Known CI defect:** shard 8 `smoke-rqstress` "CPU stops ticking" (DDR-987 §8), seen once on #80; not fixed.
 - **Open decision:** the futex `g_ticks` deadline, A/B in #45 6571670160.
 - **Unexplained, not fixed:** both surface failures (DDR-1199).
