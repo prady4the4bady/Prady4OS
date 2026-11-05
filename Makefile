@@ -149,6 +149,7 @@ USER_SHM_SRC := user/shmtest.c         # DDR-1178: anonymous MAP_SHARED across f
 USER_SHM_ELF := build/shmtest.elf
 USER_THR_SRC := user/threadtest.c      # DDR-1181: threads sharing one address space (C1.4 P1)
 USER_THR_ELF := build/threadtest.elf
+USER_PTHR_SRC := user/pthrtest.c       # DDR-1197: pthr.h arms, linked into threadtest.elf
 USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
 USER_DISK_ELF  := build/disktest.elf
 USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
@@ -635,7 +636,10 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SHM_SRC) -o build/shmtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHM_ELF) build/shmtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_THR_SRC) -o build/threadtest.o
-	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_THR_ELF) build/threadtest.o
+	# DDR-1197 P4b: pthr.h arms. -DPTHR_FREESTANDING only here: a freestanding
+	# probe linked with $(USER_LD), never with $(MUSL_CRT)/$(MUSL_LIB) (D3).
+	$(CC) $(USER_C_CFLAGS) -DPTHR_FREESTANDING -c $(USER_PTHR_SRC) -o build/pthrtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_THR_ELF) build/threadtest.o build/pthrtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
@@ -4395,10 +4399,10 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 smoke-thread: $(IMG) fat-image sfs-image
 	@rm -f build/thread.log
 	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1 asleep=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_THREAD_DONE')" \
-	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nthread probe FAILED to load')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1 asleep=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_PTHR_A joined=8 ret_ok=8 total=8000 placed_ok=1\nPRADYOS_PTHR_J asleep=1 ret_ok=1 timeout=0\nPRADYOS_PTHR_R rounds=200 leak_ok=1 conclusive=1\nPRADYOS_PTHR_D detached=32 reclaimed=32 timeout=0\nPRADYOS_PTHR_G guard_fault=1\nPRADYOS_PTHR_K iso_ok=4 dtor=4 stale=0 placed_ok=1\nPRADYOS_PTHR_O runs=1 waited_ok=4 placed_ok=1\nPRADYOS_THREAD_DONE')" \
+	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nPTHR FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
-	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC" build/thread.log || true
+	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC\|\[pthr\]\|PRADYOS_PTHR\|PTHR FAIL" build/thread.log || true
 	@echo "[thread] PASS"
 
 # DDR-1177 (C1.2): cross-CPU TLB shootdown, in-kernel probe on 4 CPUs. Arms A-C

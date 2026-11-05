@@ -1,6 +1,6 @@
 # DDR-1197: C1.4 P4, a user-space pthreads library on `psync.h`
 
-Status: **design only. No code until this record is merged** (operator, #45 comment 6647074754 item 4).
+Status: **implemented in P4b** (Amendment 1), under #45 comment 6655226539. The design (§1–§9) was merged as #109 `6bb8062` before any code (6647074754 item 4).
 Written on `dev/phase1` `71ecbb6`.
 Platform: QEMU (TCG, 4 vCPU). Nothing here will be verified on real hardware.
 
@@ -279,3 +279,36 @@ All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAI
   - Linux resets the thread pointer at exec.
   - **Not verified:** whether some other exec path resets it. This is a reading of three files, not a run. It does not affect `pthr.h`, which never reads `%fs:` before `pthr_init` sets it (§3.2).
   - It is recorded for its own DDR, with a probe that execs a freestanding program from a parent that has FS set and reads `%fs:0` first.
+  - **Tracked as issue #110** (6655226539: "test it, or open it as its own tracked item").
+
+## Amendment 1 (P4b, implementation): what changed from §3–§4, and why
+
+Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 6655226539 lets the session merge P4b under the five conditions of 6594914166, provided it touches no kernel code, syscall, capability or page table.
+
+1. **The arms live in the existing `threadtest` probe; the gate is `smoke-thread`, not a new `smoke-pthread`.**
+   - A new probe would have to be embedded in the kernel image and launched from `kernel/main.c` (as `threadtest` is, behind `probe_enabled("thread")`). That is a kernel change, which 6655226539 says waits for the operator.
+   - So the seven arms are in a new file, `user/pthrtest.c`, which exports `pthr_arms()`. It is linked into `threadtest.elf` and called from `threadtest`'s `_start`, just before `PRADYOS_THREAD_DONE`.
+   - `pthrtest.c` includes only `pthr.h` and `pagemeter.h`. It has its own helpers and no access to `threadtest.c`'s statics, so it still shows the header is self-contained.
+   - The seven sentinels of §4 join `smoke-thread`'s `EXTRA_SENTINEL` list unchanged. `PTHR FAIL` joins its `FORBIDDEN_SENTINEL`. No shard assignment changes, and `GLOBAL_FORBIDDEN` is not touched.
+   - **D3's build contract holds.** The Makefile line that compiles `pthrtest.c` is the only place `-DPTHR_FREESTANDING` is set, and its link uses `$(USER_LD)` with neither `$(MUSL_CRT)` nor `$(MUSL_LIB)`.
+2. **PR uses 16 KiB stacks, and its bound is 32 pages, not 8.**
+   - A round with `PTHR_STACK_MIN` stacks maps 6 pages (guard, 4 stack, block), so R3 leaks about 1 200 pages in 200 rounds.
+   - `mmap` is a bump allocator (`mmap_pick_base` takes `mm->mmap_next`; freed ranges are not reused). So 200 rounds use about 4.8 MB of fresh address space per trial, and new page-table pages are expected. The bound of 32 is the one arm C uses.
+   - The arm warms up with 8 rounds before `pm_measure`, as arm C does. After its 200 rounds it waits (up to 2 s) until no `THREADTEST` tcb other than itself and the probe's main thread is left, so the meter's fingerprint sees none of its threads.
+3. **PJ finds the joiner through `struct pthr.tid`**, the id `SYS_THREAD_CREATE` returned. It is the pid `SYS_GETPROCS` lists (DDR-1193 Amendment 1 item 3).
+4. **PG's verdict.** The child must end by itself (no reaper kill) without its main thread setting `survived`. `survived` is set only after `pthr_join` returns, which happens only if the guard write did not fault.
+5. **PK prints `same_slot`** as a diagnostic: R8's vacuity (§4.1) needs `k2` in `k1`'s slot.
+6. **PO's routine finds its state through `pthr_self()->arg`**, since `pthr_once` passes no argument and the probe has no globals.
+7. **Compiler.** The build uses clang (`--target=x86_64-elf`), not GCC. The shim is compiled by clang and disassembles as `xorl %ebp,%ebp; andq $-16,%rsp; callq pthr__start_c; ud2`. clang has no `noipa`, so `pthr__start_c` is `used, noinline`; the call in the shim names it directly.
+8. **Mutant shapes** (each a change to `user/include/pthr.h` only):
+
+| Mutant | Exact change |
+|---|---|
+| R1 | the join loop becomes one `if` with an empty body |
+| R2 | the join loop calls `SYS_YIELD` instead of `FUTEX_WAIT` |
+| R3 | `pthr_join`'s `munmap` is removed |
+| R4 | `pthr_reap`'s `munmap` (and its count) is removed |
+| R5 | `pthr_create`'s `mprotect` becomes `pr = 0` |
+| R6 | `pthr_setspecific` and `pthr_getspecific` use the main thread's block |
+| R7 | `pthr_once` runs `fn` whenever it reads 0; there is no state 1 |
+| R8 | `pthr_getspecific` drops the generation check |

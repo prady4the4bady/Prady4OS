@@ -18,6 +18,7 @@
  *      signals and the CLEARTID wake (table in the amendment)
  *   SA SW SB SC SH SD  DDR-1193 (C1.4 P3): psync.h mutex, semaphore,
  *      condition variable and barrier, each arm in a forked child
+ *   PA PJ PR PD PG PK PO  DDR-1197 (C1.4 P4b): pthr.h, in user/pthrtest.c
  *
  * D, E/M, F and G each run in a forked CHILD (the test process). The child's
  * threads report through a MAP_SHARED anonymous page (C1.3 P1) and the parent
@@ -35,6 +36,8 @@
 #include "pagemeter.h"   /* DDR-1185 */
 #define PSYNC_STATS      /* DDR-1193: pmutex.waits, the SA contention count */
 #include "psync.h"
+
+void pthr_arms(void);    /* user/pthrtest.c (DDR-1197 Amendment 1) */
 
 #define nsi pradyos_syscall
 
@@ -1143,6 +1146,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             ph, (long)(y->bad), to, (long)(y->placed == 4));
         say("[sync] end_ms=%d\n", (long)(now() / MS));
     }
+
+    pthr_arms();          /* DDR-1197 (C1.4 P4b): PA PJ PR PD PG PK PO, user/pthrtest.c */
 
     say("PRADYOS_THREAD_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
