@@ -22,8 +22,10 @@
  *  - Inherited kernel divergences (DDR-1181 §3.6): fd tables and signal
  *    dispositions are per thread; execve with more than one thread is -EBUSY.
  *
- * The guard page under each thread stack is read-only (writes fault, reads do
- * not): the kernel refuses PROT_NONE (DDR-1031 §3).
+ * The guard page under each thread stack is read-only: the kernel refuses
+ * PROT_NONE (DDR-1031 §3). Writes into it fault; reads do not, and a frame
+ * larger than one page can step over it (DDR-1197 Amendment 1 items 9-10).
+ * Stack size is PTHR_STACK_MIN (16 KiB) to PTHR_STACK_MAX (64 MiB).
  *
  * Not provided: cancellation, pthread_sigmask, rwlocks, spinlocks, robust or PI
  * mutexes, timed waits, ELF __thread (C1.6), attributes other than stack size
@@ -48,6 +50,7 @@
 #define PTHR_PAGE                  4096UL
 #define PTHR_STACK_DEFAULT         (64UL * 1024)
 #define PTHR_STACK_MIN             (16UL * 1024)
+#define PTHR_STACK_MAX             (64UL * 1024 * 1024)   /* bounds the length arithmetic */
 #define PTHR_GEN_MASK              0xFFFFFFu
 
 #define PTHR_EAGAIN   11
@@ -294,16 +297,30 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     struct pthr *self = pthr_self();
     pthr_reap();
     unsigned long ss = (a && a->stacksize) ? a->stacksize : PTHR_STACK_DEFAULT;
-    if (ss < PTHR_STACK_MIN) return -PTHR_EINVAL;
+    /* Bounded first, so the rounding and the length below cannot wrap. */
+    if (ss < PTHR_STACK_MIN || ss > PTHR_STACK_MAX) return -PTHR_EINVAL;
     ss = (ss + PTHR_PAGE - 1) & ~(PTHR_PAGE - 1);
     unsigned long len = PTHR_PAGE + ss + PTHR_PAGE;   /* guard, stack, block */
-    long base = pthr__mmap(len);
-    if (base < 0) return base;
     /* The guard is READ-ONLY, not PROT_NONE: the kernel refuses PROT_NONE
-     * (DDR-1031 §3, it would collide with stack demand paging). A stack
-     * overflow writes (every call pushes), so it faults here; a stray read
-     * below the stack is not caught (DDR-1197 Amendment 1 item 9). */
-    long pr = pradyos_syscall(SYS_MPROTECT, base, (long)PTHR_PAGE, PTHR__PROT_READ);
+     * (DDR-1031 §3, it would collide with stack demand paging). What it
+     * catches, and what not (DDR-1197 Amendment 1 items 9-10):
+     *  - a stack overflow whose first write lands in this page (each call
+     *    and push writes) faults and ends the process;
+     *  - a frame larger than one page can step over the guard, and its
+     *    first write then lands below it, in whatever is mapped there (often
+     *    another thread's block): not caught. The build does not use
+     *    -fstack-clash-protection;
+     *  - a stray read below the stack is not caught.
+     * The whole region is mapped read-only FIRST, so the guard is never
+     * writable: fork marks only writable private pages COW (vmm_cow.c), so a
+     * fork in another thread cannot turn the guard into a page that a write
+     * copies instead of faulting on. Only the stack and the block are then
+     * made writable. A fork in that window leaves those pages COW, and
+     * mprotect answers -EACCES: the create fails; the guard is never weak. */
+    long base = pthr__sys6(SYS_MMAP, 0, (long)len, PTHR__PROT_READ,
+                           PTHR__MAP_PRIV | PTHR__MAP_ANON, -1, 0);
+    if (base < 0) return base;
+    long pr = pradyos_syscall(SYS_MPROTECT, base + (long)PTHR_PAGE, (long)(len - PTHR_PAGE), PTHR__PROT_RW);
     if (pr != 0) { pthr__munmap((uintptr_t)base, len); return pr; }
     uintptr_t stack_top = (uintptr_t)base + PTHR_PAGE + ss;
     struct pthr *t = (struct pthr *)stack_top;        /* the block sits above the stack */

@@ -308,7 +308,7 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
 | R2 | the join loop calls `SYS_YIELD` instead of `FUTEX_WAIT` |
 | R3 | `pthr_join`'s `munmap` is removed |
 | R4 | `pthr_reap`'s `munmap` (and its count) is removed |
-| R5 | `pthr_create`'s `mprotect` becomes `pr = 0` (no guard) |
+| R5 | `pthr_create` makes the whole region writable, guard included (item 10) |
 | R6 | `pthr_setspecific` and `pthr_getspecific` use the main thread's block |
 | R7 | `pthr_once` runs `fn` whenever it reads 0; there is no state 1 |
 | R8 | `pthr_getspecific` drops the generation check |
@@ -319,3 +319,11 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
    - So the guard is `mprotect(PROT_READ)`. It is present and NX, with no write bit, and not marked COW. A write to it, which is how a stack overflow begins (`call` and `push` write), faults and kills the process.
    - **What it does not catch:** a stray *read* below the stack. Stated, not gated.
    - PG still writes one byte into the guard, so the arm and R5 are unchanged. Changing the kernel to allow `PROT_NONE` would be a kernel change, which 6655226539 does not allow here.
+10. **Three CodeRabbit findings on `3e5237e`, all fixed in the next commit (so the head and every mutant are re-run on it).**
+    - **A concurrent `fork` could defeat the guard.** If another thread forked between `pthr_create`'s `mmap` and its `mprotect`, fork marked the then-writable guard page COW (`vmm_cow.c` turns every writable private page into read-only plus COW). `vmm_protect_range` keeps the COW bit, so the first write to the guard would copy the page instead of faulting.
+      - **Now:** the whole region is mapped read-only first, so the guard is never writable, and fork shares read-only pages without COW. Only the stack and the block are then made writable.
+      - A fork in that second window leaves them COW, and `mprotect(PROT_READ|PROT_WRITE)` on a COW page answers `-EACCES` (DDR-1031 §3b). So the create fails and returns the error; the guard is never weakened.
+      - That race is stated, not gated: no arm forks during a create.
+    - **`stacksize` could wrap the length.** A `stacksize` near `ULONG_MAX` wrapped `len` and `stack_top`. It is now bounded to `PTHR_STACK_MIN` … `PTHR_STACK_MAX` (16 KiB … 64 MiB) before any arithmetic, and anything outside is `-EINVAL`.
+    - **The guard does not catch a large frame.** A frame larger than one page can move `rsp` past the guard, and its first write then lands below it. Because `mmap` bumps, that is the previous mapping, often another thread's block. The build does not use `-fstack-clash-protection` (`USER_C_CFLAGS`). The header comment now says so. Stated, not gated.
+    - **R5's shape changes with the code:** it now makes the whole region writable (`mprotect(base, len, RW)`), which leaves the guard writable.
