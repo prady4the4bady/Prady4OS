@@ -277,7 +277,7 @@ static inline long pthr_reap(void) {
         struct pthr *t = *pp;
         if (__atomic_load_n(&t->ctid, __ATOMIC_ACQUIRE) == 0) {
             *pp = t->next;                 /* read before the unmap */
-            if (pthr__munmap(t->map_base, t->map_len) == 0) n++;
+            (void)0;   /* MUTANT R4: reap never unmaps */
         } else {
             pp = &t->next;
         }
