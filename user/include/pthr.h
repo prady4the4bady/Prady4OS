@@ -206,7 +206,7 @@ static inline void *pthr_getspecific(pthr_key_t k) {
     uint32_t s = k & 0xFF;
     if (s >= PTHR_KEYS_MAX) return 0;
     struct pthr *t = pthr_self();
-    if (t->spec[s].gen != (k >> 8)) return 0;      /* set under a deleted key */
+    /* MUTANT R8: generation ignored */
     return t->spec[s].val;
 }
 
