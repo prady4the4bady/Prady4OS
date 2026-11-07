@@ -390,15 +390,10 @@ static inline long pthr_join(pthr_t t, void **ret) {
 
 static inline void pthr_once(pthr_once_t *o, void (*fn)(void)) {
     if (__atomic_load_n(&o->st, __ATOMIC_ACQUIRE) == 2) return;
-    uint32_t z = 0;
-    if (__atomic_compare_exchange_n(&o->st, &z, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
+    if (__atomic_load_n(&o->st, __ATOMIC_ACQUIRE) == 0) {   /* MUTANT R7: no state 1 */
         fn();
         __atomic_store_n(&o->st, 2, __ATOMIC_RELEASE);
-        ps_futex(&o->st, PS_FUTEX_WAKE | PS_FUTEX_PRIVATE, PS_WAKE_ALL);
-        return;
     }
-    while (__atomic_load_n(&o->st, __ATOMIC_ACQUIRE) != 2)
-        ps_futex(&o->st, PS_FUTEX_WAIT | PS_FUTEX_PRIVATE, 1);
 }
 
 /* ---- the primitives: psync.h, already gated (SA-SD, Y1-Y6) ------------------- */
