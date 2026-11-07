@@ -1,6 +1,6 @@
 # DDR-1197: C1.4 P4, a user-space pthreads library on `psync.h`
 
-Status: **design only. No code until this record is merged** (operator, #45 comment 6647074754 item 4).
+Status: **implemented in P4b** (Amendment 1), under #45 comment 6655226539. The design (§1–§9) was merged as #109 `6bb8062` before any code (6647074754 item 4).
 Written on `dev/phase1` `71ecbb6`.
 Platform: QEMU (TCG, 4 vCPU). Nothing here will be verified on real hardware.
 
@@ -21,7 +21,7 @@ Read from the code at `71ecbb6`:
   - So a joiner that waits **without** `FUTEX_PRIVATE_FLAG` is woken wherever the word lives. A joiner that waits with the flag on a word in `MAP_SHARED` memory would never be woken.
 - **Futex and the sync primitives.** `SYS_FUTEX` (117) has `WAIT`, `WAKE` and private and shared keys. `user/include/psync.h` (DDR-1193, #101) gives `pmutex`, `psem`, `pcond` and `pbarrier`, gated by `smoke-thread` SA, SW, SB, SC, SH and SD.
 - **TLS register.** `SYS_SET_TLS` (27) sets the caller's FS base. `SYS_THREAD_CREATE` sets the new thread's FS base from `tls`. `smoke-thread` arm B checks a `%fs:0` self-pointer per thread.
-- **Guard pages are possible.** `SYS_MPROTECT` (97, DDR-1031) can make a page `PROT_NONE`.
+- **Guard pages are possible.** `SYS_MPROTECT` (97, DDR-1031) can make a page `PROT_NONE`. *(Wrong: DDR-1031 refuses `PROT_NONE`. The guard is read-only; see Amendment 1 item 9.)*
 - **musl is in the tree, single-threaded.** `tools/build_musl.sh` builds a subset for `init`, PRISM and `cmusl`. Its thread files are `__lock.c`, `__wait.c`, `default_attr.c` and `pthread_self.c`. There is no `pthread_create`.
   - A musl program's FS base points at musl's own `struct pthread` (`third_party/musl-overlay/__set_thread_area.s`).
 - **Probes have no writable globals.** `user/user.ld` emits one R+X segment (DDR-826, ADR-021). Any library state must live in memory the program maps.
@@ -64,7 +64,7 @@ Header-only and freestanding, like `psync.h`. It uses GCC `__atomic` builtins wi
 
 | Part | Size | Protection | Purpose |
 |---|---|---|---|
-| guard | 1 page | `PROT_NONE` (`SYS_MPROTECT`) | an overflow faults instead of writing into the next mapping |
+| guard | 1 page | read-only (`SYS_MPROTECT` `PROT_READ`; `PROT_NONE` is refused, Amendment 1 item 9) | an overflow faults instead of writing into the next mapping |
 | stack | `stacksize`, default 64 KiB, at least 16 KiB, page-rounded | RW | `stack_top` = the end of this part, 16-byte aligned |
 | thread block | 1 page | RW | `struct pthr` (below); FS points here |
 
@@ -279,3 +279,65 @@ All seven sentinels go into the new gate's `EXTRA_SENTINEL` list, with `PTHR FAI
   - Linux resets the thread pointer at exec.
   - **Not verified:** whether some other exec path resets it. This is a reading of three files, not a run. It does not affect `pthr.h`, which never reads `%fs:` before `pthr_init` sets it (§3.2).
   - It is recorded for its own DDR, with a probe that execs a freestanding program from a parent that has FS set and reads `%fs:0` first.
+  - **Tracked as issue #110** (6655226539: "test it, or open it as its own tracked item").
+
+## Amendment 1 (P4b, implementation): what changed from §3–§4, and why
+
+Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 6655226539 lets the session merge P4b under the five conditions of 6594914166, provided it touches no kernel code, syscall, capability or page table.
+
+1. **The arms live in the existing `threadtest` probe; the gate is `smoke-thread`, not a new `smoke-pthread`.**
+   - A new probe would have to be embedded in the kernel image and launched from `kernel/main.c` (as `threadtest` is, behind `probe_enabled("thread")`). That is a kernel change, which 6655226539 says waits for the operator.
+   - So the seven arms are in a new file, `user/pthrtest.c`, which exports `pthr_arms()`. It is linked into `threadtest.elf` and called from `threadtest`'s `_start`, just before `PRADYOS_THREAD_DONE`.
+   - `pthrtest.c` includes only `pthr.h` and `pagemeter.h`. It has its own helpers and no access to `threadtest.c`'s statics, so it still shows the header is self-contained.
+   - The seven sentinels of §4 join `smoke-thread`'s `EXTRA_SENTINEL` list unchanged. `PTHR FAIL` joins its `FORBIDDEN_SENTINEL`. No shard assignment changes, and `GLOBAL_FORBIDDEN` is not touched.
+   - **D3's build contract holds.** The Makefile line that compiles `pthrtest.c` is the only place `-DPTHR_FREESTANDING` is set, and its link uses `$(USER_LD)` with neither `$(MUSL_CRT)` nor `$(MUSL_LIB)`.
+2. **PR uses 16 KiB stacks, and its bound is 32 pages, not 8.**
+   - A round with `PTHR_STACK_MIN` stacks maps 6 pages (guard, 4 stack, block), so R3 leaks about 1 200 pages in 200 rounds.
+   - `mmap` is a bump allocator (`mmap_pick_base` takes `mm->mmap_next`; freed ranges are not reused). So 200 rounds use about 4.8 MB of fresh address space per trial, and new page-table pages are expected. The bound of 32 is the one arm C uses.
+   - The arm warms up with 8 rounds before `pm_measure`, as arm C does. After its 200 rounds it waits (up to 2 s) until no `THREADTEST` tcb other than itself and the probe's main thread is left, so the meter's fingerprint sees none of its threads.
+3. **PJ finds the joiner through `struct pthr.tid`**, the id `SYS_THREAD_CREATE` returned. It is the pid `SYS_GETPROCS` lists (DDR-1193 Amendment 1 item 3).
+4. **PG's verdict.** The child must end by itself (no reaper kill) without its main thread setting `survived`. `survived` is set only after `pthr_join` returns, which happens only if the guard write did not fault.
+5. **PK prints `same_slot`** as a diagnostic: R8's vacuity (§4.1) needs `k2` in `k1`'s slot.
+6. **PO's routine finds its state through `pthr_self()->arg`**, since `pthr_once` passes no argument and the probe has no globals.
+7. **Compiler.** The build uses clang (`--target=x86_64-elf`), not GCC. The shim is compiled by clang and disassembles as `xorl %ebp,%ebp; andq $-16,%rsp; callq pthr__start_c; ud2`. clang has no `noipa`, so `pthr__start_c` is `used, noinline`; the call in the shim names it directly.
+8. **Mutant shapes** (each a change to `user/include/pthr.h` only):
+
+| Mutant | Exact change |
+|---|---|
+| R1 | the join loop becomes one `if` with an empty body |
+| R2 | the join loop calls `SYS_YIELD` instead of `FUTEX_WAIT` |
+| R3 | `pthr_join`'s `munmap` is removed |
+| R4 | `pthr_reap`'s `munmap` (and its count) is removed |
+| R5 | `pthr_create`'s guard `mprotect` becomes `pr = 0`: the guard stays writable (item 11) |
+| R6 | `pthr_setspecific` and `pthr_getspecific` use the main thread's block |
+| R7 | `pthr_once` runs `fn` whenever it reads 0; there is no state 1 |
+| R8 | `pthr_getspecific` drops the generation check |
+
+9. **The guard page is read-only, not `PROT_NONE`.** Found by the first P4b run ([42046256442](https://github.com/prady4the4bady/Prady4OS/actions/runs/42046256442), shard 2): every arm printed `PTHR FAIL: <arm> create`.
+   - `sys_mprotect` refuses `PROT_NONE` with `-EINVAL` (`kernel/syscall/sys_mmap.c`, DDR-1031 §3). An absent user page would collide with the demand-paged stack (ADR-038), which faults absent pages in. §3.1 assumed `PROT_NONE`; that was wrong, and no reading of DDR-1031 was done before writing it.
+   - `munmap` is whole-region only (`sys_munmap` ignores the length and unmaps the area containing the address), so a hole cannot be cut out of one mapping either.
+   - So the guard is `mprotect(PROT_READ)`. It is present and NX, with no write bit, and not marked COW. A write to it, which is how a stack overflow begins (`call` and `push` write), faults and kills the process.
+   - **What it does not catch:** a stray *read* below the stack. Stated, not gated.
+   - PG still writes one byte into the guard, so the arm and R5 are unchanged. Changing the kernel to allow `PROT_NONE` would be a kernel change, which 6655226539 does not allow here.
+10. **Three CodeRabbit findings on `3e5237e`, all fixed in the next commit (so the head and every mutant are re-run on it).**
+    - **A concurrent `fork` could defeat the guard.** If another thread forked between `pthr_create`'s `mmap` and its `mprotect`, fork marked the then-writable guard page COW (`vmm_cow.c` turns every writable private page into read-only plus COW). `vmm_protect_range` keeps the COW bit, so the first write to the guard would copy the page instead of faulting.
+      - **Now:** the whole region is mapped read-only first, so the guard is never writable, and fork shares read-only pages without COW. Only the stack and the block are then made writable.
+      - A fork in that second window leaves them COW, and `mprotect(PROT_READ|PROT_WRITE)` on a COW page answers `-EACCES` (DDR-1031 §3b). So the create fails and returns the error; the guard is never weakened.
+      - That race is stated, not gated: no arm forks during a create.
+    - **`stacksize` could wrap the length.** A `stacksize` near `ULONG_MAX` wrapped `len` and `stack_top`. It is now bounded to `PTHR_STACK_MIN` … `PTHR_STACK_MAX` (16 KiB … 64 MiB) before any arithmetic, and anything outside is `-EINVAL`.
+    - **The guard does not catch a large frame.** A frame larger than one page can move `rsp` past the guard, and its first write then lands below it. Because `mmap` bumps, that is the previous mapping, often another thread's block. The build does not use `-fstack-clash-protection` (`USER_C_CFLAGS`). The header comment now says so. Stated, not gated.
+    - **R5's shape changes with the code:** it now makes the whole region writable (`mprotect(base, len, RW)`), which leaves the guard writable.
+11. **Two more CodeRabbit findings, both fixed in the next commit (head and all eight mutants re-run on it).**
+    - **Item 10's fork fix was wrong: it broke process isolation.** Found by CodeRabbit on `99e403b` (thread 4484457217). Item 10 mapped the region read-only first, then made the stack and block writable.
+      - At fork, `vmm_cow.c` shares a read-only private page **as is**: same frame, no COW bit, one more reference.
+      - `vmm_protect_range` refuses write only on a COW page. So a fork between the two calls left the stack and block shared with the child, and the parent's `mprotect(RW)` then succeeded. The parent's thread then wrote frames the child still maps.
+      - Item 10's claim that `mprotect` answers `-EACCES` there was wrong. It does so only on COW pages, and these were not COW.
+      - **Now:** the region is mapped writable, so a fork COWs all of it, and the guard is made read-only. A second `mprotect(RW)` on the stack and block changes no permission. It answers `-EACCES` exactly when a page there is COW, that is, when a fork ran since the `mmap`; the guard may then be COW too. In that case the region is unmapped and mapped again, at most `PTHR_CREATE_TRIES` (4) times, then `-EAGAIN`.
+      - No page is ever moved from read-only to writable, so the kernel hole below cannot be reached from `pthr_create`.
+      - Not gated: no arm forks during a create.
+    - **The kernel hole itself (by reading, not verified in CI).** Any process can map private anonymous memory read-only, fork, `mprotect` it writable and write: the child then sees the parent's writes in a private mapping. This is a kernel isolation defect, outside this PR (6655226539: a kernel change waits for the operator). It is tracked as its own issue.
+    - **A thread that detaches itself could be listed twice** (CodeRabbit, outside the diff, on `3e5237e`, line 323).
+      - A thread created joinable could call `pthr_detach(pthr_self())` before the creator reached `if (t->detached) pthr__list_add(...)`. Both then listed it, which makes a cycle in the detached list. A reap could also unmap the block while the creator was still writing `t->tid`.
+      - **Now:** the creator holds `rt_lock` from before `SYS_THREAD_CREATE` until `t` is complete and, if detached, listed. It lists only when the attribute said detached (a local copy), so `t` is listed exactly once.
+      - Not gated: no arm has a thread detach itself.
+    - **R5 is back to its first shape:** the guard's `mprotect` becomes `pr = 0`, which leaves the guard writable.
