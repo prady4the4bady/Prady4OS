@@ -329,7 +329,7 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     for (int tries = 0; tries < PTHR_CREATE_TRIES; tries++) {
         base = pthr__mmap(len);
         if (base < 0) return base;
-        long pr = pradyos_syscall(SYS_MPROTECT, base, (long)PTHR_PAGE, PTHR__PROT_READ);
+        long pr = 0;   /* MUTANT R5: guard left writable */
         if (pr != 0) { pthr__munmap((uintptr_t)base, len); return pr; }
         long ck = pradyos_syscall(SYS_MPROTECT, base + (long)PTHR_PAGE,
                                   (long)(len - PTHR_PAGE), PTHR__PROT_RW);
