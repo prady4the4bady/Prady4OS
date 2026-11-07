@@ -378,8 +378,7 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
 static inline long pthr_join(pthr_t t, void **ret) {
     if (t == pthr_self()) return -PTHR_EDEADLK;
     uint32_t c;
-    while ((c = __atomic_load_n(&t->ctid, __ATOMIC_ACQUIRE)) != 0)
-        ps_futex(&t->ctid, PS_FUTEX_WAIT, c);
+    if ((c = __atomic_load_n(&t->ctid, __ATOMIC_ACQUIRE)) != 0) { }   /* MUTANT R1: join does not wait */
     void *r = __atomic_load_n(&t->ret, __ATOMIC_ACQUIRE);
     if (ret) *ret = r;
     pthr__munmap(t->map_base, t->map_len);
