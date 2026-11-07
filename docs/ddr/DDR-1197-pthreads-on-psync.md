@@ -308,7 +308,7 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
 | R2 | the join loop calls `SYS_YIELD` instead of `FUTEX_WAIT` |
 | R3 | `pthr_join`'s `munmap` is removed |
 | R4 | `pthr_reap`'s `munmap` (and its count) is removed |
-| R5 | `pthr_create` makes the whole region writable, guard included (item 10) |
+| R5 | `pthr_create`'s guard `mprotect` becomes `pr = 0`: the guard stays writable (item 11) |
 | R6 | `pthr_setspecific` and `pthr_getspecific` use the main thread's block |
 | R7 | `pthr_once` runs `fn` whenever it reads 0; there is no state 1 |
 | R8 | `pthr_getspecific` drops the generation check |
@@ -327,3 +327,17 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
     - **`stacksize` could wrap the length.** A `stacksize` near `ULONG_MAX` wrapped `len` and `stack_top`. It is now bounded to `PTHR_STACK_MIN` … `PTHR_STACK_MAX` (16 KiB … 64 MiB) before any arithmetic, and anything outside is `-EINVAL`.
     - **The guard does not catch a large frame.** A frame larger than one page can move `rsp` past the guard, and its first write then lands below it. Because `mmap` bumps, that is the previous mapping, often another thread's block. The build does not use `-fstack-clash-protection` (`USER_C_CFLAGS`). The header comment now says so. Stated, not gated.
     - **R5's shape changes with the code:** it now makes the whole region writable (`mprotect(base, len, RW)`), which leaves the guard writable.
+11. **Two more CodeRabbit findings, both fixed in the next commit (head and all eight mutants re-run on it).**
+    - **Item 10's fork fix was wrong: it broke process isolation.** Found by CodeRabbit on `99e403b` (thread 4484457217). Item 10 mapped the region read-only first, then made the stack and block writable.
+      - At fork, `vmm_cow.c` shares a read-only private page **as is**: same frame, no COW bit, one more reference.
+      - `vmm_protect_range` refuses write only on a COW page. So a fork between the two calls left the stack and block shared with the child, and the parent's `mprotect(RW)` then succeeded. The parent's thread then wrote frames the child still maps.
+      - Item 10's claim that `mprotect` answers `-EACCES` there was wrong. It does so only on COW pages, and these were not COW.
+      - **Now:** the region is mapped writable, so a fork COWs all of it, and the guard is made read-only. A second `mprotect(RW)` on the stack and block changes no permission. It answers `-EACCES` exactly when a page there is COW, that is, when a fork ran since the `mmap`; the guard may then be COW too. In that case the region is unmapped and mapped again, at most `PTHR_CREATE_TRIES` (4) times, then `-EAGAIN`.
+      - No page is ever moved from read-only to writable, so the kernel hole below cannot be reached from `pthr_create`.
+      - Not gated: no arm forks during a create.
+    - **The kernel hole itself (by reading, not verified in CI).** Any process can map private anonymous memory read-only, fork, `mprotect` it writable and write: the child then sees the parent's writes in a private mapping. This is a kernel isolation defect, outside this PR (6655226539: a kernel change waits for the operator). It is tracked as its own issue.
+    - **A thread that detaches itself could be listed twice** (CodeRabbit, outside the diff, on `3e5237e`, line 323).
+      - A thread created joinable could call `pthr_detach(pthr_self())` before the creator reached `if (t->detached) pthr__list_add(...)`. Both then listed it, which makes a cycle in the detached list. A reap could also unmap the block while the creator was still writing `t->tid`.
+      - **Now:** the creator holds `rt_lock` from before `SYS_THREAD_CREATE` until `t` is complete and, if detached, listed. It lists only when the attribute said detached (a local copy), so `t` is listed exactly once.
+      - Not gated: no arm has a thread detach itself.
+    - **R5 is back to its first shape:** the guard's `mprotect` becomes `pr = 0`, which leaves the guard writable.

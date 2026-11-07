@@ -24,7 +24,7 @@
  *
  * The guard page under each thread stack is read-only: the kernel refuses
  * PROT_NONE (DDR-1031 §3). Writes into it fault; reads do not, and a frame
- * larger than one page can step over it (DDR-1197 Amendment 1 items 9-10).
+ * larger than one page can step over it (DDR-1197 Amendment 1 items 9-11).
  * Stack size is PTHR_STACK_MIN (16 KiB) to PTHR_STACK_MAX (64 MiB).
  *
  * Not provided: cancellation, pthread_sigmask, rwlocks, spinlocks, robust or PI
@@ -52,8 +52,10 @@
 #define PTHR_STACK_MIN             (16UL * 1024)
 #define PTHR_STACK_MAX             (64UL * 1024 * 1024)   /* bounds the length arithmetic */
 #define PTHR_GEN_MASK              0xFFFFFFu
+#define PTHR_CREATE_TRIES          4      /* maps retried when a fork lands mid-create */
 
 #define PTHR_EAGAIN   11
+#define PTHR_EACCES   13
 #define PTHR_EINVAL   22
 #define PTHR_EDEADLK  35
 
@@ -297,13 +299,14 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     struct pthr *self = pthr_self();
     pthr_reap();
     unsigned long ss = (a && a->stacksize) ? a->stacksize : PTHR_STACK_DEFAULT;
+    int det = (a && a->detached) ? 1 : 0;   /* t->detached may change once t runs */
     /* Bounded first, so the rounding and the length below cannot wrap. */
     if (ss < PTHR_STACK_MIN || ss > PTHR_STACK_MAX) return -PTHR_EINVAL;
     ss = (ss + PTHR_PAGE - 1) & ~(PTHR_PAGE - 1);
     unsigned long len = PTHR_PAGE + ss + PTHR_PAGE;   /* guard, stack, block */
     /* The guard is READ-ONLY, not PROT_NONE: the kernel refuses PROT_NONE
      * (DDR-1031 §3, it would collide with stack demand paging). What it
-     * catches, and what not (DDR-1197 Amendment 1 items 9-10):
+     * catches, and what not (DDR-1197 Amendment 1 items 9-11):
      *  - a stack overflow whose first write lands in this page (each call
      *    and push writes) faults and ends the process;
      *  - a frame larger than one page can step over the guard, and its
@@ -311,34 +314,61 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
      *    another thread's block): not caught. The build does not use
      *    -fstack-clash-protection;
      *  - a stray read below the stack is not caught.
-     * The whole region is mapped read-only FIRST, so the guard is never
-     * writable: fork marks only writable private pages COW (vmm_cow.c), so a
-     * fork in another thread cannot turn the guard into a page that a write
-     * copies instead of faulting on. Only the stack and the block are then
-     * made writable. A fork in that window leaves those pages COW, and
-     * mprotect answers -EACCES: the create fails; the guard is never weak. */
-    long base = pthr__sys6(SYS_MMAP, 0, (long)len, PTHR__PROT_READ,
-                           PTHR__MAP_PRIV | PTHR__MAP_ANON, -1, 0);
+     * A fork in another thread during these steps (Amendment 1 item 11):
+     *  - the region is mapped writable, so a fork marks all of it COW and the
+     *    child never shares a frame the parent can still write;
+     *  - a fork between the mmap and the guard's mprotect would leave the guard
+     *    COW, so a write would copy it instead of faulting. The second mprotect
+     *    detects that: it asks for RW on the stack and block, which changes no
+     *    permission, and the kernel answers -EACCES exactly when a page there
+     *    is COW, i.e. when a fork ran since the mmap. Then the region is
+     *    unmapped and mapped again, at most PTHR_CREATE_TRIES times;
+     *  - a fork after that check shares the read-only guard as it is (never
+     *    writable) and COWs the stack and block. */
+    long base = -PTHR_EAGAIN;
+    for (int tries = 0; tries < PTHR_CREATE_TRIES; tries++) {
+        base = pthr__mmap(len);
+        if (base < 0) return base;
+        long pr = pradyos_syscall(SYS_MPROTECT, base, (long)PTHR_PAGE, PTHR__PROT_READ);
+        if (pr != 0) { pthr__munmap((uintptr_t)base, len); return pr; }
+        long ck = pradyos_syscall(SYS_MPROTECT, base + (long)PTHR_PAGE,
+                                  (long)(len - PTHR_PAGE), PTHR__PROT_RW);
+        if (ck == 0) break;
+        pthr__munmap((uintptr_t)base, len);
+        if (ck != -PTHR_EACCES) return ck;
+        base = -PTHR_EAGAIN;               /* a fork ran mid-create: map again */
+    }
     if (base < 0) return base;
-    long pr = pradyos_syscall(SYS_MPROTECT, base + (long)PTHR_PAGE, (long)(len - PTHR_PAGE), PTHR__PROT_RW);
-    if (pr != 0) { pthr__munmap((uintptr_t)base, len); return pr; }
     uintptr_t stack_top = (uintptr_t)base + PTHR_PAGE + ss;
     struct pthr *t = (struct pthr *)stack_top;        /* the block sits above the stack */
     t->self = t;
     t->ctid = 1;                         /* before the syscall: the thread may exit first */
-    t->detached = (a && a->detached) ? 1u : 0u;
+    t->detached = (uint32_t)det;
     t->start = fn;
     t->arg = arg;
     t->ret = 0;
     t->map_base = (uintptr_t)base;
     t->map_len = len;
     t->rt = self->rt;
+    /* rt_lock is held from before the thread exists until t is complete and,
+     * if detached, listed (DDR-1197 Amendment 1 item 11). Meanwhile a
+     * pthr_detach(pthr_self()) by the new thread waits in pthr__list_add, and
+     * no reap can see or unmap t. A thread created joinable that detaches
+     * itself lists itself; the creator lists only when `det` was set at
+     * create, so t is listed exactly once. */
+    struct pthr_rt *rt = self->rt;
+    pmutex_lock(&rt->lock);
     long tid = pthr__sys6(SYS_THREAD_CREATE, (long)(uintptr_t)pthr__entry, (long)stack_top,
                           (long)(uintptr_t)t, (long)(uintptr_t)t, (long)(uintptr_t)&t->ctid, 0);
-    if (tid < 0) { pthr__munmap((uintptr_t)base, len); return tid; }
+    if (tid < 0) {
+        pmutex_unlock(&rt->lock);
+        pthr__munmap((uintptr_t)base, len);
+        return tid;
+    }
     t->tid = tid;
-    if (t->detached) pthr__list_add(t->rt, t);
-    *out = t;
+    if (det) { t->next = rt->detached; rt->detached = t; }
+    pmutex_unlock(&rt->lock);
+    *out = t;                            /* t may be gone already if detached */
     return 0;
 }
 
