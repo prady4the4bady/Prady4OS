@@ -196,7 +196,7 @@ static inline long pthr_key_delete(pthr_key_t k) {
 static inline long pthr_setspecific(pthr_key_t k, const void *v) {
     uint32_t s = k & 0xFF;
     if (s >= PTHR_KEYS_MAX) return -PTHR_EINVAL;
-    struct pthr *t = pthr_self();
+    struct pthr *t = pthr_self()->rt->main;   /* MUTANT R6: one shared slot */
     t->spec[s].gen = k >> 8;
     t->spec[s].val = (void *)v;
     return 0;
@@ -205,7 +205,7 @@ static inline long pthr_setspecific(pthr_key_t k, const void *v) {
 static inline void *pthr_getspecific(pthr_key_t k) {
     uint32_t s = k & 0xFF;
     if (s >= PTHR_KEYS_MAX) return 0;
-    struct pthr *t = pthr_self();
+    struct pthr *t = pthr_self()->rt->main;   /* MUTANT R6: one shared slot */
     if (t->spec[s].gen != (k >> 8)) return 0;      /* set under a deleted key */
     return t->spec[s].val;
 }
