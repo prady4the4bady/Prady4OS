@@ -8,7 +8,8 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 - **Kernel:** unchanged by #111. Gate 1,703,936 B. NSI: `SYS_FUTEX` 117, `SYS_SCHED_CPU` 118, `SYS_MSYNC` 119. DDR-1197, 1198 and 1199 are in use; next free is 1200.
 - **Merge authority:**
   - Docs-only PRs (6647074754): merge once green on the exact head, `mergeable_state` is clean and CodeRabbit has nothing unanswered.
-  - Code PRs: the five conditions of 6594914166.
+  - C1.4 code PRs: the five conditions of 6594914166 (6647074754 item 4); a security boundary waits for the operator.
+  - Any other PR that touches code, a gate, a Makefile or a workflow: ask the operator first, unless an owner comment authorizes it (6647074754 item 2).
   - Anything touching the kernel, a syscall, capabilities or page tables waits for the operator (6655226539).
 - **Open follow-ups:**
   - **#112:** kernel isolation defect, by reading. A read-only private page shared at fork can be made writable by `mprotect`. Waits for the operator (kernel change).
