@@ -382,7 +382,7 @@ static inline long pthr_join(pthr_t t, void **ret) {
         ps_futex(&t->ctid, PS_FUTEX_WAIT, c);
     void *r = __atomic_load_n(&t->ret, __ATOMIC_ACQUIRE);
     if (ret) *ret = r;
-    pthr__munmap(t->map_base, t->map_len);
+    /* MUTANT R3: join never unmaps */
     return 0;
 }
 
