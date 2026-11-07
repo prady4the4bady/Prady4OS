@@ -319,7 +319,7 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
    - So the guard is `mprotect(PROT_READ)`. It is present and NX, with no write bit, and not marked COW. A write to it, which is how a stack overflow begins (`call` and `push` write), faults and kills the process.
    - **What it does not catch:** a stray *read* below the stack. Stated, not gated.
    - PG still writes one byte into the guard, so the arm and R5 are unchanged. Changing the kernel to allow `PROT_NONE` would be a kernel change, which 6655226539 does not allow here.
-10. **Three CodeRabbit findings on `3e5237e`, all fixed in the next commit (so the head and every mutant are re-run on it).**
+10. **Three CodeRabbit findings on `3e5237e`, fixed in `99e403b`.** Item 11 then replaced that code. The push-triggered head run on `99e403b` is superseded, and no mutant run was made on it.
     - **A concurrent `fork` could defeat the guard.** If another thread forked between `pthr_create`'s `mmap` and its `mprotect`, fork marked the then-writable guard page COW (`vmm_cow.c` turns every writable private page into read-only plus COW). `vmm_protect_range` keeps the COW bit, so the first write to the guard would copy the page instead of faulting.
       - **Now:** the whole region is mapped read-only first, so the guard is never writable, and fork shares read-only pages without COW. Only the stack and the block are then made writable.
       - A fork in that second window leaves them COW, and `mprotect(PROT_READ|PROT_WRITE)` on a COW page answers `-EACCES` (DDR-1031 §3b). So the create fails and returns the error; the guard is never weakened.
@@ -327,7 +327,7 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
     - **`stacksize` could wrap the length.** A `stacksize` near `ULONG_MAX` wrapped `len` and `stack_top`. It is now bounded to `PTHR_STACK_MIN` … `PTHR_STACK_MAX` (16 KiB … 64 MiB) before any arithmetic, and anything outside is `-EINVAL`.
     - **The guard does not catch a large frame.** A frame larger than one page can move `rsp` past the guard, and its first write then lands below it. Because `mmap` bumps, that is the previous mapping, often another thread's block. The build does not use `-fstack-clash-protection` (`USER_C_CFLAGS`). The header comment now says so. Stated, not gated.
     - **R5's shape changes with the code:** it now makes the whole region writable (`mprotect(base, len, RW)`), which leaves the guard writable.
-11. **Two more CodeRabbit findings, both fixed in the next commit (head and all eight mutants re-run on it).**
+11. **Two more CodeRabbit findings, both fixed in `5bab41c`, the final head.** The head and all eight mutants were re-run on it; the results are in item 12.
     - **Item 10's fork fix was wrong: it broke process isolation.** Found by CodeRabbit on `99e403b` (thread 4484457217). Item 10 mapped the region read-only first, then made the stack and block writable.
       - At fork, `vmm_cow.c` shares a read-only private page **as is**: same frame, no COW bit, one more reference.
       - `vmm_protect_range` refuses write only on a COW page. So a fork between the two calls left the stack and block shared with the child, and the parent's `mprotect(RW)` then succeeded. The parent's thread then wrote frames the child still maps.
@@ -341,3 +341,20 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
       - **Now:** the creator holds `rt_lock` from before `SYS_THREAD_CREATE` until `t` is complete and, if detached, listed. It lists only when the attribute said detached (a local copy), so `t` is listed exactly once.
       - Not gated: no arm has a thread detach itself.
     - **R5 is back to its first shape:** the guard's `mprotect` becomes `pr = 0`, which leaves the guard writable.
+12. **Evidence on the final head `5bab41c`** (merged as #111 `2a508d5`).
+    - **Head:** run [42353336050](https://github.com/prady4the4bady/Prady4OS/actions/runs/42353336050), 17/17 checks green. Shard 2 printed all seven sentinels; PR's meter `drop=0` on one trial; PK `same_slot=1`.
+    - **Mutants:** each is a one-change commit on `5bab41c`. All 8 are red on their designed arm; there are no survivors.
+
+| Mutant | Run | Red on | Measured |
+|---|---|---|---|
+| R1 | [42353410272](https://github.com/prady4the4bady/Prady4OS/actions/runs/42353410272) | PA | `ret_ok=0 total=0`; J, R, G, K and O also red (an unmapped live stack kills the child) |
+| R2 | [42353461616](https://github.com/prady4the4bady/Prady4OS/actions/runs/42353461616) | PJ | `asleep=0` (join took 2010 ms) |
+| R3 | [42356026465](https://github.com/prady4the4bady/Prady4OS/actions/runs/42356026465) | PR | `rounds=0`, `PTHR FAIL: R create` (the leaked mappings stop `create` before the meter measures) |
+| R4 | [42356083103](https://github.com/prady4the4bady/Prady4OS/actions/runs/42356083103) | PD | `reclaimed=0` |
+| R5 | [42358257067](https://github.com/prady4the4bady/Prady4OS/actions/runs/42358257067) | PG | `guard_fault=0 survived=1` |
+| R6 | [42358757566](https://github.com/prady4the4bady/Prady4OS/actions/runs/42358757566) | PK | `iso_ok=1 dtor=0` |
+| R7 | [42360441092](https://github.com/prady4the4bady/Prady4OS/actions/runs/42360441092) | PO | `runs=4` |
+| R8 | [42361007239](https://github.com/prady4the4bady/Prady4OS/actions/runs/42361007239) | PK | `stale=1` (`iso_ok=4 dtor=4`) |
+
+    - The earlier mutant runs on `3e5237e` (all 8 red) are superseded; they are listed in #111's description.
+    - Emulated (QEMU TCG) only; not verified on real hardware.
