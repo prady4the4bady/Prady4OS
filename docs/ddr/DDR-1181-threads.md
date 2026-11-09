@@ -28,7 +28,7 @@
 | P2 | futex (`WAIT`/`WAKE`, private and shared), `CLEARTID` wake. | P1 |
 | P3 | User mutex, semaphore, condition variable and barrier on top of futex (DDR-1193). `kmutex` priority inheritance moved to C1.5 P3 (DDR-1193 D1). | P2 |
 | P4 | A native user-space pthreads library, `user/include/pthr.h`, on `psync.h` and the existing syscalls; no kernel change (DDR-1197 D1; the operator's instruction in issue #45, comment 6647074754, item 4). The musl plan that was here moved to P7. | P2, P3 |
-| P5 | RCU (one grace-period scheme, chosen in its own amendment). | P1 |
+| P5 | RCU (one grace-period scheme, chosen in its own amendment). The scheme is chosen in DDR-1200: kernel RCU with IF-off read sides and tick-counter grace periods; first consumer the timer-tick ring sweep. Its code touches the kernel, so it waits for the operator. | P1 |
 | P6 | Lock-order checking (lockdep-style), with a mutant that inverts an order. | P3 |
 | P7 | musl pthread: build it, add a `clone.s` overlay (it hard-codes 56/60), and add `set_tid_address`, `set_robust_list`, `rt_sigprocmask`. Shared fd table and shared signal dispositions (the P1 divergences in §3.6), and `execve` ending sibling threads. Security boundary; waits for the operator (DDR-1197 §7). | P4 |
 
