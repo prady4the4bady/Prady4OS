@@ -90,12 +90,16 @@ No `call_rcu` with arbitrary callbacks: the only deferred action needed is "free
 2. If there are none, which is the common tick, the walk takes no lock of any kind. **No `g_sched_lock` on any tick** (§5.2 point 6).
 3. Act on each candidate **as the walk reaches it**, under that thread's own wait lock, not under `g_sched_lock` (§5.2).
    - A candidate whose lock is busy is skipped and the walk goes on.
-   - At most **32 successful timeouts** per sweep; that bounds ISR time, as today's `_wake[32]` does. Busy-lock skips do not count toward the 32 (corrected after CodeRabbit on #114).
-   - An earlier draft collected 32 candidates first and acted afterwards. Then 32 candidates with busy locks could fill the list every tick, and a later waiter whose lock was free would never be tried.
+   - **No per-sweep cap** (corrected twice after CodeRabbit on #114). Every expired candidate the walk reaches is acted on in that sweep.
+   - Today's 32-entry cap exists only because the sweep collects candidates into a stack array (`_wake[32]`, `sched.c:2190`) and acts afterwards. Acting during the walk removes the array, and so the reason for a cap.
+   - ISR time stays O(ring length), the same order as today's walk: the walk visits every node anyway, and each act is one trylock, four loads and at most one `sched_unblock`.
+   - **Why both earlier drafts starved waiters:**
+     - The first collected 32 candidates before acting. Candidates with busy locks could fill the list every tick, so a later waiter whose lock was free was never tried.
+     - The second capped successful timeouts at 32 per sweep. Every sweep starts at the same ring position, so 32 early waiters that time out and block again before each sweep could take the cap every tick, and a later waiter was skipped forever.
 
 Why the behaviour is unchanged:
 - The write half (step 3) re-checks the same predicate under the lock the waiter and its normal wakers already use, and also checks that it is still **the same wait** (§5.2). A candidate that stopped qualifying, or that has moved on to a new wait, fails the re-check.
-- A thread whose deadline passes just after the scan is woken on the next tick. That is today's granularity: the sweep already runs once per tick. §5.2 gives the full lateness bound, including the 32-per-sweep cap.
+- A thread whose deadline passes just after the scan is woken on the next tick. That is today's granularity: the sweep already runs once per tick. §5.2 gives the full lateness bound; the designed sweep has no per-sweep cap.
 - A candidate tcb cannot be freed between steps 1 and 3: the whole tick runs with IF clear, so it is one read section, and every tcb free waits for a grace period (D5).
 
 What the walk needs from the writers:
@@ -128,7 +132,7 @@ So the race CodeRabbit named is not introduced by RCU. RCU does not remove it ei
 3. **A scan can miss an expired thread only while that thread's own writes are in flight.**
    - That is, it is mid-way through blocking or being woken at that instant.
    - Every CPU runs the sweep on every tick, so the next tick on any CPU sees the settled values.
-   - **Bound: one tick late, only in that race,** and only while at most 32 waiters expire together (§5.2 gives the general bound). Today's locked walk has the same exposure, since the lock does not exclude the writers.
+   - **Bound: one tick late, only in that race.** §5.2 gives the full bound, including busy wait locks. Today's locked walk has the same exposure, since the lock does not exclude the writers. Today's sweep is also capped at 32 wakes per tick; the designed sweep has no cap (§5 step 3).
    - **Progress assumption, stated rather than proved:** a store becomes visible to every CPU well within one tick. Release/acquire orders what a scan sees once it sees the release; it says nothing about **when**.
      - On x86 a store leaves the store buffer in a bounded but unspecified time. The SDM gives no number.
      - Every spinlock release in this kernel already relies on the same assumption.
@@ -177,12 +181,11 @@ The tree already has this pattern for futex sleepers. A sleeper publishes the lo
 6. **No `g_sched_lock` in the act step at all.** Arm RD (`tick_lock=0`) then holds on every tick, not only on ticks with nothing due.
 
 **Lateness bound, stated honestly.**
-- Each sweep acts on at most 32 candidates, as today (`_wake[32]`, `sched.c:2190`). Every ticking CPU sweeps every tick.
-- With `E` waiters expired at once, all are woken within `ceil(E / 32)` sweeps. On one CPU that is at most `ceil(E / 32)` ticks late. For example, 100 waiters can take up to 4 ticks.
-- Today's code has the same cap, so this is not a regression; the earlier "one tick" in point 3 holds only while `E <= 32`.
-- A candidate whose `lk` is busy is skipped and the walk goes on, so **only its own lock** can delay it. Other waiters' busy locks cannot: they are skipped and do not use up the 32.
-  - It is retried on the next tick, on every CPU. Its delay is therefore bounded by how long its own `lk` stays held across ticks. That is not bounded here; arm RE (d) measures it.
-- **Fairness:** each sweep walks from `current_thread`, and woken threads stop qualifying. So once the 32-per-sweep cap is reached, the next sweep reaches the waiters after them, and none is passed over twice for the cap.
+- Every ticking CPU sweeps every tick, and a sweep acts on **every** expired candidate it reaches, with no cap. So an expired waiter is woken by the first sweep that sees it, unless its own `lk` is busy at that moment.
+- A candidate whose `lk` is busy is skipped and the walk goes on, so **only its own lock** can delay it. It is retried on the next tick, on every CPU.
+  - Its delay is therefore one tick, plus however long its own `lk` stays held across ticks. That second part is not bounded here; arm RE (d) measures it.
+- **This holds however many waiters expire together, re-block, or arrive.** No waiter can use up a budget that another waiter needs, because there is no budget.
+- This rests on the progress assumption of §5.1 point 3: a store becomes visible to every CPU well within a tick.
 
 **Gate:** arm RE (timed wakes on time, `late_max<=1`) is the bound of point 3. A mutant **U7** makes the scan read `block_deadline` before checking `state`, with no acquire. That is the ordering point 2 forbids. Like the locked increment (§8), it is unlikely to show under TCG, so it is stated not gated up front.
 
@@ -206,7 +209,7 @@ A kernel self-test built with `-DRCU_TORTURE=1`. The flag is off by default and 
 | **RB** read side masks IF | The same readers, with sections longer than one tick. | covered by RA's `poison_seen=0` |
 | **RC** every CPU is waited on | RA's readers on every CPU, counted per CPU. | `PRADYOS_RCU_C seen_cpus=4` (each CPU's reader completed at least 100 sections) |
 | **RD** the tick takes no `g_sched_lock` when no wake is due | Count `g_sched_lock` acquisitions made from `sched_tick` over 1,000 ticks with no timed waiter. | `PRADYOS_RCU_D tick_lock=0 ticks>=1000` |
-| **RE** timed wakes still happen, on time | (a) A kernel thread blocks with a 50-tick timeout, 20 times. (b) Saturation: 100 kernel threads block with the same deadline. (c) Re-wait: a thread is woken normally just before its deadline, at once starts a new 50-tick wait, and must time out on that new deadline, not earlier and not never. (d) Head-of-line: 32 expired waiters whose wait locks are held by the test for 20 ticks, with one more expired waiter behind them on a free lock. That waiter must still time out on time. | `PRADYOS_RCU_E woke=20 late_max<=1 sat_woke=100 sat_late_max<=4 rewait_ok=20 hol_late<=1` |
+| **RE** timed wakes still happen, on time | (a) A kernel thread blocks with a 50-tick timeout, 20 times. (b) Saturation: 100 kernel threads block with the same deadline. (e) Re-block churn: 64 threads loop on 1-tick timed waits for 500 ticks while one more thread waits 50 ticks; that thread must time out on time. (c) Re-wait: a thread is woken normally just before its deadline, at once starts a new 50-tick wait, and must time out on that new deadline, not earlier and not never. (d) Head-of-line: 32 expired waiters whose wait locks are held by the test for 20 ticks, with one more expired waiter behind them on a free lock. That waiter must still time out on time. | `PRADYOS_RCU_E woke=20 late_max<=1 sat_woke=100 sat_late_max<=1 rewait_ok=20 hol_late<=1 churn_late<=1` |
 | **RF** tcb frees wait | Thread churn (create, exit, reap; 500 rounds), while the tick scan checks each node it stands on for `0xDD` and for a changed `tid` (DDR-1097's identity test). | `PRADYOS_RCU_F rounds=500 bad_node=0 deferred_max=<n> ring_len_max=<n>` |
 
 FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
@@ -221,7 +224,7 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
 | U4 | the tick sweep keeps `g_sched_lock` around the scan (today's code) | RD (`tick_lock>0`) |
 | U5 | the act step drops the `block_deadline == d_seen` and `block_lk == lk` checks (§5.2 point 3) | RE (c) (`rewait_ok<20`). Not certain to be red; see §8 |
 | U6 | the reaper frees with `kfree` instead of `rcu_defer_free` | RF (`bad_node>0`) |
-| U8 | busy-lock skips count toward the 32 (the cap applies to attempts, not to successful timeouts) | RE (d) (`hol_late>1`) |
+| U8 | a per-sweep cap of 32 timeouts is restored | RE (b) (`sat_late_max>1`) and RE (e) (`churn_late>1`) |
 | U7 | the scan reads `block_deadline` before `state`, with no acquire (§5.1) | RE, but expected to survive under TCG: stated not gated (§8) |
 
 ## 8. What is not gated, stated before any code
