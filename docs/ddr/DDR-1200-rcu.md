@@ -106,7 +106,10 @@ What the walk needs from the writers:
 - **Insertion** (`sched.c:1270-1271`) publishes with `rcu_assign_pointer(current_thread->next, t)` after `t->next`, `t->state` and `t->block_deadline` are initialised. Today these are plain stores, which the compiler may reorder inside the locked region.
 - **Unlink** keeps `t->next` intact, as `sched_ring_unlink` already does. A reader standing on `t` follows it back into the ring.
 - **No walk bound in the product** (corrected after CodeRabbit on #114). An earlier draft stopped the walk after 4,096 nodes. But the tree has no system-wide thread limit, only `THREAD_MAX_PER_MM` (64 per process, `sys_thread.c:23`), so a ring longer than that is legal. A walk that stopped early would omit threads, and their timeouts would never fire.
-  - The walk therefore runs to `current_thread`, as today's does. A consistent ring is finite, and an unlinked node's `->next` still leads back into it (above).
+  - The walk runs once round the whole ring. A consistent ring is finite, and an unlinked node's `->next` still leads back into it (above).
+- **The walk is anchored on `idle0`, not on `current_thread`** (corrected after CodeRabbit on #114). It starts at `idle0->next` and stops when it reaches `idle0` again.
+  - `idle0` is the static BSP idle thread, which the tree already names "the BSP idle + ring anchor" (`sched.c:1050`, `g_idle[0]`). Idle threads never exit, and the reaper takes only zombies, so `idle0` is never unlinked.
+  - `current_thread` is not safe as an anchor: it can be a zombie that the reaper has already unlinked (§5.3).
   - The `RCU_TORTURE` build records the longest walk seen (`ring_len_max`, printed by arm RF) as a diagnostic. It never stops the walk.
 
 ### 5.1 Concurrent access to the predicate fields (added after CodeRabbit on #114)
@@ -182,12 +185,30 @@ The tree already has this pattern for futex sleepers. A sleeper publishes the lo
 
 **Lateness bound, stated honestly.**
 - Every ticking CPU sweeps every tick, and a sweep acts on **every** expired candidate it reaches, with no cap. So an expired waiter is woken by the first sweep that sees it, unless its own `lk` is busy at that moment.
-- A candidate whose `lk` is busy is skipped and the walk goes on, so **only its own lock** can delay it. It is retried on the next tick, on every CPU.
-  - Its delay is therefore one tick, plus however long its own `lk` stays held across ticks. That second part is not bounded here; arm RE (d) measures it.
-- **This holds however many waiters expire together, re-block, or arrive.** No waiter can use up a budget that another waiter needs, because there is no budget.
+- A candidate whose `lk` is busy is skipped and the walk goes on, so no **other waiter's wait lock** can delay it. It is retried on the next tick, on every CPU.
+- **Runqueue contention does delay later candidates within a sweep** (corrected after CodeRabbit on #114).
+  - Each act calls `sched_unblock`, whose `rq_push` takes the target CPU's runqueue lock and spins for it. That lock is a leaf held only for short push and pop sections (`sched.c:101`). So each act can wait one such section, and later candidates in the same sweep wait for all the earlier acts.
+  - Sweep time is therefore O(ring length + E × one runqueue critical section). If a sweep overruns a tick, the next tick on that CPU is late by the overrun.
+  - Today's sweep has the same exposure: it also calls `sched_unblock` from the timer ISR for each wake (`sched.c:2309`).
+- **The bound, therefore:** an expired waiter is woken within the first sweep that reaches it while its own `lk` is free. That sweep can finish late by the runqueue waits of the acts before it. Neither delay is bounded here; both are measured.
 - This rests on the progress assumption of §5.1 point 3: a store becomes visible to every CPU well within a tick.
 
 **Gate:** arm RE (timed wakes on time, `late_max<=1`) is the bound of point 3. A mutant **U7** makes the scan read `block_deadline` before checking `state`, with no acquire. That is the ordering point 2 forbids. Like the locked increment (§8), it is unlikely to show under TCG, so it is stated not gated up front.
+
+### 5.3 Found on the way: today's tick walk can loop forever on an unlinked zombie (by reading, not verified)
+
+Found by CodeRabbit on #114 and traced in the tree at `733ac91`. **It is a defect in today's kernel, not in this design.**
+1. `sched_exit_common` marks the exiting thread `THREAD_ZOMBIE` under `g_sched_lock`, releases the lock, and calls `schedule()` (`sched.c:2786-2797`). The thread is still `current_thread` on its CPU.
+2. While it switches away, `schedule_locked` calls `switch_wait_offcpu_sched(next, cpu)` (`sched.c:1822`). That spins on `sti; pause; cli` (`sched.c:721` onward) while `next` is still on another CPU, so **a timer tick can land with `current_thread` == the zombie**. DDR-887's comment at `sched.c:2322` already notes this tick.
+3. On another CPU, `reaper_thread` can take that zombie (`THREAD_ZOMBIE`, its parent gone) and unlink it under `g_sched_lock` (`sched.c:2975` onward). It waits for the zombie to be off-CPU only later, before freeing it.
+4. The tick's walk then starts at the unlinked zombie and follows its `->next` into the live ring, which no longer contains the zombie. `while (_t != current_thread)` never ends.
+   - It loops with IF clear **and holding `g_sched_lock`**, so every other CPU that needs the lock stops too. That is a whole-system stall.
+
+**Status:**
+- Not reproduced.
+- Not attributed to OPEN-2 or to any recorded stall: a matching shape is not an attribution (DDR-1056).
+- Whether the window is wide enough to hit in practice is not measured.
+- Fixing it is a kernel change. It is tracked as its own issue so the operator can decide it apart from RCU. Either `idle0` anchoring (above) or a check in the reaper (do not unlink an on-CPU zombie) closes it.
 
 Not changed: `sched_snapshot`, `sched_find_child` and the `*_pid_*` helpers stay under `g_sched_lock`. They act on what they find, and DDR-1157 and DDR-1159 already fixed their lifetime that way. Moving them to RCU is a later record, if a measurement asks for it.
 
@@ -209,7 +230,7 @@ A kernel self-test built with `-DRCU_TORTURE=1`. The flag is off by default and 
 | **RB** read side masks IF | The same readers, with sections longer than one tick. | covered by RA's `poison_seen=0` |
 | **RC** every CPU is waited on | RA's readers on every CPU, counted per CPU. | `PRADYOS_RCU_C seen_cpus=4` (each CPU's reader completed at least 100 sections) |
 | **RD** the tick takes no `g_sched_lock` when no wake is due | Count `g_sched_lock` acquisitions made from `sched_tick` over 1,000 ticks with no timed waiter. | `PRADYOS_RCU_D tick_lock=0 ticks>=1000` |
-| **RE** timed wakes still happen, on time | (a) A kernel thread blocks with a 50-tick timeout, 20 times. (b) Saturation: 100 kernel threads block with the same deadline. (e) Re-block churn: 64 threads loop on 1-tick timed waits for 500 ticks while one more thread waits 50 ticks; that thread must time out on time. (c) Re-wait: a thread is woken normally just before its deadline, at once starts a new 50-tick wait, and must time out on that new deadline, not earlier and not never. (d) Head-of-line: 32 expired waiters whose wait locks are held by the test for 20 ticks, with one more expired waiter behind them on a free lock. That waiter must still time out on time. | `PRADYOS_RCU_E woke=20 late_max<=1 sat_woke=100 sat_late_max<=1 rewait_ok=20 hol_late<=1 churn_late<=1` |
+| **RE** timed wakes still happen, on time | (a) A kernel thread blocks with a 50-tick timeout, 20 times. (b) Saturation: 100 kernel threads block with the same deadline. (e) Re-block churn: 64 threads loop on 1-tick timed waits for 500 ticks while one more thread waits 50 ticks; that thread must time out on time. (c) Re-wait: a thread is woken normally just before its deadline, at once starts a new 50-tick wait, and must time out on that new deadline, not earlier and not never. (d) Head-of-line: 32 expired waiters whose wait locks are held by the test for 20 ticks, with one more expired waiter behind them on a free lock. That waiter must still time out on time. (f) Runqueue contention: 100 waiters expire together while threads pinned to every other CPU yield in a loop, keeping those runqueue locks busy. The test reports the longest sweep in TSC cycles (`sweep_max`, data, not asserted) and the worst lateness. | `PRADYOS_RCU_E woke=20 late_max<=1 sat_woke=100 sat_late_max<=1 rewait_ok=20 hol_late<=1 churn_late<=1 rq_late<=2 sweep_max=<n>` |
 | **RF** tcb frees wait | Thread churn (create, exit, reap; 500 rounds), while the tick scan checks each node it stands on for `0xDD` and for a changed `tid` (DDR-1097's identity test). | `PRADYOS_RCU_F rounds=500 bad_node=0 deferred_max=<n> ring_len_max=<n>` |
 
 FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
@@ -225,12 +246,14 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
 | U5 | the act step drops the `block_deadline == d_seen` and `block_lk == lk` checks (§5.2 point 3) | RE (c) (`rewait_ok<20`). Not certain to be red; see §8 |
 | U6 | the reaper frees with `kfree` instead of `rcu_defer_free` | RF (`bad_node>0`) |
 | U8 | a per-sweep cap of 32 timeouts is restored | RE (b) (`sat_late_max>1`) and RE (e) (`churn_late>1`) |
+| U9 | the walk is anchored on `current_thread` again, not `idle0` | RF with exit churn: the gate hangs or the walk never returns. Expected to survive unless the zombie window is hit; RF widens it with an `RCU_TORTURE` pause in `switch_wait_offcpu_sched`. Stated **possibly not gated** (§8) |
 | U7 | the scan reads `block_deadline` before `state`, with no acquire (§5.1) | RE, but expected to survive under TCG: stated not gated (§8) |
 
 ## 8. What is not gated, stated before any code
 
 - **The locked increment (§3).** A mutant that makes it a plain `++` is the store-to-load reordering case. TCG's memory model is unlikely to show it, so it would probably survive. It is stated **not gated**, and the argument for it is §3's.
 - **U7** (§5.1, scan ordering): same reason as the locked increment; stated not gated.
+- **U9** (§5.3, the walk's anchor): it needs the exit/reap window of §5.3 to land under a tick. RF widens that window but cannot force it, so U9 may survive. If it does, it is recorded as not gated.
 - **U5** may survive: the race it opens needs a normal wake and a new wait to land exactly between the scan and the act. Arm RE (c) widens that window but cannot force it. If it survives, it is recorded as not gated before merge, as 6655226539 requires.
 - **Real hardware:** none of this is verified there. Grace-period latency under TCG says nothing about real-hardware latency (CLAUDE.md non-negotiable 15).
 - **Contention:** RD counts acquisitions; it is not a speedup claim. Any performance claim needs the re-measurement of §1 with a denominator.
