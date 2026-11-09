@@ -86,13 +86,13 @@ No `call_rcu` with arbitrary callbacks: the only deferred action needed is "free
 **Today** (`sched.c:2192-2308`): under `g_sched_lock`, walk the ring. For each thread with `state == THREAD_BLOCKED && block_deadline != 0 && g_ticks >= block_deadline` (at most 32 per tick), set `wake_timed_out = 1` and `block_deadline = 0`. Then drop the lock and `sched_unblock` each one.
 
 **Designed:**
-1. Under `rcu_read_lock()`, walk the ring with `rcu_dereference` on each `->next`, and **only read** `state` and `block_deadline`. Collect candidates (at most 32).
+1. Under `rcu_read_lock()`, walk the ring with `rcu_dereference` on each `->next`, and **only read** `state` and `block_deadline`. Collect candidates (at most 32), each with the deadline value it was seen with.
 2. If there are none, which is the common tick, return. **No `g_sched_lock` on this tick.**
-3. Otherwise take `g_sched_lock`, re-check the same predicate for each candidate, and act exactly as today. Then release the lock and `sched_unblock`.
+3. Otherwise act on each candidate **under that thread's own wait lock**, not under `g_sched_lock` (§5.2).
 
 Why the behaviour is unchanged:
-- The write half (step 3) runs under the same lock with the same predicate as today. A candidate that stopped qualifying in between fails the re-check.
-- A thread whose deadline passes just after the scan is woken on the next tick. That is today's granularity: the sweep already runs once per tick.
+- The write half (step 3) re-checks the same predicate under the lock the waiter and its normal wakers already use, and also checks that it is still **the same wait** (§5.2). A candidate that stopped qualifying, or that has moved on to a new wait, fails the re-check.
+- A thread whose deadline passes just after the scan is woken on the next tick. That is today's granularity: the sweep already runs once per tick. §5.2 gives the full lateness bound, including the 32-per-sweep cap.
 - A candidate tcb cannot be freed between steps 1 and 3: the whole tick runs with IF clear, so it is one read section, and every tcb free waits for a grace period (D5).
 
 What the walk needs from the writers:
@@ -125,13 +125,37 @@ So the race CodeRabbit named is not introduced by RCU. RCU does not remove it ei
    - Every CPU runs the sweep on every tick, so the next tick on any CPU sees the settled values.
    - **Bound: one tick late, only in that race.** Today's locked walk has the same exposure, since the lock does not exclude the writers.
    - A thread that is BLOCKED with an expired deadline and no writer in flight is seen by every scan. It cannot be omitted indefinitely.
-4. **The act step** (§5 step 3) re-checks with the same atomic loads under `g_sched_lock`. It then sets `wake_timed_out` and clears `block_deadline` with atomic stores, then calls `sched_unblock`.
-   - Its CAS is what decides the wake. If the thread was woken normally in between, the CAS fails and the thread stays woken once.
+4. **The act step** is §5.2. An earlier draft of this record re-checked under `g_sched_lock`, which does not exclude the waiter or its wakers. CodeRabbit showed on #114 that a stale act could then hit a **new** wait (below).
 
-**Found on the way (by reading, not verified, not changed here):**
-- The sweep can set `wake_timed_out = 1` on a thread that a waker is waking normally at the same moment. That thread then returns `-ETIMEDOUT` although `*done` is set.
-- That is today's behaviour, and the RCU change neither causes nor fixes it.
-- Whether any caller mis-handles it is not established. It is recorded here so the code PR's review looks at it, and it is not claimed as a defect.
+**Found on the way (by reading, not verified):** two races in **today's** sweep. §5.2 closes both; neither is claimed as an observed defect.
+- **Spurious timeout.** The sweep can set `wake_timed_out = 1` on a thread that a waker is waking normally at the same moment. That thread then returns `-ETIMEDOUT` although `*done` is set.
+- **A stale timeout hits a new wait** (CodeRabbit on #114).
+  1. The sweep reads a thread as BLOCKED and expired.
+  2. A normal waker wakes it, and it runs and starts a new `sched_block_timeout`.
+  3. The sweep, still on its first reading, writes `block_deadline = 0` over the new wait's deadline. Its later `sched_unblock` can then wake the new wait spuriously, or the new wait is left blocked with no timeout.
+  - Today the window runs from the sweep's read to the `sched_unblock` loop after the walk. It is short but real on SMP, because nothing on the waiter's side takes `g_sched_lock`.
+
+### 5.2 The act step: under the waiter's own lock, bound to the same wait (added after CodeRabbit on #114)
+
+The tree already has this pattern for futex sleepers. A sleeper publishes the lock it sleeps under in `t->fx_lock` (`futex.c:139`, cleared at `:155`). `sig_raise` wakes it by taking that lock and re-checking `t->fx_lock == lk` (`futex.c:161-165`). The design generalises it to every timed wait:
+
+1. **Publish the wait.** `sched_block_timeout` stores `t->block_lk = lk` and the deadline, then `state = THREAD_BLOCKED` with release, all while holding `lk`. After `schedule()` returns and it re-takes `lk`, it clears `block_lk` and `block_deadline`.
+   - `block_lk` is a new tcb field, initialised in `sched_create_state` (CLAUDE.md non-negotiable 11).
+2. **Act under `lk`.** For each candidate, the sweep loads `lk = t->block_lk` and calls `spin_trylock(lk)`. It never spins: the timer ISR may have interrupted a holder of `lk` on this CPU. If the trylock fails, the candidate is left for the next tick.
+3. **Re-check under `lk`:** `t->block_lk == lk`, `state == THREAD_BLOCKED`, `block_deadline == d_seen` (the exact value the scan saw), and `g_ticks >= d_seen`. Only then set `wake_timed_out = 1` and `block_deadline = 0`, call `sched_unblock(t)`, and release `lk`.
+4. **Why this binds the timeout to the same wait.** While the sweep holds `lk`:
+   - A normal waker of this wait cannot run. The design requires every waker of a timed wait to set `*done` and call `sched_unblock` under that wait's `lk`; the code PR checks each of the five callers (`futex.c:148`, `virtio_blk.c:358` and `:429`, `bcast.c:78`, `ipc.c:65`).
+   - The thread cannot return from this wait either: it re-takes `lk` first. If it was already woken, it is not `BLOCKED`, so the re-check fails.
+   - If it has already started a new wait, `block_lk` or `block_deadline` differs from what the scan saw, so the re-check fails. Deadlines of one thread strictly increase: a new wait's deadline is `g_ticks + timeout` with `timeout >= 1`, taken after the old one expired. `sched_block_timeout` is required to treat `timeout_ticks == 0` as an immediate `-ETIMEDOUT` without blocking.
+   - So a stale act changes nothing. Both races above are closed.
+5. **`*done` wins.** `sched_block_timeout` returns 0 when `*done` is set under `lk`, even if `wake_timed_out` is also set. A wake that raced the timeout is not reported as a timeout.
+6. **No `g_sched_lock` in the act step at all.** Arm RD (`tick_lock=0`) then holds on every tick, not only on ticks with nothing due.
+
+**Lateness bound, stated honestly.**
+- Each sweep acts on at most 32 candidates, as today (`_wake[32]`, `sched.c:2190`). Every ticking CPU sweeps every tick.
+- With `E` waiters expired at once, all are woken within `ceil(E / 32)` sweeps. On one CPU that is at most `ceil(E / 32)` ticks late. For example, 100 waiters can take up to 4 ticks.
+- Today's code has the same cap, so this is not a regression; the earlier "one tick" in point 3 holds only while `E <= 32`.
+- A candidate whose `lk` is busy at its tick is retried on the next tick. That adds at most the time `lk` is held in a row, which is not bounded here. Arm RE measures it.
 
 **Gate:** arm RE (timed wakes on time, `late_max<=1`) is the bound of point 3. A mutant **U7** makes the scan read `block_deadline` before checking `state`, with no acquire. That is the ordering point 2 forbids. Like the locked increment (§8), it is unlikely to show under TCG, so it is stated not gated up front.
 
@@ -155,7 +179,7 @@ A kernel self-test built with `-DRCU_TORTURE=1`. The flag is off by default and 
 | **RB** read side masks IF | The same readers, with sections longer than one tick. | covered by RA's `poison_seen=0` |
 | **RC** every CPU is waited on | RA's readers on every CPU, counted per CPU. | `PRADYOS_RCU_C seen_cpus=4` (each CPU's reader completed at least 100 sections) |
 | **RD** the tick takes no `g_sched_lock` when no wake is due | Count `g_sched_lock` acquisitions made from `sched_tick` over 1,000 ticks with no timed waiter. | `PRADYOS_RCU_D tick_lock=0 ticks>=1000` |
-| **RE** timed wakes still happen, on time | A kernel thread blocks with a 50-tick timeout, 20 times. | `PRADYOS_RCU_E woke=20 late_max<=1` |
+| **RE** timed wakes still happen, on time | (a) A kernel thread blocks with a 50-tick timeout, 20 times. (b) Saturation: 100 kernel threads block with the same deadline. (c) Re-wait: a thread is woken normally just before its deadline, at once starts a new 50-tick wait, and must time out on that new deadline, not earlier and not never. | `PRADYOS_RCU_E woke=20 late_max<=1 sat_woke=100 sat_late_max<=4 rewait_ok=20` |
 | **RF** tcb frees wait | Thread churn (create, exit, reap; 500 rounds), while the tick scan checks each node it stands on for `0xDD` and for a changed `tid` (DDR-1097's identity test). | `PRADYOS_RCU_F rounds=500 bad_node=0 deferred_max=<n>` |
 
 FORBIDDEN: `[rcu] stall`, `RCU FAIL`, `ring_bound`.
@@ -168,7 +192,7 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`, `ring_bound`.
 | U2 | `rcu_read_lock` does not mask IF | RB/RA (a tick lands inside a section, the counter moves, the writer frees under a reader) |
 | U3 | `synchronize_rcu` skips the highest ticking CPU | RC/RA (the reader on that CPU sees poison) |
 | U4 | the tick sweep keeps `g_sched_lock` around the scan (today's code) | RD (`tick_lock>0`) |
-| U5 | step 3 of §5 drops the re-check under the lock | RE (a thread woken that was no longer timed out). Not certain to be red; see §8 |
+| U5 | the act step drops the `block_deadline == d_seen` and `block_lk == lk` checks (§5.2 point 3) | RE (c) (`rewait_ok<20`). Not certain to be red; see §8 |
 | U6 | the reaper frees with `kfree` instead of `rcu_defer_free` | RF (`bad_node>0`) |
 | U7 | the scan reads `block_deadline` before `state`, with no acquire (§5.1) | RE, but expected to survive under TCG: stated not gated (§8) |
 
@@ -176,7 +200,7 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`, `ring_bound`.
 
 - **The locked increment (§3).** A mutant that makes it a plain `++` is the store-to-load reordering case. TCG's memory model is unlikely to show it, so it would probably survive. It is stated **not gated**, and the argument for it is §3's.
 - **U7** (§5.1, scan ordering): same reason as the locked increment; stated not gated.
-- **U5** may survive: the race it opens needs a thread to stop qualifying exactly between the scan and the act. If it survives, it is recorded as not gated before merge, as 6655226539 requires.
+- **U5** may survive: the race it opens needs a normal wake and a new wait to land exactly between the scan and the act. Arm RE (c) widens that window but cannot force it. If it survives, it is recorded as not gated before merge, as 6655226539 requires.
 - **Real hardware:** none of this is verified there. Grace-period latency under TCG says nothing about real-hardware latency (CLAUDE.md non-negotiable 15).
 - **Contention:** RD counts acquisitions; it is not a speedup claim. Any performance claim needs the re-measurement of §1 with a denominator.
 
