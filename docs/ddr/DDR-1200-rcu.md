@@ -151,7 +151,9 @@ The tree already has this pattern for futex sleepers. A sleeper publishes the lo
 2. **Act under `lk`.** For each candidate:
    - The sweep loads `lk = __atomic_load_n(&t->block_lk, __ATOMIC_ACQUIRE)`. **If it is NULL, the candidate is skipped**: the waiter has already woken and cleared it. This is the same load-then-NULL-check `futex_kick` does (`futex.c:160-163`).
    - Then it calls `spin_trylock(lk)`. It never spins, because the timer ISR may have interrupted a holder of `lk` on this CPU. If the trylock fails, the candidate is left for the next tick.
-   - **The lock must stay valid from that load to the unlock (corrected after CodeRabbit on #114).** The rule: a lock passed to `sched_block_timeout` has static storage, or the object holding it is freed only after a grace period (`rcu_defer_free` or `synchronize_rcu`). The whole act step runs inside the tick's IF-off read section, so either way the lock cannot be freed under the sweep.
+   - **The lock must stay valid from that load to the unlock (corrected after CodeRabbit on #114).** **The rule: a lock passed to `sched_block_timeout` has static storage.** A static lock is never freed, so it is valid wherever the sweep loads it.
+     - An earlier draft also allowed a heap object freed after a grace period. That is **not** enough on its own: a sweep could load `block_lk` after the grace period has started and then use it after the free. The owner would first have to clear every published `block_lk` that names the object and block new ones.
+     - This record does not design that. A caller that needs a heap-allocated wait lock needs its own record.
    - **Every caller already meets the static rule** (by reading, at `733ac91`):
 
      | waiter | its lock lives in |
@@ -161,7 +163,7 @@ The tree already has this pattern for futex sleepers. A sleeper publishes the lo
      | bcast | the subscribers `sub_a` and `sub_b`, `main.c:295` |
      | IPC | `g_agent_ep`, `sys_aether.c:435`, and `demo_ep`, `main.c:166` |
 
-     The code PR asserts it in `sched_block_timeout`: `lk` must lie inside the kernel image's `.data`/`.bss`. A future caller with a heap-allocated lock then fails loudly until it moves to RCU-deferred freeing.
+     The code PR asserts it in `sched_block_timeout`: `lk` must lie inside the kernel image's `.data`/`.bss`. A future caller with a heap-allocated lock then fails loudly, and needs its own record, as above.
 3. **Re-check under `lk`:** `t->block_lk == lk`, `state == THREAD_BLOCKED`, `block_deadline == d_seen` (the exact value the scan saw), and `g_ticks >= d_seen`. Only then set `wake_timed_out = 1` and `block_deadline = 0`, call `sched_unblock(t)`, and release `lk`.
 4. **Why this binds the timeout to the same wait.** While the sweep holds `lk`:
    - A normal waker of this wait cannot run. The design requires every waker of a timed wait to set `*done` and call `sched_unblock` under that wait's `lk`; the code PR checks each of the five callers (`futex.c:148`, `virtio_blk.c:358` and `:429`, `bcast.c:78`, `ipc.c:65`).
