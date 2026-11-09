@@ -98,7 +98,9 @@ Why the behaviour is unchanged:
 What the walk needs from the writers:
 - **Insertion** (`sched.c:1270-1271`) publishes with `rcu_assign_pointer(current_thread->next, t)` after `t->next`, `t->state` and `t->block_deadline` are initialised. Today these are plain stores, which the compiler may reorder inside the locked region.
 - **Unlink** keeps `t->next` intact, as `sched_ring_unlink` already does. A reader standing on `t` follows it back into the ring.
-- **A bound:** the walk keeps a product-side bound (`RING_WALK_MAX`, proposed 4,096, as DDR-1096's `OPEN2_RING_MAX`). If it is reached, the walk stops and counts `ring_bound` instead of spinning in an ISR.
+- **No walk bound in the product** (corrected after CodeRabbit on #114). An earlier draft stopped the walk after 4,096 nodes. But the tree has no system-wide thread limit, only `THREAD_MAX_PER_MM` (64 per process, `sys_thread.c:23`), so a ring longer than that is legal. A walk that stopped early would omit threads, and their timeouts would never fire.
+  - The walk therefore runs to `current_thread`, as today's does. A consistent ring is finite, and an unlinked node's `->next` still leads back into it (above).
+  - The `RCU_TORTURE` build records the longest walk seen (`ring_len_max`, printed by arm RF) as a diagnostic. It never stops the walk.
 
 ### 5.1 Concurrent access to the predicate fields (added after CodeRabbit on #114)
 
@@ -123,7 +125,12 @@ So the race CodeRabbit named is not introduced by RCU. RCU does not remove it ei
 3. **A scan can miss an expired thread only while that thread's own writes are in flight.**
    - That is, it is mid-way through blocking or being woken at that instant.
    - Every CPU runs the sweep on every tick, so the next tick on any CPU sees the settled values.
-   - **Bound: one tick late, only in that race.** Today's locked walk has the same exposure, since the lock does not exclude the writers.
+   - **Bound: one tick late, only in that race,** and only while at most 32 waiters expire together (§5.2 gives the general bound). Today's locked walk has the same exposure, since the lock does not exclude the writers.
+   - **Progress assumption, stated rather than proved:** a store becomes visible to every CPU well within one tick. Release/acquire orders what a scan sees once it sees the release; it says nothing about **when**.
+     - On x86 a store leaves the store buffer in a bounded but unspecified time. The SDM gives no number.
+     - Every spinlock release in this kernel already relies on the same assumption.
+     - Under TCG, memory is shared by the host threads that run the vCPUs, so this is about host visibility, not modelled hardware.
+     - Arm RE measures the bound, and nothing here proves it.
    - A thread that is BLOCKED with an expired deadline and no writer in flight is seen by every scan. It cannot be omitted indefinitely.
 4. **The act step** is §5.2. An earlier draft of this record re-checked under `g_sched_lock`, which does not exclude the waiter or its wakers. CodeRabbit showed on #114 that a stale act could then hit a **new** wait (below).
 
@@ -180,9 +187,9 @@ A kernel self-test built with `-DRCU_TORTURE=1`. The flag is off by default and 
 | **RC** every CPU is waited on | RA's readers on every CPU, counted per CPU. | `PRADYOS_RCU_C seen_cpus=4` (each CPU's reader completed at least 100 sections) |
 | **RD** the tick takes no `g_sched_lock` when no wake is due | Count `g_sched_lock` acquisitions made from `sched_tick` over 1,000 ticks with no timed waiter. | `PRADYOS_RCU_D tick_lock=0 ticks>=1000` |
 | **RE** timed wakes still happen, on time | (a) A kernel thread blocks with a 50-tick timeout, 20 times. (b) Saturation: 100 kernel threads block with the same deadline. (c) Re-wait: a thread is woken normally just before its deadline, at once starts a new 50-tick wait, and must time out on that new deadline, not earlier and not never. | `PRADYOS_RCU_E woke=20 late_max<=1 sat_woke=100 sat_late_max<=4 rewait_ok=20` |
-| **RF** tcb frees wait | Thread churn (create, exit, reap; 500 rounds), while the tick scan checks each node it stands on for `0xDD` and for a changed `tid` (DDR-1097's identity test). | `PRADYOS_RCU_F rounds=500 bad_node=0 deferred_max=<n>` |
+| **RF** tcb frees wait | Thread churn (create, exit, reap; 500 rounds), while the tick scan checks each node it stands on for `0xDD` and for a changed `tid` (DDR-1097's identity test). | `PRADYOS_RCU_F rounds=500 bad_node=0 deferred_max=<n> ring_len_max=<n>` |
 
-FORBIDDEN: `[rcu] stall`, `RCU FAIL`, `ring_bound`.
+FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
 
 **Mutants, each a one-change commit, each expected red on its own arm:**
 
