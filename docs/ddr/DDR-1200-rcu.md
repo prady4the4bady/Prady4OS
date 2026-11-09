@@ -1,0 +1,155 @@
+# DDR-1200 — C1.4 P5: RCU in the kernel, one grace-period scheme, first consumer the timer-tick ring sweep
+
+**Status:** design. No code in this PR.
+**Part:** C1.4 P5 (DDR-1181 §2: "RCU, one grace-period scheme, chosen in its own amendment"). This record is that choice.
+**Asked by:** the operator, in this session: "Start C1.4 RCU: write its design record (DDR-1200) as a docs-only PR … If the RCU code would touch the kernel, say so and wait for me."
+**Answer to that question: yes.** The code this record designs touches the kernel: the scheduler, the reaper, a new `kernel/proc/rcu.[ch]`, `kernel/main.c` (the torture test), the `Makefile` and the CI workflow. Under #45 comment 6655226539 it waits for the operator (§9).
+**Honesty labels:** nothing here is built or measured yet. Every reading of the tree below is "by reading, at `733ac91`". QEMU TCG only; not verified on real hardware.
+
+---
+
+## 1. Where the tree is (by reading, at `733ac91`)
+
+- **No RCU, no deferred free.** `grep -rniE '\brcu\b|grace.period|quiescent'` over `kernel/` finds nothing. Every kernel object is freed with `kfree` as soon as its last unlink is done.
+- **The only cross-CPU lock is the test-and-set `spinlock_t`** (`kernel/include/spinlock.h:12`). `sched.c`'s `irq_save()` **is** `spin_lock_irqsave(&g_sched_lock)` (`sched.c:885`). The file-local `local_irq_save()` (`sched.c:896`) only masks IF.
+- **The all-threads ring.** It is a circular, singly linked list through `tcb->next`. Its users:
+
+| site | what it does | protection |
+|---|---|---|
+| `sched_create_state` (`sched.c:1269-1272`) | inserts (`t->next = cur->next; cur->next = t`) | `irq_save()` = `g_sched_lock` |
+| `sched_ring_unlink` (`sched.c:1468`) | unlinks (`p->next = t->next`), **leaves `t->next` intact** | caller holds `g_sched_lock` |
+| `sched_tick` (`sched.c:2192-2306`) | **reads the whole ring on every tick on every CPU**, in the timer ISR (DDR-955's timed-wake sweep) | `irq_save()` = `g_sched_lock` |
+| `sched_snapshot`, `sched_find_child`, the `*_pid_*` helpers (DDR-1001, 1157, 1159) | read; some act on what they find | `g_sched_lock` |
+| `sched_free_tcb` (`sched.c:1479`, reached from the reaper) | frees the tcb and its kernel stack, **after** the unlink | none needed today: every reader holds the lock |
+
+- **So every ring reader is locked today**, and the lock is what keeps a freed tcb from being read. The price is that each timer tick on each CPU takes `g_sched_lock` and walks the ring (O(threads)) while holding it, in an ISR, even when no timed wait is due.
+- **How hot that lock is (measured, but not at the tip):** DDR-1047 measured `g_sched_lock` as the most contended lock in the kernel, about 450 times the busiest runqueue lock (1,902,380 contended acquisitions in 5,000 ticks). That was before rq-2 removed `g_sched_lock` from the `schedule()` path (`sched.c:892-895`), so the figure at the tip is **not known**. The code PR re-measures it (§7, arm RE).
+
+### 1.1 Found on the way: DDR-1096 §3's "unlocked ring walk" does not match the code
+
+- DDR-1096 §3's table says `sched_tick`'s walk, `sched_snapshot`, `sched_destroy` and `reaper_thread` are protected by "`irq_save()` only", which "masks IF locally; on SMP it excludes nothing on another CPU". The debug-only comment at `sched.c:2197-2203` repeats it.
+- **That reading is wrong, and the tree already recorded the same mistake once.** DDR-1001 §4 (written before DDR-1096) says: *"My first reading was that `sched_destroy`'s unlink is guarded only by `irq_save()` … **That is wrong** … `static inline uint64_t irq_save(void) { return spin_lock_irqsave(&g_sched_lock); }` It is a real spinlock."* The tip has the same definition (`sched.c:885`).
+- **Not verified:** whether some commit between DDR-1001 and DDR-1096 defined `irq_save` differently. This clone is shallow (`git rev-parse --is-shallow-repository` = `true`), so the history is not available here.
+- **What this changes, and what it does not:**
+  - DDR-1097, 1115, 1116 and 1118 cite "DDR-1096 §3's unlocked ring walk" as a candidate OPEN-2 mechanism. By reading, the walk is locked, so that candidate has no mechanism at the tip.
+  - **This does not change OPEN-2's status.** OPEN-2 is still not declared closed (CLAUDE.md, DDR-1139). Removing one hypothesis by reading is not a finding about the others.
+  - The stale comment is corrected in the code PR (§9). It is in a kernel file, so that correction waits too.
+
+## 2. What C1.4's "RCU" means here (D1)
+
+**D1: kernel RCU, in its simplest flavour: read-side sections are regions with interrupts masked (the "RCU-sched" shape).** A writer that unlinks an object waits for a grace period before freeing it; a reader inside an IF-off region may use what it found until the region ends.
+
+Why the kernel, and not a user-space RCU library:
+- DDR-1181 §2 puts P5 on **P1** (kernel threads), not on P2/P3 (futex and `psync.h`), which a user-space RCU would need.
+- The kernel has a consumer today (§5). A user-space library would have none in the tree.
+- A user program that wants RCU can build it on `psync.h` and futex. That is a library choice, not missing OS functionality. It is **not** planned here; if it is wanted later, it is its own record.
+
+Rejected alternatives:
+- **Make the tick walk lockless without RCU.** That is exactly the use-after-free DDR-1096 described: the reaper could free the node the walk stands on.
+- **Sleepable or counter-based read sides (SRCU or epoch counters).** They cost two atomic operations per read section and let readers block. The first consumer runs in an ISR with IF already clear, so it needs neither.
+- **Grace periods driven by an IPI round** (reusing `tlb_shoot`'s ack machinery, `kernel/mm/tlb.c:95`). That is faster, but it adds a vector and couples writers to the IPI path. The reaper is not latency-bound, so ticks suffice (D2). It stays an option if a latency-bound writer appears.
+
+## 3. The grace-period scheme (D2)
+
+- **Quiescent state:** a CPU that **takes an interrupt** has IF set at that instant, so it is outside every IF-off read section. Each CPU already counts its timer ticks (`percpu.ticks`, `percpu.h:25`, incremented at the top of `sched_tick`, `sched.c:2183`). Context switches and idle `hlt` are covered too: an idle CPU in `hlt` with IF set keeps taking ticks.
+- **The increment becomes a locked RMW** (`__atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST)`, a `lock xadd` on x86). Today it is a plain `++`.
+  - **Why it must be locked:** x86 TSO lets a later load pass an earlier store. Then the ISR's own read section could load a ring pointer before the counter store becomes visible: a writer could see the counter move, free the node, and the reader would then use it. A locked instruction orders the later loads after the store.
+  - The cost is one locked add per tick per CPU, in place of today's `g_sched_lock` acquire and release on the same path.
+- **`synchronize_rcu()`** (writer side):
+  1. a full fence (`__atomic_thread_fence(__ATOMIC_SEQ_CST)`), so the unlink is visible to every CPU before the snapshot;
+  2. snapshot `ticks` of every CPU that is ticking (`shoot_ready` set, `percpu.h:68`), skipping the calling CPU, which is not in a read section by rule 2 below;
+  3. wait until every snapshotted counter has changed, yielding between polls.
+- **Why this is enough:** suppose CPU X's counter changed after the snapshot. Then an interrupt was taken on X after the snapshot. Any read section X was in when the grace period began had ended by that instant. Any read section that started later loads ring pointers after the locked increment, so after the unlink was visible, and cannot reach the unlinked node.
+- **Rules (each enforced by an assert in the code PR):**
+  1. A read section must not block, sleep or re-enable interrupts.
+  2. `synchronize_rcu()` must be called with IF set, outside every read section, and **holding no spinlock**. Otherwise a reader that takes `g_sched_lock` inside its section (§5's act step) could deadlock against a writer that holds it while waiting.
+  3. A CPU that is not ticking (not yet started, so `shoot_ready` is 0) runs no readers and is not waited on. Nothing in the tree clears `shoot_ready` once set, so a CPU that stops ticking after start is the stall case below, not this one.
+- **Stall:** a CPU that keeps IF clear for a long time (a wedged CPU, an `[apfreeze]`) stops the grace period.
+  - The writer then waits, so memory waiting to be freed grows. **It never frees early.** A leak is the safe failure, a use-after-free is not.
+  - After `RCU_STALL_TICKS` (proposed 1,000 ticks of the writer's own CPU) it prints `[rcu] stall cpu=<n> waited=<ticks>` once per grace period and keeps waiting.
+  - The stall line goes into the gate's FORBIDDEN list (§7).
+
+## 4. The API (D3), `kernel/proc/rcu.h`
+
+| call | meaning |
+|---|---|
+| `rcu_read_lock()` / `rcu_read_unlock()` | `local_irq_save` / `local_irq_restore`, plus a per-CPU nesting count used only by the asserts |
+| `rcu_dereference(p)` | `__atomic_load_n(&p, __ATOMIC_ACQUIRE)` (a plain load plus a compiler barrier on x86) |
+| `rcu_assign_pointer(p, v)` | `__atomic_store_n(&p, v, __ATOMIC_RELEASE)`, for every store that publishes a node to lockless readers |
+| `synchronize_rcu()` | §3. Blocking; kernel threads only |
+| `rcu_defer_free(struct tcb *)` | appends to one deferred list under a leaf lock; the reaper drains it (D5) |
+
+No `call_rcu` with arbitrary callbacks: the only deferred action needed is "free this tcb". A general callback list waits until a second consumer needs one.
+
+## 5. The first consumer: the timer-tick timed-wake sweep (D4)
+
+**Today** (`sched.c:2192-2308`): under `g_sched_lock`, walk the ring. For each thread with `state == THREAD_BLOCKED && block_deadline != 0 && g_ticks >= block_deadline` (at most 32 per tick), set `wake_timed_out = 1` and `block_deadline = 0`. Then drop the lock and `sched_unblock` each one.
+
+**Designed:**
+1. Under `rcu_read_lock()`, walk the ring with `rcu_dereference` on each `->next`, and **only read** `state` and `block_deadline`. Collect candidates (at most 32).
+2. If there are none, which is the common tick, return. **No `g_sched_lock` on this tick.**
+3. Otherwise take `g_sched_lock`, re-check the same predicate for each candidate, and act exactly as today. Then release the lock and `sched_unblock`.
+
+Why the behaviour is unchanged:
+- The write half (step 3) runs under the same lock with the same predicate as today. A candidate that stopped qualifying in between fails the re-check.
+- A thread whose deadline passes just after the scan is woken on the next tick. That is today's granularity: the sweep already runs once per tick.
+- A candidate tcb cannot be freed between steps 1 and 3: the whole tick runs with IF clear, so it is one read section, and every tcb free waits for a grace period (D5).
+
+What the walk needs from the writers:
+- **Insertion** (`sched.c:1270-1271`) publishes with `rcu_assign_pointer(current_thread->next, t)` after `t->next`, `t->state` and `t->block_deadline` are initialised. Today these are plain stores, which the compiler may reorder inside the locked region.
+- **Unlink** keeps `t->next` intact, as `sched_ring_unlink` already does. A reader standing on `t` follows it back into the ring.
+- **A bound:** the walk keeps a product-side bound (`RING_WALK_MAX`, proposed 4,096, as DDR-1096's `OPEN2_RING_MAX`). If it is reached, the walk stops and counts `ring_bound` instead of spinning in an ISR.
+
+Not changed: `sched_snapshot`, `sched_find_child` and the `*_pid_*` helpers stay under `g_sched_lock`. They act on what they find, and DDR-1157 and DDR-1159 already fixed their lifetime that way. Moving them to RCU is a later record, if a measurement asks for it.
+
+## 6. Freeing a tcb (D5)
+
+- Every free of a tcb that was **ever linked into the ring** goes through `rcu_defer_free(t)` after the unlink: the reaper path through `sched_free_tcb`, and `sched_destroy` for threads that were linked.
+- A tcb freed before its ring insert (the early failure paths in `sched_create_state`) is freed at once, as today.
+- **The reaper drains the list:** take the whole list, `synchronize_rcu()`, then `sched_free_tcb` each entry (kernel stack, then tcb).
+  - An entry pushed after the take waits for the next round. It was unlinked before it was pushed, so its grace period is covered.
+- **Memory bound:** at most one grace period's worth of zombies waits, plus the stall case of §3. The code PR prints the high-water mark (`rcu_deferred_max`) in the gate.
+
+## 7. Gate: `smoke-rcu` (new), and its mutants
+
+A kernel self-test built with `-DRCU_TORTURE=1`. The flag is off by default and is set only for this gate, as `OPEN2_HUNT` is (`Makefile:294`), so the default kernel build does not contain it. Each arm is checked for vacuity before it is written (CLAUDE.md non-negotiable 3).
+
+| arm | what it does | sentinel (proposed) |
+|---|---|---|
+| **RA** use-after-free | One reader kernel thread pinned to each ticking CPU (`pin_cpu`, `sched.h:278`). Each one loops: `rcu_read_lock`; `p = rcu_dereference(g_slot)`; check `p->magic`; pause about 2 ticks; check again; unlock. A writer swaps `g_slot` to a fresh node, calls `synchronize_rcu`, fills the old node with `0xDD` and frees it. | `PRADYOS_RCU_A swaps>=2000 poison_seen=0 cpus=4` |
+| **RB** read side masks IF | The same readers, with sections longer than one tick. | covered by RA's `poison_seen=0` |
+| **RC** every CPU is waited on | RA's readers on every CPU, counted per CPU. | `PRADYOS_RCU_C seen_cpus=4` (each CPU's reader completed at least 100 sections) |
+| **RD** the tick takes no `g_sched_lock` when no wake is due | Count `g_sched_lock` acquisitions made from `sched_tick` over 1,000 ticks with no timed waiter. | `PRADYOS_RCU_D tick_lock=0 ticks>=1000` |
+| **RE** timed wakes still happen, on time | A kernel thread blocks with a 50-tick timeout, 20 times. | `PRADYOS_RCU_E woke=20 late_max<=1` |
+| **RF** tcb frees wait | Thread churn (create, exit, reap; 500 rounds), while the tick scan checks each node it stands on for `0xDD` and for a changed `tid` (DDR-1097's identity test). | `PRADYOS_RCU_F rounds=500 bad_node=0 deferred_max=<n>` |
+
+FORBIDDEN: `[rcu] stall`, `RCU FAIL`, `ring_bound`.
+
+**Mutants, each a one-change commit, each expected red on its own arm:**
+
+| mutant | change | red on |
+|---|---|---|
+| U1 | `synchronize_rcu` returns at once | RA (`poison_seen>0`) |
+| U2 | `rcu_read_lock` does not mask IF | RB/RA (a tick lands inside a section, the counter moves, the writer frees under a reader) |
+| U3 | `synchronize_rcu` skips the highest ticking CPU | RC/RA (the reader on that CPU sees poison) |
+| U4 | the tick sweep keeps `g_sched_lock` around the scan (today's code) | RD (`tick_lock>0`) |
+| U5 | step 3 of §5 drops the re-check under the lock | RE (a thread woken that was no longer timed out). Not certain to be red; see §8 |
+| U6 | the reaper frees with `kfree` instead of `rcu_defer_free` | RF (`bad_node>0`) |
+
+## 8. What is not gated, stated before any code
+
+- **The locked increment (§3).** A mutant that makes it a plain `++` is the store-to-load reordering case. TCG's memory model is unlikely to show it, so it would probably survive. It is stated **not gated**, and the argument for it is §3's.
+- **U5** may survive: the race it opens needs a thread to stop qualifying exactly between the scan and the act. If it survives, it is recorded as not gated before merge, as 6655226539 requires.
+- **Real hardware:** none of this is verified there. Grace-period latency under TCG says nothing about real-hardware latency (CLAUDE.md non-negotiable 15).
+- **Contention:** RD counts acquisitions; it is not a speedup claim. Any performance claim needs the re-measurement of §1 with a denominator.
+
+## 9. Order of work, and who decides
+
+1. **This record**, docs only. It merges under the standing docs-only rule (6647074754 item 2).
+2. **The code PR** (`kernel/proc/rcu.[ch]`, `sched.c`, the reaper, `kernel/main.c`'s torture test, `Makefile` and the CI workflow for `smoke-rcu`). **It touches the kernel, so it waits for the operator** (6655226539; and the operator's instruction for this item). It also corrects the stale comment of §1.1.
+3. If the operator approves it, it follows the five conditions of 6594914166 (6647074754 item 4): mutants U1–U6 run in CI and shown red on the final head, or recorded as not gated.
+
+## 10. Amendments to other records (this PR)
+
+- **DDR-1181 §2, row P5:** "the scheme is chosen in DDR-1200 (kernel, IF-off read sides, tick-counter grace periods); its code waits for the operator".
+- **`docs/V1_MASTER_CHECKLIST.md`, C1.4 RCU row:** designed in DDR-1200; not ticked until the code merges.
