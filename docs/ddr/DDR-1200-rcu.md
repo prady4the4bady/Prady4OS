@@ -100,6 +100,41 @@ What the walk needs from the writers:
 - **Unlink** keeps `t->next` intact, as `sched_ring_unlink` already does. A reader standing on `t` follows it back into the ring.
 - **A bound:** the walk keeps a product-side bound (`RING_WALK_MAX`, proposed 4,096, as DDR-1096's `OPEN2_RING_MAX`). If it is reached, the walk stops and counts `ring_bound` instead of spinning in an ISR.
 
+### 5.1 Concurrent access to the predicate fields (added after CodeRabbit on #114)
+
+**Today's sweep already reads these fields concurrently with their writers (by reading, at `733ac91`).** `g_sched_lock` does not exclude them:
+
+| field | written by | under |
+|---|---|---|
+| `block_deadline` | `sched_block_timeout` sets it, and clears it after `schedule()` returns (`sched.c:2555`, `:2567`) | the caller's wait lock `lk`, **not** `g_sched_lock` |
+| `state` | `sched_block_timeout` (`:2556`) and `sched_block_on` (`:2530`) set `THREAD_BLOCKED` | `lk` |
+| `state` | `sched_block` (`:2514`) sets `THREAD_BLOCKED` | no lock (local IRQ masking) |
+| `state` | `sched_unblock`: BLOCKED to READY | a CAS, no lock; its comment already accepts that the locked walk "observes READY this pass or the next tick (benign)" |
+| `state` | `schedule_locked` (`sched.c:1720`; stores at `:1762-1852`) | the runqueue lock and local IRQ masking |
+| `block_deadline` | the sweep, to 0 (`:2250`) | `g_sched_lock` |
+
+So the race CodeRabbit named is not introduced by RCU. RCU does not remove it either. What the code PR adds is a stated discipline that makes these accesses well defined and bounds a miss:
+
+1. **Every access to `state`, `block_deadline` and `wake_timed_out` is an `__atomic` operation.** That covers loads and stores on every path in the table, plus the sweep. On x86-64 these are aligned 32- and 64-bit plain moves, so the generated code barely changes. The C-level data race, which is undefined behaviour today, becomes defined.
+2. **Order inside `sched_block_timeout`.**
+   - The blocker stores `wake_timed_out = 0` and `block_deadline` (relaxed) first, then `state = THREAD_BLOCKED` with **release**.
+   - The scan loads `state` with **acquire**, and reads `block_deadline` only after seeing `THREAD_BLOCKED`.
+   - So a scan that sees BLOCKED also sees that block's deadline, never a stale or zero one from before.
+3. **A scan can miss an expired thread only while that thread's own writes are in flight.**
+   - That is, it is mid-way through blocking or being woken at that instant.
+   - Every CPU runs the sweep on every tick, so the next tick on any CPU sees the settled values.
+   - **Bound: one tick late, only in that race.** Today's locked walk has the same exposure, since the lock does not exclude the writers.
+   - A thread that is BLOCKED with an expired deadline and no writer in flight is seen by every scan. It cannot be omitted indefinitely.
+4. **The act step** (§5 step 3) re-checks with the same atomic loads under `g_sched_lock`. It then sets `wake_timed_out` and clears `block_deadline` with atomic stores, then calls `sched_unblock`.
+   - Its CAS is what decides the wake. If the thread was woken normally in between, the CAS fails and the thread stays woken once.
+
+**Found on the way (by reading, not verified, not changed here):**
+- The sweep can set `wake_timed_out = 1` on a thread that a waker is waking normally at the same moment. That thread then returns `-ETIMEDOUT` although `*done` is set.
+- That is today's behaviour, and the RCU change neither causes nor fixes it.
+- Whether any caller mis-handles it is not established. It is recorded here so the code PR's review looks at it, and it is not claimed as a defect.
+
+**Gate:** arm RE (timed wakes on time, `late_max<=1`) is the bound of point 3. A mutant **U7** makes the scan read `block_deadline` before checking `state`, with no acquire. That is the ordering point 2 forbids. Like the locked increment (§8), it is unlikely to show under TCG, so it is stated not gated up front.
+
 Not changed: `sched_snapshot`, `sched_find_child` and the `*_pid_*` helpers stay under `g_sched_lock`. They act on what they find, and DDR-1157 and DDR-1159 already fixed their lifetime that way. Moving them to RCU is a later record, if a measurement asks for it.
 
 ## 6. Freeing a tcb (D5)
@@ -135,10 +170,12 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`, `ring_bound`.
 | U4 | the tick sweep keeps `g_sched_lock` around the scan (today's code) | RD (`tick_lock>0`) |
 | U5 | step 3 of §5 drops the re-check under the lock | RE (a thread woken that was no longer timed out). Not certain to be red; see §8 |
 | U6 | the reaper frees with `kfree` instead of `rcu_defer_free` | RF (`bad_node>0`) |
+| U7 | the scan reads `block_deadline` before `state`, with no acquire (§5.1) | RE, but expected to survive under TCG: stated not gated (§8) |
 
 ## 8. What is not gated, stated before any code
 
 - **The locked increment (§3).** A mutant that makes it a plain `++` is the store-to-load reordering case. TCG's memory model is unlikely to show it, so it would probably survive. It is stated **not gated**, and the argument for it is §3's.
+- **U7** (§5.1, scan ordering): same reason as the locked increment; stated not gated.
 - **U5** may survive: the race it opens needs a thread to stop qualifying exactly between the scan and the act. If it survives, it is recorded as not gated before merge, as 6655226539 requires.
 - **Real hardware:** none of this is verified there. Grace-period latency under TCG says nothing about real-hardware latency (CLAUDE.md non-negotiable 15).
 - **Contention:** RD counts acquisitions; it is not a speedup claim. Any performance claim needs the re-measurement of §1 with a denominator.
