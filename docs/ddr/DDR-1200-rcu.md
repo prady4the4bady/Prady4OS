@@ -92,7 +92,7 @@ No `call_rcu` with arbitrary callbacks: the only deferred action needed is "free
    - A candidate whose lock is busy is skipped and the walk goes on.
    - **No per-sweep cap** (corrected twice after CodeRabbit on #114). Every expired candidate the walk reaches is acted on in that sweep.
    - Today's 32-entry cap exists only because the sweep collects candidates into a stack array (`_wake[32]`, `sched.c:2190`) and acts afterwards. Acting during the walk removes the array, and so the reason for a cap.
-   - ISR time stays O(ring length), the same order as today's walk: the walk visits every node anyway, and each act is one trylock, four loads and at most one `sched_unblock`.
+   - The walk's own work stays O(ring length), the same order as today's walk: it visits every node anyway, and each act is one trylock, four loads and at most one `sched_unblock`. That count excludes the runqueue-lock wait inside each `sched_unblock`, which has no bound (§5.2), so the ISR's total time has no bound either. Today's sweep has the same exposure.
    - **Why both earlier drafts starved waiters:**
      - The first collected 32 candidates before acting. Candidates with busy locks could fill the list every tick, so a later waiter whose lock was free was never tried.
      - The second capped successful timeouts at 32 per sweep. Every sweep starts at the same ring position, so 32 early waiters that time out and block again before each sweep could take the cap every tick, and a later waiter was skipped forever.
