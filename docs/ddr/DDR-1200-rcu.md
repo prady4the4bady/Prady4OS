@@ -99,7 +99,7 @@ No `call_rcu` with arbitrary callbacks: the only deferred action needed is "free
 
 Why the behaviour is unchanged:
 - The write half (step 3) re-checks the same predicate under the lock the waiter and its normal wakers already use, and also checks that it is still **the same wait** (§5.2). A candidate that stopped qualifying, or that has moved on to a new wait, fails the re-check.
-- A thread whose deadline passes just after the scan is woken on the next tick. That is today's granularity: the sweep already runs once per tick. §5.2 gives the full lateness bound; the designed sweep has no per-sweep cap.
+- A thread whose deadline passes just after the scan is not seen until the next sweep. That is today's granularity: the sweep already runs once per tick. It is woken by that sweep only if its own wait lock is free then, and that sweep can itself be late (runqueue waits, overrun). §5.2 gives the full lateness, which is not bounded; the designed sweep has no per-sweep cap.
 - A candidate tcb cannot be freed between steps 1 and 3: the whole tick runs with IF clear, so it is one read section, and every tcb free waits for a grace period (D5).
 
 What the walk needs from the writers:
@@ -135,7 +135,7 @@ So the race CodeRabbit named is not introduced by RCU. RCU does not remove it ei
 3. **A scan can miss an expired thread only while that thread's own writes are in flight.**
    - That is, it is mid-way through blocking or being woken at that instant.
    - Every CPU runs the sweep on every tick, so the next tick on any CPU sees the settled values.
-   - **Bound: one tick late, only in that race.** §5.2 gives the full bound, including busy wait locks. Today's locked walk has the same exposure, since the lock does not exclude the writers. Today's sweep is also capped at 32 wakes per tick; the designed sweep has no cap (§5 step 3).
+   - **This race adds at most one tick.** That is not the total wake-up delay: busy wait locks, runqueue waits and sweep overruns add to it, and §5.2 states the total as not bounded. Today's locked walk has the same exposure, since the lock does not exclude the writers. Today's sweep is also capped at 32 wakes per tick; the designed sweep has no cap (§5 step 3).
    - **Progress assumption, stated rather than proved:** a store becomes visible to every CPU well within one tick. Release/acquire orders what a scan sees once it sees the release; it says nothing about **when**.
      - On x86 a store leaves the store buffer in a bounded but unspecified time. The SDM gives no number.
      - Every spinlock release in this kernel already relies on the same assumption.
