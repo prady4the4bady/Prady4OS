@@ -124,7 +124,13 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable);
  * Returns 0, -1 if any page in the range is absent or not user-accessible, or
  * -2 if VMM_RW was asked for on a PTE_SW_COW page (see DDR-1031 §3b: the
  * hardware RO bit IS the copy trigger, so granting write there would let one
- * process write a frame another still shares, with no copy and no fault). */
+ * process write a frame another still shares, with no copy and no fault).
+ *
+ * DDR-1202 (#112): -2 also when VMM_RW is asked for on a read-only
+ * PTE_SW_SHARED view (the vDSO page and the like). A read-only PRIVATE page
+ * whose frame someone else still holds (shared as-is by fork) is given its own
+ * copy before write is added; -3 if that copy cannot be allocated, with no
+ * permission changed. PTE_SW_SHMEM pages are never copied. */
 int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t flags);
 
 /* DDR-1177: unmap npages at va in the ACTIVE AS `pml4_phys`, shoot down every
