@@ -349,6 +349,83 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # DDR-1201: gates that REBUILD the kernel with a test-only flag.
+  #
+  # They cannot run in the shard matrix above. Every shard asserts, before and
+  # after its gates, that kernel.bin is the binary the build job produced, and a
+  # gate that rebuilds the kernel breaks that for every gate after it. So each
+  # such gate gets a job of its own here: it starts from the same build tree,
+  # checks that it received the published binary, and then runs ONE gate, whose
+  # own recipe builds the flagged kernel, boots it, and puts the default kernel
+  # back with the hash it had.
+  #
+  # One entry today: smoke-zanchor (ZANCHOR_TEST=1, #115).
+  flag-gates:
+    needs: build
+    runs-on: ubuntu-24.04   # DDR-1191: pinned, as the shards are
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [smoke-zanchor]
+    name: flag-gates (${{ matrix.gate }})
+    steps:
+      - name: Docs-only change, boot gates not run (DDR-1187)
+        if: needs.build.outputs.docs_only == 'true'
+        run: echo "docs-only pull request (DDR-1187), ${{ matrix.gate }} was not run"
+
+      - uses: actions/checkout@v5
+        if: needs.build.outputs.docs_only != 'true'
+        with:
+          submodules: recursive   # the kernel rebuild reads third_party/musl headers
+
+      # The same list as the shards, so the rebuild and the boot find every tool.
+      - name: Install toolchain
+        if: needs.build.outputs.docs_only != 'true'
+        run: |
+          bash tools/ci/apt_prepare.sh \
+            clang lld llvm nasm make qemu-system-x86 \
+            dosfstools mtools e2fsprogs \
+            ovmf xorriso grub-pc-bin grub-efi-amd64-bin      # DDR-1045
+
+      - name: Download build tree
+        if: needs.build.outputs.docs_only != 'true'
+        id: fetch
+        uses: actions/download-artifact@v8
+        with:
+          name: build-tree
+          path: build
+
+      # download-artifact does not keep mtimes; see the shard job.
+      - name: Mark the downloaded tree current
+        if: needs.build.outputs.docs_only != 'true'
+        run: find build -exec touch {} +
+
+      - name: Assert this job got the binary the build job produced
+        if: needs.build.outputs.docs_only != 'true'
+        run: cd build && sha256sum -c kernel.sha256
+
+      - name: Run ${{ matrix.gate }}
+        if: needs.build.outputs.docs_only != 'true'
+        env:
+          QEMU_QMP_DIAG: 1
+        run: make ${{ matrix.gate }}
+
+      # The gate's recipe restores the default kernel and compares its hash with
+      # the one it started from. This is the same check against the hash the
+      # build job published, so the two cannot agree on a wrong binary.
+      - name: Assert the default kernel is back
+        if: always() && steps.fetch.outcome == 'success'
+        run: cd build && sha256sum -c kernel.sha256
+
+      - name: Upload the gate's serial log on failure
+        if: failure() && steps.fetch.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: flag-gate-log-${{ matrix.gate }}
+          path: build/gatelogs/
+          retention-days: 14
+          if-no-files-found: ignore
+
   # AETHER host-side Python agent layer. Separate job from build-and-boot: it
   # shares no toolchain with the kernel and must not wait on the QEMU gates to
   # report. Without this job, "CI green" on an aether/ commit would prove only

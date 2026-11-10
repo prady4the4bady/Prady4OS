@@ -304,6 +304,13 @@ KCFLAGS += -DOPEN2_FORCE_RECYCLE=$(OPEN2_FORCE_RECYCLE)
 OPEN2_FORCE_DD ?= 0
 OPEN2_FORCE_DD_KEEPCAS ?= 0
 KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_FORCE_DD_KEEPCAS)
+# DDR-1201 (#115): the zombie-anchor window, held open. TEST BUILDS ONLY -- 0 in
+# every shipped kernel and in every shard; only `make smoke-zanchor` sets it.
+# ZANCHOR_RING_MAX bounds the tick sweep in that build, so a sweep that started
+# off the ring is counted instead of wedging the boot; 0 removes the bound.
+ZANCHOR_TEST ?= 0
+ZANCHOR_RING_MAX ?= 4096
+KCFLAGS += -DZANCHOR_TEST=$(ZANCHOR_TEST) -DZANCHOR_RING_MAX=$(ZANCHOR_RING_MAX)
 # DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
 # $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
 # produces an IDENTICAL hash -- measured, twice, in two environments. Touch a
@@ -312,7 +319,7 @@ KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_F
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -3595,6 +3602,43 @@ smoke-part: $(IMG) fat-image sfs-image
 smoke-install: iso
 	@echo "[install] install -> reboot gate (DDR-1143 sec.5/10.9)..."
 	bash tools/qemu_runner/install_test.sh
+
+# DDR-1201 (#115): a timer tick on a ZOMBIE that is still current on its CPU and
+# that a collector on another CPU has already unlinked. Arm A proves that state
+# was produced on both unlink paths (the reaper, and wait4's sched_destroy);
+# arm B proves every tick sweep on it came back to its start.
+#
+# The kernel is REBUILT with ZANCHOR_TEST=1, so this gate is in no shard: every
+# shard asserts that kernel.bin did not change while its gates ran (ci.yml). It
+# runs in the `flag-gates` CI job. KCFLAGS is not a prerequisite of
+# $(KERNEL_BIN), so a source is touched to force the rebuild (the rule at the
+# top of this file). Both sentinels exist only in the flagged build: a stale
+# default kernel fails this gate, it cannot pass it. The default kernel is put
+# back afterwards and must come back with the hash it had.
+#
+# No FORBIDDEN_SENTINEL on purpose. Arm A's line carries the exact counts and
+# arm B's line is printed only when arm A held and no sweep escaped, so every
+# failure is a MISSING required line. That keeps the DDR-785 early exit: a green
+# run stops as soon as both lines are in the log.
+smoke-zanchor: $(IMG) fat-image sfs-image
+	@echo "[zanchor] rebuilding the kernel with ZANCHOR_TEST=1 (DDR-1201)"
+	@mkdir -p build/gatelogs
+	@sha256sum $(KERNEL_BIN) | cut -d' ' -f1 > build/gatelogs/zanchor.default.sha
+	touch kernel/proc/sched.c
+	$(MAKE) image ZANCHOR_TEST=1 ZANCHOR_RING_MAX=$(ZANCHOR_RING_MAX)
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/zanchor.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ZANCHOR_A reap_hit=8 destroy_hit=8\nPRADYOS_ZANCHOR_B escaped=0')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  grep -a '\[zanchor\]\|PRADYOS_ZANCHOR\|ZANCHOR FAIL' build/gatelogs/zanchor.log || true ; \
+	  echo "[zanchor] restoring the default kernel" ; \
+	  touch kernel/proc/sched.c ; \
+	  $(MAKE) image || rc=1 ; \
+	  h=$$(sha256sum $(KERNEL_BIN) | cut -d' ' -f1) ; \
+	  [ "$$h" = "$$(cat build/gatelogs/zanchor.default.sha)" ] || \
+	    { echo "[zanchor] FAIL: the default kernel did not come back with its hash"; rc=1; } ; \
+	  exit $$rc
 
 smoke-rqfree: $(IMG) fat-image sfs-image
 	@echo "[rqfree] TCB-freed-while-queued gate (DDR-996)..."

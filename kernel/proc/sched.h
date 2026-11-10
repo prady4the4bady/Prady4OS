@@ -323,6 +323,18 @@ int         sched_rq_walk_ok(void);   /* DDR-996 §5 arm B: runqueue links sane?
 void        sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
                             uint32_t *head_pid, uint64_t *head_vr, uint32_t *head_pk);
 int         sched_rqfree_probe(int n); /* DDR-996 §5 arm A: force the window   */
+#if ZANCHOR_TEST
+/* DDR-1201 §5 (#115): ticks forced onto an on-CPU zombie that a collector has
+ * already unlinked. Test builds only. */
+struct za_result {
+    uint32_t rounds;                     /* victims per unlink path             */
+    uint32_t reap_held, reap_hit;        /* reaper path: held / took ZA_NEED hits */
+    uint32_t destroy_held, destroy_hit;  /* sched_destroy (wait4) path          */
+    uint32_t hits;                       /* all ticks on an unlinked zombie     */
+    uint32_t escaped;                    /* sweeps that never met their start   */
+};
+void        sched_zanchor_probe(uint32_t rounds, struct za_result *out);
+#endif
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */
