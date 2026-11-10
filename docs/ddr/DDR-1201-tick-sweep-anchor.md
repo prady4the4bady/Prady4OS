@@ -99,8 +99,11 @@ All ring walks are in `kernel/proc/sched.c`. No other file follows `tcb->next` (
 **The problem with testing this.** The real window is a few instructions wide. A gate that waits for it to happen by chance would pass on the unfixed tree almost every time. So the window is held open in a test build.
 
 **Build flag `ZANCHOR_TEST=1`** (default 0). It adds three hooks and a probe. The hooks count; they repair nothing.
-- **The hold** (`za_hold`, called at the top of `schedule_locked` when `prev` is the victim and a zombie). It is the product's own wait: it sets `g_in_switch` and spins on `sti; pause; cli`. It keeps spinning until a collector has unlinked the victim **and** 3 ticks have landed on this CPU after that, or 400 of this CPU's ticks pass.
+- **The hold** (`za_hold`, called at the top of `schedule_locked` when `prev` is the victim and a zombie). It sets `g_in_switch` as the product's wait does, and spins with interrupts opened once per turn. It keeps spinning until a collector has unlinked the victim **and** 3 ticks have landed on this CPU after that.
+  - **No lock is held there.** Since rq-2, `schedule()` enters `schedule_locked` with `local_irq_save()` only (`sched.c:2161-2163`); the comment above `schedule_locked` that says `g_sched_lock` is held is out of date. So the collector can take `g_sched_lock` while the victim holds.
   - It runs before the pick, not at `:1822`. Otherwise the thread it had just popped from the runqueue would wait in its hands, and that thread may be the collector.
+  - **Its window is `sti; nop; pause; cli`, not the product's `sti; pause; cli`** (§6, first item). The first CI run used the product idiom and hung.
+  - It gives up, as inconclusive, after 400 ticks of this CPU, or 400 ticks of the BSP, or 200,000,000 spins. A round that times out stops the probe (`aborted=1`), because the hooks follow one victim at a time.
 - **The unlink mark:** `sched_ring_unlink` sets `g_za_unlinked` when it unlinks the victim. Its callers hold `g_sched_lock`.
 - **The hit count:** `sched_tick`, under `g_sched_lock`, counts a hit when `current_thread` is the victim and `g_za_unlinked` is set. Both are read under the lock, so a hit is exact: at that tick the victim was current on this CPU and was off the ring.
 - **The escape count:** the sweep counts and leaves if it has not met its start after `ZANCHOR_RING_MAX` nodes (4096; the ring holds fewer than 100 threads at that point of boot). This is an instrument for the mutant, not a fix. `ZANCHOR_RING_MAX=0` removes the bound.
@@ -116,7 +119,7 @@ All ring walks are in `kernel/proc/sched.c`. No other file follows `tcb->next` (
 | **A** the state was produced | `PRADYOS_ZANCHOR_A reap_hit=8 destroy_hit=8` | In all 16 rounds, at least 3 ticks landed on a zombie that was still current on its CPU and already unlinked. Both unlink paths. |
 | **B** the sweep ended | `PRADYOS_ZANCHOR_B escaped=0` | No tick sweep ran past 4096 nodes. Printed **only if arm A held**; otherwise `ZANCHOR FAIL: ... arm B would be vacuous`. |
 
-A data line goes with them: `[zanchor] cpus=<n> rounds=8 reap_held=<n> destroy_held=<n> hits=<n> escaped=<n> ring_max=<n>`.
+A data line goes with them: `[zanchor] cpus=<n> rounds=8 reap_held=<n> destroy_held=<n> hits=<n> escaped=<n> aborted=<n> ring_max=<n>`.
 
 **Would each arm pass on the unfixed tree?**
 - Arm A does not depend on the fix. It fails if the window is not forced, which is its job.
@@ -144,6 +147,11 @@ Z1u is not a gate mutant. It is one run that shows what #115 does without the in
 
 ## 6. Found on the way
 
+- **Under QEMU TCG, `sti; pause; cli` let almost no timer tick in** (measured: run [42824823328](https://github.com/prady4the4bady/Prady4OS/actions/runs/42824823328), job `flag-gates`, head `29047d7`).
+  - Two CPUs span on that idiom in `za_hold` for about 100 s. `[apfreeze]` reported one frozen at `ticks=857` and the other moving from 55 to 57. Both RIPs resolve to the `cli` of that loop (`za_hold+0xd8`, against a local build of the same commit with the same size).
+  - The likely reason, by reading and not verified in QEMU's source here: `sti` keeps interrupts off for one more instruction, and TCG's `pause` leaves the instruction loop before that hold is dropped, so `cli` runs first.
+  - **What it means for the product.** `switch_wait_offcpu_sched` uses the same idiom so that "ticks keep advancing while we wait" (DDR-887). Under TCG they mostly do not. That wait is bounded at 4096 spins, so this is not a hang. It also means the first window of §1 is rarely open under QEMU and should be open on every turn on real hardware. **Not verified on real hardware.**
+  - Not changed here. The test hold uses `sti; nop; pause; cli`.
 - **#116:** `sched_rqfree_probe` can unlink a running thread (§3). By reading.
 - **#117:** `smoke-rqstress-liveness` and `smoke-fs-liveness` never build the kernel with `BSP_LIVENESS=1`. Their `rm -f $(BUILD_DIR)/...` removes files under `build/toolchain`, but the kernel is in `build/`. Measured with `make -n`. Both gates boot the default kernel and still pass.
 - The debug-only comment in the sweep that calls it an unlocked walk (`sched.c:2197-2203`) is still wrong, as DDR-1200 §1.1 records. Not touched here.

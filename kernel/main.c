@@ -1868,6 +1868,7 @@ static void fs_test_thread(void *arg) {
             kline_s(&k, " destroy_held=");           kline_d(&k, zr.destroy_held);
             kline_s(&k, " hits=");                   kline_d(&k, zr.hits);
             kline_s(&k, " escaped=");                kline_d(&k, zr.escaped);
+            kline_s(&k, " aborted=");                kline_d(&k, zr.aborted);
             kline_s(&k, " ring_max=");               kline_d(&k, (uint64_t)ZANCHOR_RING_MAX);
             kline_s(&k, "\r\n"); kline_emit(&k);
             /* Arm A: the state #115 needs was produced, on both unlink paths. */

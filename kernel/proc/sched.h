@@ -332,6 +332,7 @@ struct za_result {
     uint32_t destroy_held, destroy_hit;  /* sched_destroy (wait4) path          */
     uint32_t hits;                       /* all ticks on an unlinked zombie     */
     uint32_t escaped;                    /* sweeps that never met their start   */
+    uint32_t aborted;                    /* a round timed out; the rest were not run */
 };
 void        sched_zanchor_probe(uint32_t rounds, struct za_result *out);
 #endif

@@ -1473,14 +1473,22 @@ uint32_t sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t s
  * its CPU, a collector on ANOTHER CPU that has already unlinked it, and a timer
  * tick on the zombie's CPU. The product window is the `sti; pause; cli` wait in
  * switch_wait_offcpu_sched during the zombie's last switch: a few instructions.
- * za_hold() is that same wait, kept open until the unlink has happened and
- * ZA_NEED ticks have landed after it. The hooks count; they repair nothing.
+ * za_hold() is that wait, kept open until the unlink has happened and ZA_NEED
+ * ticks have landed after it. The hooks count; they repair nothing.
+ *
+ * The window is `sti; nop; pause; cli`, NOT the product's `sti; pause; cli`.
+ * Measured in CI run 42824823328 (QEMU TCG): two CPUs spinning on the product
+ * idiom here took 0 and 2 timer ticks in about 100 s. `sti` holds interrupts
+ * off for one more instruction, and under TCG `pause` leaves the instruction
+ * loop before that hold is dropped, so `cli` runs first. The `nop` takes the
+ * one-instruction hold, and the tick is then taken before `pause`.
  *
  * g_za_unlinked is stored under g_sched_lock (sched_ring_unlink's callers hold
  * it) and read under it in sched_tick, so a counted hit is exact: at that tick
  * the victim was this CPU's current thread and was off the ring. */
 #define ZA_NEED       3u     /* ticks that must land on the unlinked zombie    */
-#define ZA_HOLD_TICKS 400u   /* the hold gives up after this many of its ticks */
+#define ZA_HOLD_TICKS 400u   /* the hold gives up after this many ticks ...    */
+#define ZA_HOLD_SPINS 200000000u   /* ... or this many spins, if none arrive   */
 static struct tcb *g_za_victim;            /* set by the probe, cleared by the hold */
 static volatile uint32_t g_za_stage;       /* 1 = zombie holding on-CPU, 2 = over   */
 static volatile uint32_t g_za_unlinked;    /* the victim is off the ring            */
@@ -1488,6 +1496,9 @@ static volatile uint32_t g_za_hits;        /* ticks on it while current + unlink
 static volatile uint32_t g_za_ok;          /* the hold ended on ZA_NEED hits        */
 static volatile uint32_t g_za_escaped;     /* sweeps that ran past ZANCHOR_RING_MAX */
 
+/* Hold the exiting victim on its CPU. Called from schedule_locked with
+ * interrupts masked and NO lock held: since rq-2 schedule() takes only
+ * local_irq_save(), so the collector can take g_sched_lock meanwhile. */
 static void za_hold(int cpu) {
     struct percpu *pc = this_cpu();
     /* g_in_switch is set exactly as the product wait sets it, so the tick does
@@ -1495,16 +1506,21 @@ static void za_hold(int cpu) {
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_za_stage, 1u, __ATOMIC_RELEASE);
     uint64_t t0 = pc ? __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) : 0;
-    uint32_t ok = 0;
+    uint64_t g0 = g_ticks;
+    uint32_t ok = 0, spins = 0;
     for (;;) {
         if (__atomic_load_n(&g_za_unlinked, __ATOMIC_ACQUIRE) &&
             __atomic_load_n(&g_za_hits, __ATOMIC_ACQUIRE) >= ZA_NEED) {
             ok = 1;
             break;
         }
-        if (!pc || __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) - t0 >= ZA_HOLD_TICKS)
-            break;                              /* no collector came: inconclusive */
-        __asm__ volatile("sti; pause; cli" ::: "memory");
+        /* Three bounds, because the first two need ticks to arrive and the
+         * first CI run showed they may not: this CPU's ticks, the BSP's, and
+         * a plain spin count. Any of them ends the hold as inconclusive. */
+        if (!pc || __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) - t0 >= ZA_HOLD_TICKS ||
+            g_ticks - g0 >= ZA_HOLD_TICKS || ++spins >= ZA_HOLD_SPINS)
+            break;
+        __asm__ volatile("sti; nop; pause; cli" ::: "memory");
     }
     __atomic_store_n(&g_za_ok, ok, __ATOMIC_RELEASE);
     /* Retired HERE, before this tcb can be freed (sched_free_tcb waits for the
@@ -1778,7 +1794,8 @@ static void schedule_locked(uint64_t fl) {
 
 #if ZANCHOR_TEST
     /* DDR-1201 sec.5: before the pick, so no thread popped from this CPU's queue
-     * is kept waiting in our hands (the collector or the probe may be next). */
+     * is kept waiting in our hands (the collector or the probe may be next).
+     * No lock is held here: schedule() entered with local_irq_save() only. */
     if (prev == __atomic_load_n(&g_za_victim, __ATOMIC_ACQUIRE) &&
         prev->state == THREAD_ZOMBIE)
         za_hold(cpu);
@@ -3161,15 +3178,21 @@ void sched_start_reaper(void) {
  * Lives here because irq_save() and the hooks are file-local. */
 #define ZA_WAIT_TICKS 800u
 
+/* The victim's whole body: exit, so it becomes the ZOMBIE that za_hold holds. */
 static void za_victim_thread(void *arg) {
     (void)arg;
     sched_exit(0);              /* ZOMBIE: the only state a collector unlinks */
 }
 
+/* One round. claim = 0: the reaper unlinks the victim; claim = 1: this thread
+ * does, with sched_destroy. Returns 1 if ZA_NEED ticks landed on the unlinked
+ * victim, 0 if not, and -1 if the round timed out with the victim possibly
+ * still holding: the caller must then stop, because the hooks follow ONE
+ * victim and a new round would overwrite the one still in flight. */
 static int za_round(int claim, uint32_t *held) {
     struct tcb *v = sched_create_blocked(za_victim_thread, 0, "zavic");
     if (!v)
-        return 0;
+        return -1;
     uint64_t fl = irq_save();
     v->reap_claimed = claim ? 1 : 0;
     __atomic_store_n(&g_za_stage, 0u, __ATOMIC_RELEASE);
@@ -3190,13 +3213,15 @@ static int za_round(int claim, uint32_t *held) {
         fl = irq_save();
         __atomic_store_n(&g_za_victim, (struct tcb *)0, __ATOMIC_RELEASE);
         irq_restore(fl);
-        return 0;
+        return -1;
     }
     *held += 1;
     if (claim)
         sched_destroy(v);       /* unlink now; it frees once the hold is over */
     while (__atomic_load_n(&g_za_stage, __ATOMIC_ACQUIRE) != 2 && g_ticks < dl)
         yield();
+    if (__atomic_load_n(&g_za_stage, __ATOMIC_ACQUIRE) != 2)
+        return -1;              /* still holding: no further round is safe */
     return (int)__atomic_load_n(&g_za_ok, __ATOMIC_ACQUIRE);
 }
 
@@ -3205,13 +3230,22 @@ void sched_zanchor_probe(uint32_t rounds, struct za_result *out) {
     out->reap_held = out->reap_hit = 0;
     out->destroy_held = out->destroy_hit = 0;
     out->hits = 0;
-    for (uint32_t i = 0; i < rounds; i++) {
-        if (za_round(0, &out->reap_held))
+    out->aborted = 0;
+    for (uint32_t i = 0; i < rounds && !out->aborted; i++) {
+        int r = za_round(0, &out->reap_held);
+        if (r > 0)
             out->reap_hit++;
         out->hits += __atomic_load_n(&g_za_hits, __ATOMIC_ACQUIRE);
-        if (za_round(1, &out->destroy_held))
+        if (r < 0) {
+            out->aborted = 1;
+            break;
+        }
+        r = za_round(1, &out->destroy_held);
+        if (r > 0)
             out->destroy_hit++;
         out->hits += __atomic_load_n(&g_za_hits, __ATOMIC_ACQUIRE);
+        if (r < 0)
+            out->aborted = 1;
     }
     out->escaped = __atomic_load_n(&g_za_escaped, __ATOMIC_ACQUIRE);
 }
