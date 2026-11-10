@@ -2283,13 +2283,7 @@ void sched_tick(void) {
          * says whether current_thread is on the ring. If it is, the sweep
          * starts there exactly as before: which waiters it takes, and in what
          * order, is unchanged. If it is not, the sweep starts at idle0. */
-        struct tcb *_a = &idle0;
-        for (struct tcb *_p = idle0.next; _p != &idle0; _p = _p->next) {
-            if (_p == current_thread) {
-                _a = _p;
-                break;
-            }
-        }
+        struct tcb *_a = current_thread;   /* MUTANT Z1: the pre-fix start, no membership pass */
         struct tcb *_t = _a;
 #if ZANCHOR_TEST
         /* DDR-1201 sec.5: this tick landed on the victim while it is current
