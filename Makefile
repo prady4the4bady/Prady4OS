@@ -309,7 +309,7 @@ KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_F
 # ZANCHOR_RING_MAX bounds the tick sweep in that build, so a sweep that started
 # off the ring is counted instead of wedging the boot; 0 removes the bound.
 ZANCHOR_TEST ?= 0
-ZANCHOR_RING_MAX ?= 4096
+ZANCHOR_RING_MAX ?= 0
 KCFLAGS += -DZANCHOR_TEST=$(ZANCHOR_TEST) -DZANCHOR_RING_MAX=$(ZANCHOR_RING_MAX)
 # DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
 # $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
