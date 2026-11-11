@@ -11,6 +11,7 @@
 #include "console.h"           /* kputs for the DDR-757 W^X audit sentinel */
 #include "tlb.h"               /* DDR-1177: cross-CPU shootdown */
 #include "string.h"            /* DDR-1202: memcpy for the copy before write is added */
+static volatile int g_mut_p1 = 1;   /* MUTANT P1 */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -318,8 +319,8 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
             if (e & (VMM_RW | PTE_SW_SHMEM | PTE_SW_SHARED))
                 continue;                   /* no write is added, or a shared mapping */
             uint64_t frame = e & PTE_ADDR;
-            if (pmm_refcount_get(frame) <= 1)
-                continue;                   /* sole owner: write is safe to grant */
+            if (g_mut_p1 || pmm_refcount_get(frame) <= 1)
+                continue;                   /* MUTANT P1: never copy */
             void *copy = ptnode_alloc();
             if (!copy)
                 return -3;
