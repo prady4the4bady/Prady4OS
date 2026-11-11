@@ -293,8 +293,7 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
          * space does not own (the vDSO page, the metric page, a surface, the
          * framebuffer). If the kernel mapped it read-only, write is not this
          * process's to add: the same frame is mapped in every other process. */
-        if ((flags & VMM_RW) && !(e & VMM_RW) && (e & PTE_SW_SHARED))
-            return -2;
+        /* MUTANT P3: the read-only SHARED view refusal is gone */
     }
 
     /* PASS 1b -- DDR-1202 (#112): COPY BEFORE ADDING WRITE.
