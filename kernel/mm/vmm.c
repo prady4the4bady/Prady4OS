@@ -315,7 +315,7 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
         for (uint64_t p = start; p < end; p += 0x1000ull) {
             uint64_t *pte = leaf_pte(pml4_phys, p);
             uint64_t e = *pte;
-            if (e & (VMM_RW | PTE_SW_SHMEM | PTE_SW_SHARED))
+            if (e & (VMM_RW | PTE_SW_SHARED))   /* MUTANT P2: SHMEM not exempt */
                 continue;                   /* no write is added, or a shared mapping */
             uint64_t frame = e & PTE_ADDR;
             if (pmm_refcount_get(frame) <= 1)
