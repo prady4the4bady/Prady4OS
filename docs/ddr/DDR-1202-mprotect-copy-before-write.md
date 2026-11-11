@@ -89,10 +89,10 @@ invlpg(p);  tlb_shoot(pml4, p, 1);  pmm_free_page(frame);
 
 ## 7. Evidence
 
-Filled in from CI before the merge.
+**Not verified yet.** No CI run of the gate or of mutants P1 to P3 is recorded here. Until this section names the runs, every statement above about what the arms or mutants show is a design expectation, not a result. The merge waits for this section (#45 comment 6594914166).
 
 ## 8. What this record does not claim
 
-- That the vDSO write (§4) was ever used. It is by reading, plus mutant P3.
+- That the vDSO write (§4) was ever used. It is by reading; mutant P3 is to show it in CI (§7).
 - Anything about `PTE_SW_COW` pages: adding write to one is still refused, as DDR-1031 §3b decided.
 - Anything about real hardware.

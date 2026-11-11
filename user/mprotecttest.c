@@ -228,13 +228,25 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (kid == 0) {
         while (ctl[0] == 0)                  /* wait for the parent's store */
             nsi(SYS_YIELD, 0, 0, 0);
+        if (ctl[0] == 2)                     /* the parent failed: leave at once */
+            nsi(SYS_EXIT, 33, 0, 0);
         nsi(SYS_EXIT, (*pf2 == ISO_A) ? 31 : 32, 0, 0);
         for (;;) { }
     }
+    /* On a failure below, the waiting child is told to leave and is reaped
+     * first, so it does not keep the boot busy until the gate's timeout. */
     rc = nsi(SYS_MPROTECT, f2, 4096, PROT_READ | PROT_WRITE);
-    if (rc != 0) fail("f2 parent mprotect RW", rc);
+    if (rc != 0) {
+        ctl[0] = 2;
+        nsi(SYS_WAIT4, kid, (long)&st, 0);
+        fail("f2 parent mprotect RW", rc);
+    }
     *pf2 = ISO_B;
-    if (*pf2 != ISO_B) fail("f2 parent store did not stick", (long)*pf2);
+    if (*pf2 != ISO_B) {
+        ctl[0] = 2;
+        nsi(SYS_WAIT4, kid, (long)&st, 0);
+        fail("f2 parent store did not stick", (long)*pf2);
+    }
     ctl[0] = 1;
     st = 0;
     got = nsi(SYS_WAIT4, kid, (long)&st, 0);
@@ -248,6 +260,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
      * here: on a kernel that grants it, the page belongs to every process. */
     rc = nsi(SYS_MPROTECT, (long)VDSO_USER_VA, 4096, PROT_READ | PROT_WRITE);
     wr("PRADYOS_MPROT_VIEW rc="); wrdec(rc); wr("\n");
+    if (rc != -EACCES) fail("the vDSO page gained write", rc);
 
     /* ARM H -- a MAP_SHARED page stays shared when write is added back. */
     long h = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
