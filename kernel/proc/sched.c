@@ -1782,11 +1782,13 @@ static int runnable(const struct tcb *t) {
 /* Switch to the next runnable thread in the ring (round-robin, skipping
  * blocked/finished threads). The idle thread is always runnable, so there is
  * always something to run.
- * schedule_locked: the body, entered with g_sched_lock ALREADY HELD (`fl` from
- * the caller's irq_save). Exists for sched_exit (DDR-SMP-exit-stack-race): the
- * dying thread must hold the lock ACROSS its final context_switch so a
- * collector on another CPU cannot free its kernel stack until the handoff
- * release — which happens strictly after the switch has left that stack. */
+ * schedule_locked: the body. Its only caller is schedule(), which passes
+ * `fl` from local_irq_save(): interrupts are masked and NO lock is held
+ * (rq-2 took g_sched_lock off the switch path; see local_irq_save above).
+ * The name and the old "g_sched_lock ALREADY HELD" wording date from
+ * DDR-SMP-exit-stack-race, when sched_exit held the lock across its final
+ * context_switch. Since rq-2, a collector is kept off a dying thread's stack
+ * by on_cpu and switch_wait_offcpu, not by this lock. */
 static void schedule_locked(uint64_t fl) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
@@ -2087,7 +2089,7 @@ static void schedule_locked(uint64_t fl) {
                 bad = 1;
         }
         if (bad) {
-            /* schedule_locked runs with g_sched_lock held and IF clear, and no
+            /* schedule_locked runs with IF clear (no lock held since rq-2), and no
              * panic() is exposed to this file, so follow sched_exit's precedent
              * for an unrecoverable scheduler state. ONE kline emit (DDR-1055: a
              * composite built from several kputs can be spliced by another CPU).
