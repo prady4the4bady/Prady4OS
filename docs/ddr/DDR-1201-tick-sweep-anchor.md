@@ -158,11 +158,21 @@ Z1u is not a gate mutant. It is one run that shows what #115 does without the in
 
 ## 7. What this record does not claim
 
-- That #115 ever happened in a default kernel. §8 shows it in a test build that holds the window open.
+- That #115 ever happened in a default kernel. §8 shows the mechanism in a test build that holds the window open (mutant Z1u stalls every CPU); it does not show the default kernel reaching it.
 - That it explains OPEN-2, the shard 8 "CPU stops ticking" failure, or any other recorded stall. A matching shape is not an attribution (DDR-1056).
 - How wide the real window is, or how often a tick lands in it. Not measured.
 - Anything about real hardware.
 
 ## 8. Evidence
 
-Filled in from CI before the merge.
+All runs are QEMU TCG on GitHub-hosted runners, 4 CPUs. The mutants were built on `4570730`; the head after it changes only this file.
+
+| Run | Commit | What it shows |
+|---|---|---|
+| [42824823328](https://github.com/prady4the4bady/Prady4OS/actions/runs/42824823328) | `29047d7` | **The first gate hung** (§6, first item). Two CPUs spinning on `sti; pause; cli` in `za_hold` took almost no ticks. Both RIPs resolve to that `cli` (`za_hold+0xd8`). The hold now uses `sti; nop; pause; cli`. |
+| [42830057170](https://github.com/prady4the4bady/Prady4OS/actions/runs/42830057170) | `4570730` | **Green, every job.** `smoke-zanchor`: `[zanchor] cpus=4 rounds=8 reap_held=8 destroy_held=8 hits=48 escaped=0 aborted=0 ring_max=4096`, then `PRADYOS_ZANCHOR_A reap_hit=8 destroy_hit=8` and `PRADYOS_ZANCHOR_B escaped=0`. The default kernel came back with the published hash (`kernel.bin: OK`). |
+| [42884007851](https://github.com/prady4the4bady/Prady4OS/actions/runs/42884007851) | Z1 `bdffa8d` | **Red on arm B.** Arm A held (`reap_hit=8 destroy_hit=8`, `hits=48`) and **all 48 sweeps escaped** (`escaped=48`): `ZANCHOR FAIL: a tick sweep started off the ring and never came back`. Only `flag-gates` failed (1 of 17 jobs). |
+| [42961456943](https://github.com/prady4the4bady/Prady4OS/actions/runs/42961456943) | Z2 `f664a5a` | **Red on arm A.** `held=8` on both paths but `hits=0`, `PRADYOS_ZANCHOR_A reap_hit=0 destroy_hit=0`, and arm B withheld: `ZANCHOR FAIL: the window was not forced; arm B would be vacuous`. Only `flag-gates` failed. (The first Z2 run, [42884013513](https://github.com/prady4the4bady/Prady4OS/actions/runs/42884013513), did not compile: `pc \|\| !pc` is a `-Werror` tautology. It is not counted.) |
+| [42884020042](https://github.com/prady4the4bady/Prady4OS/actions/runs/42884020042) | Z1u `9cf0b49` | **#115 itself, with no bound.** The boot stopped before the probe printed anything (`required pattern 'PRADYOS_ZANCHOR_A …' not found`). The QMP dump taken before the timeout kill shows CPU 2 at `sched_tick+0x10e` with IF clear (`RFL=00000087`), and CPUs 0, 1 and 3 at `spin_lock_contended+0x92` (`RFL=00000002`), i.e. waiting for the lock CPU 2 holds. That is the whole-system stall of §1. RIPs resolved against a local build of the same commit, same size (1,638,794 B), not against the CI artefact. |
+
+**Measured, so stated plainly:** with the old start, a timer tick on an unlinked on-CPU zombie never ends its sweep, on both unlink paths. With the fix, 48 such ticks all ended. This is a test build that holds the window open. How often the real window opens in a default kernel is still **not measured**.
