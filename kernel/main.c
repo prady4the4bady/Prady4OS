@@ -19,6 +19,7 @@
 #include "vmm.h"
 #include "cap.h"
 #include "sched.h"
+#include "rcu.h"           /* DDR-1200: RCU_TORTURE self-test (smoke-rcu) */
 #include "ipc.h"
 #include "bcast.h"
 #include "tss.h"
@@ -1886,6 +1887,39 @@ static void fs_test_thread(void *arg) {
                 kputs("PRADYOS_ZANCHOR_B escaped=0\r\n");
             }
         }
+    }
+#endif
+#if RCU_TORTURE
+    /* DDR-1200 §7 (P5a: arms RA, RB, RC), `make smoke-rcu` only. Run before init
+     * exists, while the APs are idle, so each pinned reader owns its CPU. The
+     * lines carry the measured values; the gate matches them exactly, so a
+     * stall line or an RCU FAIL during the run (stalls, fails) also fails it. */
+    {
+        struct rcu_torture_result rr;
+        rcu_torture(RCU_T_SWAPS, &rr);
+        kline k; kline_init(&k);
+        kline_s(&k, "[rcu] cpus=");          kline_d(&k, rr.cpus);
+        kline_s(&k, " swaps=");              kline_d(&k, rr.swaps);
+        kline_s(&k, " poison_seen=");        kline_d(&k, rr.poison_seen);
+        kline_s(&k, " sections_min=");       kline_d(&k, rr.sections_min);
+        kline_s(&k, " stalls=");             kline_d(&k, rr.stalls);
+        kline_s(&k, " fails=");              kline_d(&k, rr.fails);
+        kline_s(&k, " aborted=");            kline_d(&k, rr.aborted);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* Arm RA (and RB: every section is longer than a tick): no reader ever
+         * saw its node change, across every swap, on every CPU. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_A swaps=");  kline_d(&k, rr.swaps);
+        kline_s(&k, " poison_seen=");          kline_d(&k, rr.poison_seen);
+        kline_s(&k, " cpus=");                 kline_d(&k, rr.cpus);
+        kline_s(&k, " stalls=");               kline_d(&k, rr.stalls);
+        kline_s(&k, " fails=");                kline_d(&k, rr.fails);
+        kline_s(&k, " aborted=");              kline_d(&k, rr.aborted);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* Arm RC: a reader ran on every ticking CPU, often enough to matter. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_C seen_cpus=");  kline_d(&k, rr.seen_cpus);
+        kline_s(&k, "\r\n"); kline_emit(&k);
     }
 #endif
     int mnt = -1, blk = -1;

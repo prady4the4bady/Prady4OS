@@ -17,6 +17,7 @@
 #include "irq.h"               /* ADR-032: g_ticks for the FS write-budget bucket */
 #include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
 #include "aether.h"            /* DDR-1171: rollback log replay/free */
+#include "rcu.h"               /* DDR-1200: rule-1 check in schedule() */
 
 /* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
  * reader -- init_idle, which records its base as idle0's kstack_base so
@@ -2240,6 +2241,7 @@ static void schedule_locked(uint64_t fl) {
 }
 
 static void schedule(void) {
+    rcu_note_switch();             /* DDR-1200 §3 rule 1: no switch inside a read section */
     schedule_locked(local_irq_save());
 }
 
@@ -2261,7 +2263,11 @@ static void schedule(void) {
 void sched_tick(void) {
     struct percpu *pc = this_cpu();
     if (pc)
-        pc->ticks++;               /* cap-3: per-CPU timer-tick count (preempt proof) */
+        /* cap-3: per-CPU timer-tick count (preempt proof). DDR-1200 §3: also the
+         * RCU quiescent-state counter, so a locked RMW: x86 lets a later load
+         * pass an earlier plain store, and a read section later in this ISR
+         * must not load a pointer before the count it is covered by is visible. */
+        __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST);
     if (!current_thread)
         return;                    /* scheduler not up yet */
     current_thread->run_ticks++;

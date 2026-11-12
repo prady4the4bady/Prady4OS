@@ -366,7 +366,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [smoke-zanchor]
+        gate: [smoke-zanchor, smoke-rcu]
     name: flag-gates (${{ matrix.gate }})
     steps:
       - name: Docs-only change, boot gates not run (DDR-1187)
