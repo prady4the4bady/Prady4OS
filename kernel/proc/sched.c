@@ -1501,6 +1501,13 @@ static volatile uint32_t g_za_escaped;     /* sweeps that ran past ZANCHOR_RING_
  * local_irq_save(), so the collector can take g_sched_lock meanwhile. */
 static void za_hold(int cpu) {
     struct percpu *pc = this_cpu();
+    static volatile int za_mut_z2 = 1;
+    if (za_mut_z2) {   /* MUTANT Z2: the hold returns at once, the window is not forced */
+        __atomic_store_n(&g_za_victim, (struct tcb *)0, __ATOMIC_RELEASE);
+        __atomic_store_n(&g_za_stage, 2u, __ATOMIC_RELEASE);
+        (void)cpu;
+        return;
+    }
     /* g_in_switch is set exactly as the product wait sets it, so the tick does
      * not re-enter the scheduler from here (sched_tick, DDR-887). */
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
