@@ -16,7 +16,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 
 ## Authority and work order
 
-- Issue #45 owner comments are the standing authorization (6177490081, 6177525415, 6195615129, 6199670683, 6199872798, 6200777349, 6201120568, 6201467383, 6201619419, 6229808666, 6233854639, 6256077528, 6256365961, 6282431738, 6301435736).
+- Issue #45 owner comments are the standing authorization (6177490081, 6177525415, 6195615129, 6199670683, 6199872798, 6200777349, 6201120568, 6201467383, 6201619419, 6229808666, 6233854639, 6256077528, 6256365961, 6282431738, 6301435736, 6594914166, 6618228303, 6647074754, 6655226539, 6761846242).
 - Work order is `docs/V1_MASTER_CHECKLIST.md`. C11.1 (Rust and build system) stays **last** in build order.
 - Before each step and before each merge, re-check #45 for new owner comments and follow them first.
 - Never idle while an unblocked item exists. Stack the next item while CI runs.
@@ -67,7 +67,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
   - `make image` does not always rebuild after a `-D` flag or a `.c` change: remove the `.o` and verify by **hash**, never by size.
   - `TIMEOUT_S=<n> make smoke-x` is ignored; use `make TIMEOUT_S=<n> smoke-x`.
   - `kputhex` already prints `0x`; `kprintf` does not exist.
-- **Size:** `kernel.bin` is **1,540,490 B** against the 1,703,936 B size gate — **163,446 B of headroom** (measured at `a2ac698`, after C1.3 P1). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
+- **Size:** `kernel.bin` is **1,638,794 B** against the 1,703,936 B size gate — **65,142 B of headroom** (measured at `baac4dd`, after #118 and #120). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
 - **NSI:** max defined 119 on this branch (`SYS_MSYNC`, DDR-1178 A4); 112–115 are DDR-1178 A2 SysV (#78), 116 `SYS_SHM_OPEN` is DDR-1178 A3 (#80), 117 `SYS_FUTEX`, 118 `SYS_SCHED_CPU`, so next free is 120 (verify against `kernel/syscall/syscall.h`).
 - **Boot:** PT_HI is implemented twice, in `boot/stage2/stage2.asm` and `boot/uefi/loader.c`; change both together.
 - **`[apfreeze]`** has at least five producers. Resolve its RIP before naming a cause.
