@@ -32,7 +32,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 - The Dependabot alerts API returns 403 to this session; triage is done with `npm audit`.
 - This container has no `mkfs.fat`, so smoke gates cannot boot locally; CI is the evidence.
-- A mutant that only changes `ZANCHOR_TEST` code must be built locally with `make build/kernel.bin ZANCHOR_TEST=1`; the default build does not compile it.
+- A mutant that only changes `ZANCHOR_TEST` or `RCU_TORTURE` code must be built locally with that flag (`make build/kernel.bin ZANCHOR_TEST=1`); the default build does not compile it. The flag reaches the compile through `KCFLAGS`, which no target depends on, so remove the `.o` files first and check the result by hash (CLAUDE.md, Hard-won facts).
 
 ## Resume prompt
 
