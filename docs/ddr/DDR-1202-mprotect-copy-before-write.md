@@ -89,10 +89,26 @@ invlpg(p);  tlb_shoot(pml4, p, 1);  pmm_free_page(frame);
 
 ## 7. Evidence
 
-**Not verified yet.** No CI run of the gate or of mutants P1 to P3 is recorded here. Until this section names the runs, every statement above about what the arms or mutants show is a design expectation, not a result. The merge waits for this section (#45 comment 6594914166).
+QEMU (TCG) only; not verified on real hardware.
+
+**The fix.** Head bd08dd7, [run 42969126528](https://github.com/prady4the4bady/Prady4OS/actions/runs/42969126528): `PASS smoke-mprotect`. The gate requires `PRADYOS_MPROT_ISO child_up=1 parent_up=1`, `PRADYOS_MPROT_VIEW rc=-13` and `PRADYOS_MPROT_SHKEEP shared=1`, so a PASS means all three were seen.
+
+**The mutants.** Each is one change to `kernel/mm/vmm.c` on bd08dd7. Each turns exactly its own arm red, and the other two arms still pass in the same boot:
+
+| Mutant | Change | Arm | Serial line | Run |
+|---|---|---|---|---|
+| P1 | pass 1b never copies | F | `PRADYOS_MPROT_ISO child_up=0 parent_up=0` | [43071977691](https://github.com/prady4the4bady/Prady4OS/actions/runs/43071977691) |
+| P2 | `PTE_SW_SHMEM` not exempt from the copy | H | `PRADYOS_MPROT_SHKEEP shared=0` | [43071983464](https://github.com/prady4the4bady/Prady4OS/actions/runs/43071983464) |
+| P3 | the read-only `PTE_SW_SHARED` refusal removed | G | `PRADYOS_MPROT_VIEW rc=0`, then `MPROT FAIL: the vDSO page gained write` | [43074142833](https://github.com/prady4the4bady/Prady4OS/actions/runs/43074142833) |
+
+No survivors.
+
+**§3, measured.** Under P2, `smoke-shm` still passed in the same run, arm E included (`[shm] PASS`, shard 0). That confirms §3: arm E adds write to a page that is already writable, before the fork, so it cannot see the exemption. Arm H is the only gate on it.
+
+**§4, measured.** P3 shows the defect §4 found by reading: without the refusal, `mprotect(PROT_READ|PROT_WRITE)` on the vDSO page returns 0. Arm G stores nothing into the page, so no other process was affected in the run.
 
 ## 8. What this record does not claim
 
-- That the vDSO write (§4) was ever used. It is by reading; mutant P3 is to show it in CI (§7).
+- That the vDSO write (§4) was ever used outside this gate. Mutant P3 shows the call succeeding without the refusal (§7). Nothing shows any program doing it.
 - Anything about `PTE_SW_COW` pages: adding write to one is still refused, as DDR-1031 §3b decided.
 - Anything about real hardware.
