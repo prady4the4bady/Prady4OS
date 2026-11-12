@@ -28,6 +28,21 @@
  * on a kernel with no enforcement at all. Protecting first is what makes the
  * fault a genuine protection violation.
  *
+ * ARMS F, G, H (DDR-1202, #112) -- ADDING WRITE MUST NOT REACH ANOTHER PROCESS.
+ *
+ *   F  a page made read-only and then shared by fork is shared AS IT IS (no
+ *      COW tag). Whoever adds write back gets a private copy first:
+ *        F1  the CHILD adds write and stores; the parent must keep its value
+ *        F2  the PARENT adds write and stores; the child must keep its value
+ *   G  write cannot be added to the vDSO page, a read-only view of a frame
+ *      every process maps
+ *   H  a MAP_SHARED page is NOT copied when write is added back: the store
+ *      must reach the other process, because sharing is what was asked for
+ *
+ * F2 needs the child to read AFTER the parent's store. They share no private
+ * memory (that is the point), so the turn is passed through one MAP_SHARED
+ * page, which fork shares by design (DDR-1178).
+ *
  * ARM C IS THE ONE THAT CATCHES A LOST FRAME. A vmm_protect_range that rebuilt
  * each PTE as `flags` alone -- dropping the frame, or dropping PTE_SW_SHARED /
  * PTE_SW_COW -- would still leave a page that maps and writes fine. Asserting
@@ -35,6 +50,7 @@
  * mapping still works" from "it is still the same mapping".
  */
 
+#define SYS_YIELD     3
 #define SYS_EXIT      4
 #define SYS_WRITE     6
 #define SYS_MMAP     12
@@ -45,8 +61,13 @@
 #define PROT_READ      0x1
 #define PROT_WRITE     0x2
 #define PROT_EXEC      0x4
+#define MAP_SHARED     0x01
 #define MAP_PRIVATE    0x02
 #define MAP_ANONYMOUS  0x20
+
+#define VDSO_USER_VA   0x00007FFFFFF00000ul   /* kernel/vdso/vdso_page.h */
+#define ISO_A 0x11111111u        /* the value before the fork           */
+#define ISO_B 0x22222222u        /* the value stored after adding write */
 
 #define EACCES 13
 #define SENTINEL 0x5A5AC0DEu
@@ -163,6 +184,106 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     rc = nsi(SYS_MPROTECT, q, 4096, PROT_READ | PROT_WRITE);
     if (rc != -EACCES) fail("COW tag lost across mprotect", rc);
     wr("PRADYOS_MPROT_COW rc="); wrdec(rc); wr("\n");
+
+    /* ---- DDR-1202 (#112) ------------------------------------------------- */
+    long ctl_va = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl_va <= 0) fail("mmap ctl", ctl_va);
+    volatile unsigned *ctl = (volatile unsigned *)ctl_va;   /* [0] = F2's turn */
+    ctl[0] = 0;
+
+    /* ARM F1 -- the child adds write. */
+    long f1 = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (f1 <= 0) fail("mmap f1", f1);
+    volatile unsigned *pf1 = (volatile unsigned *)f1;
+    *pf1 = ISO_A;
+    rc = nsi(SYS_MPROTECT, f1, 4096, PROT_READ);
+    if (rc != 0) fail("f1 mprotect RO", rc);
+    kid = nsi(SYS_FORK, 0, 0, 0);
+    if (kid < 0) fail("f1 fork", kid);
+    if (kid == 0) {
+        if (nsi(SYS_MPROTECT, f1, 4096, PROT_READ | PROT_WRITE) != 0)
+            nsi(SYS_EXIT, 22, 0, 0);
+        *pf1 = ISO_B;
+        nsi(SYS_EXIT, (*pf1 == ISO_B) ? 21 : 23, 0, 0);
+        for (;;) { }
+    }
+    st = 0;
+    got = nsi(SYS_WAIT4, kid, (long)&st, 0);
+    if (got != kid) fail("f1 wait4", got);
+    if (st != 21) fail("f1 child could not add write and store", st);
+    int child_up = (*pf1 == ISO_A);          /* the parent's page is untouched */
+
+    /* ARM F2 -- the parent adds write while the child still maps the page. */
+    long f2 = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (f2 <= 0) fail("mmap f2", f2);
+    volatile unsigned *pf2 = (volatile unsigned *)f2;
+    *pf2 = ISO_A;
+    rc = nsi(SYS_MPROTECT, f2, 4096, PROT_READ);
+    if (rc != 0) fail("f2 mprotect RO", rc);
+    kid = nsi(SYS_FORK, 0, 0, 0);
+    if (kid < 0) fail("f2 fork", kid);
+    if (kid == 0) {
+        while (ctl[0] == 0)                  /* wait for the parent's store */
+            nsi(SYS_YIELD, 0, 0, 0);
+        if (ctl[0] == 2)                     /* the parent failed: leave at once */
+            nsi(SYS_EXIT, 33, 0, 0);
+        nsi(SYS_EXIT, (*pf2 == ISO_A) ? 31 : 32, 0, 0);
+        for (;;) { }
+    }
+    /* On a failure below, the waiting child is told to leave and is reaped
+     * first, so it does not keep the boot busy until the gate's timeout. */
+    rc = nsi(SYS_MPROTECT, f2, 4096, PROT_READ | PROT_WRITE);
+    if (rc != 0) {
+        ctl[0] = 2;
+        nsi(SYS_WAIT4, kid, (long)&st, 0);
+        fail("f2 parent mprotect RW", rc);
+    }
+    *pf2 = ISO_B;
+    if (*pf2 != ISO_B) {
+        ctl[0] = 2;
+        nsi(SYS_WAIT4, kid, (long)&st, 0);
+        fail("f2 parent store did not stick", (long)*pf2);
+    }
+    ctl[0] = 1;
+    st = 0;
+    got = nsi(SYS_WAIT4, kid, (long)&st, 0);
+    if (got != kid) fail("f2 wait4", got);
+    if (st != 31 && st != 32) fail("f2 child died for some other reason", st);
+    int parent_up = (st == 31);
+    wr("PRADYOS_MPROT_ISO child_up="); wrdec(child_up);
+    wr(" parent_up="); wrdec(parent_up); wr("\n");
+
+    /* ARM G -- the vDSO page cannot gain write. Nothing is stored into it
+     * here: on a kernel that grants it, the page belongs to every process. */
+    rc = nsi(SYS_MPROTECT, (long)VDSO_USER_VA, 4096, PROT_READ | PROT_WRITE);
+    wr("PRADYOS_MPROT_VIEW rc="); wrdec(rc); wr("\n");
+    if (rc != -EACCES) fail("the vDSO page gained write", rc);
+
+    /* ARM H -- a MAP_SHARED page stays shared when write is added back. */
+    long h = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (h <= 0) fail("mmap h", h);
+    volatile unsigned *ph = (volatile unsigned *)h;
+    *ph = ISO_A;
+    rc = nsi(SYS_MPROTECT, h, 4096, PROT_READ);
+    if (rc != 0) fail("h mprotect RO", rc);
+    kid = nsi(SYS_FORK, 0, 0, 0);
+    if (kid < 0) fail("h fork", kid);
+    if (kid == 0) {
+        if (nsi(SYS_MPROTECT, h, 4096, PROT_READ | PROT_WRITE) != 0)
+            nsi(SYS_EXIT, 42, 0, 0);
+        *ph = ISO_B;
+        nsi(SYS_EXIT, 41, 0, 0);
+        for (;;) { }
+    }
+    st = 0;
+    got = nsi(SYS_WAIT4, kid, (long)&st, 0);
+    if (got != kid) fail("h wait4", got);
+    if (st != 41) fail("h child could not add write to a shared page", st);
+    wr("PRADYOS_MPROT_SHKEEP shared="); wrdec((*ph == ISO_B) ? 1 : 0); wr("\n");
 
     wr("PRADYOS_MPROT_OK\n");
     nsi(SYS_EXIT, 0, 0, 0);

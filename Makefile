@@ -4389,7 +4389,7 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log
 	@SERIAL_LOG=build/mprotect.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=mprotect \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_MPROT_RO rc=0\nPRADYOS_MPROT_ENFORCED st=\nPRADYOS_MPROT_RESTORED rc=0 val=\nPRADYOS_MPROT_WX rc=\nPRADYOS_MPROT_COW rc=\nPRADYOS_MPROT_OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MPROT_RO rc=0\nPRADYOS_MPROT_ENFORCED st=\nPRADYOS_MPROT_RESTORED rc=0 val=\nPRADYOS_MPROT_WX rc=\nPRADYOS_MPROT_COW rc=\nPRADYOS_MPROT_ISO child_up=1 parent_up=1\nPRADYOS_MPROT_VIEW rc=-13\nPRADYOS_MPROT_SHKEEP shared=1\nPRADYOS_MPROT_OK')" \
 	FORBIDDEN_SENTINEL="MPROT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[mprotect] PASS — $$(grep -a PRADYOS_MPROT_ENFORCED build/mprotect.log | head -1)"
