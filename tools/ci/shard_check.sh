@@ -43,11 +43,14 @@ MAKEFILE="$ROOT/Makefile"
 # and evicts smoke-dmesg's required marker (DDR-790). It must never run in the
 # shared-image shard matrix. Remove this exclusion when BUG-1 closes and the
 # target is deleted.
+# smoke-zanchor: DDR-1201 (#115). It REBUILDS the kernel with ZANCHOR_TEST=1, and
+# every shard asserts that kernel.bin did not change while its gates ran, so it
+# cannot be in the shared-image matrix. It runs in ci.yml's `flag-gates` job.
 # smoke-fast (directive §6.3) is NOT a gate — it is a RUNNER that invokes some
 # other gate COUNT times via tools/ci/campaign.sh. It boots nothing of its own,
 # so assigning it to a shard would make CI run an argument-less campaign that
 # immediately errors out. Excluded as infrastructure, not as a skipped test.
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-fs-liveness smoke-fast"
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-fs-liveness smoke-zanchor smoke-fast"
 
 excluded() {
     local t="$1" e

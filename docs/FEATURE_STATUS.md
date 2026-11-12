@@ -52,6 +52,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 |---|---|---|---|
 | SMP bring-up, per-CPU runqueues, stealing, resched IPI | gated | `smoke-smp`, `smoke-smpsched`, `smoke-smppreempt`, `smoke-percpu-sched`, `smoke-resched`, `smoke-rqstress`, `smoke-rqstress-liveness`, `smoke-crosswake` | Multicore scheduling |
 | TCB freed-while-queued fix | gated | `smoke-rqfree` | Reaper cannot free a queued thread |
+| Tick sweep ends when the current thread is off the ring (#115, DDR-1201) | gated in a test build with the window held open (emulated-verified; not verified on real hardware) | `smoke-zanchor` A, B | A timer tick cannot loop forever on a thread that is exiting |
 | `mprotect` cannot add write to a frame another process maps (#112, DDR-1202) | gated (emulated-verified; not verified on real hardware) | `smoke-mprotect` F, G, H | One process cannot change another's private memory, or the shared vDSO page |
 | OPEN-2 double dispatch (DDR-1139) | gated (fix confirmed) | `[schedcheck]` in GLOBAL_FORBIDDEN | One thread on one CPU at a time |
 | Capability IPC, ring-3 door | gated | `smoke-sendipc` | Agent-to-agent messages |

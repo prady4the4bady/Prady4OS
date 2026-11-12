@@ -1850,6 +1850,44 @@ static void install_mark_print(cap_t cap, int mnt) {
 
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
+#if ZANCHOR_TEST
+    /* DDR-1201 §5 (#115), `make smoke-zanchor` only. Run first: the APs are
+     * idle (so they steal the collector and this thread off a held CPU) and
+     * init does not exist yet (so an exiting kernel thread reparents nobody). */
+    {
+        struct za_result zr;
+        unsigned zcpus = smp_online();
+        if (zcpus < 2) {
+            kputs("ZANCHOR FAIL: needs 2 CPUs, the unlink must come from another one\r\n");
+        } else {
+            sched_zanchor_probe(8, &zr);
+            kline k; kline_init(&k);
+            kline_s(&k, "[zanchor] cpus=");          kline_d(&k, zcpus);
+            kline_s(&k, " rounds=");                 kline_d(&k, zr.rounds);
+            kline_s(&k, " reap_held=");              kline_d(&k, zr.reap_held);
+            kline_s(&k, " destroy_held=");           kline_d(&k, zr.destroy_held);
+            kline_s(&k, " hits=");                   kline_d(&k, zr.hits);
+            kline_s(&k, " escaped=");                kline_d(&k, zr.escaped);
+            kline_s(&k, " aborted=");                kline_d(&k, zr.aborted);
+            kline_s(&k, " ring_max=");               kline_d(&k, (uint64_t)ZANCHOR_RING_MAX);
+            kline_s(&k, "\r\n"); kline_emit(&k);
+            /* Arm A: the state #115 needs was produced, on both unlink paths. */
+            kline_init(&k);
+            kline_s(&k, "PRADYOS_ZANCHOR_A reap_hit=");   kline_d(&k, zr.reap_hit);
+            kline_s(&k, " destroy_hit=");                 kline_d(&k, zr.destroy_hit);
+            kline_s(&k, "\r\n"); kline_emit(&k);
+            /* Arm B: every sweep on that state came back to its start. It means
+             * nothing unless arm A held, so it is withheld otherwise. */
+            if (zr.reap_hit != zr.rounds || zr.destroy_hit != zr.rounds) {
+                kputs("ZANCHOR FAIL: the window was not forced; arm B would be vacuous\r\n");
+            } else if (zr.escaped != 0) {
+                kputs("ZANCHOR FAIL: a tick sweep started off the ring and never came back\r\n");
+            } else {
+                kputs("PRADYOS_ZANCHOR_B escaped=0\r\n");
+            }
+        }
+    }
+#endif
     int mnt = -1, blk = -1;
     int inst_root = disk_root_select();
     for (unsigned j = 0; j < blk_count(); j++) {
