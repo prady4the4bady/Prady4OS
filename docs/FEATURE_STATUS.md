@@ -52,6 +52,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 |---|---|---|---|
 | SMP bring-up, per-CPU runqueues, stealing, resched IPI | gated | `smoke-smp`, `smoke-smpsched`, `smoke-smppreempt`, `smoke-percpu-sched`, `smoke-resched`, `smoke-rqstress`, `smoke-rqstress-liveness`, `smoke-crosswake` | Multicore scheduling |
 | TCB freed-while-queued fix | gated | `smoke-rqfree` | Reaper cannot free a queued thread |
+| `mprotect` cannot add write to a frame another process maps (#112, DDR-1202) | gated (emulated-verified; not verified on real hardware) | `smoke-mprotect` F, G, H | One process cannot change another's private memory, or the shared vDSO page |
 | OPEN-2 double dispatch (DDR-1139) | gated (fix confirmed) | `[schedcheck]` in GLOBAL_FORBIDDEN | One thread on one CPU at a time |
 | Capability IPC, ring-3 door | gated | `smoke-sendipc` | Agent-to-agent messages |
 | Signals (4), SIGKILL from blocked waits | gated | `smoke-syssignal`, `smoke-kill`, `smoke-killblock`, `smoke-sigpipe` | Stop a runaway process |

@@ -429,6 +429,9 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
  *                            granting write would let this process write a frame
  *                            another still shares, with no copy and no fault.
  *                            Detected in vmm_protect_range, reported as -EACCES.
+ *   PROT_WRITE on a read-only kernel view (PTE_SW_SHARED: the vDSO page, the
+ *                            metric page) -- the frame is mapped in every
+ *                            process. Also -EACCES (DDR-1202).
  *   PROT_NONE             -- making a user page absent collides with the
  *                            demand-paged stack (ADR-038), which faults absent
  *                            user pages IN rather than reporting them. Telling
@@ -474,11 +477,14 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
     if (prot & PROT_WRITE) flags |= VMM_RW;
     if (!(prot & PROT_EXEC)) flags |= VMM_NX;   /* readable+non-exec is the default */
 
+    /* DDR-1202 (#112): adding write to a read-only private page that fork
+     * shared as-is copies the page first (in vmm_protect_range), so the write
+     * cannot reach the other process. */
     int rc = vmm_protect_range(t->cr3, addr, len, flags);
     if (rc == -2)
-        return -EACCES;                        /* write asked on a COW page */
+        return -EACCES;                        /* write asked on a COW page or a kernel view */
     if (rc != 0)
-        return -ENOMEM;                        /* a page in the range is absent */
+        return -ENOMEM;                        /* a page is absent, or no frame for a copy */
     return 0;
 }
 

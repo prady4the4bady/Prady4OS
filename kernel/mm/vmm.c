@@ -10,6 +10,7 @@
 #include "kheap.h"
 #include "console.h"           /* kputs for the DDR-757 W^X audit sentinel */
 #include "tlb.h"               /* DDR-1177: cross-CPU shootdown */
+#include "string.h"            /* DDR-1202: memcpy for the copy before write is added */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -288,6 +289,49 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
          * Removing write from a COW page is harmless and stays allowed. */
         if ((flags & VMM_RW) && (e & PTE_SW_COW))
             return -2;
+        /* DDR-1202: a PTE_SW_SHARED page is a VIEW of a frame this address
+         * space does not own (the vDSO page, the metric page, a surface, the
+         * framebuffer). If the kernel mapped it read-only, write is not this
+         * process's to add: the same frame is mapped in every other process. */
+        if ((flags & VMM_RW) && !(e & VMM_RW) && (e & PTE_SW_SHARED))
+            return -2;
+    }
+
+    /* PASS 1b -- DDR-1202 (#112): COPY BEFORE ADDING WRITE.
+     *
+     * fork shares a read-only private page as it is: same frame, no PTE_SW_COW,
+     * one more reference (vmm_cow.c, "share as-is"). Read-only was the only
+     * thing keeping the two processes apart, so granting write on that PTE
+     * would let this process write a frame the other still maps.
+     *
+     * So a private page that gains write gets its own frame first, whenever
+     * anyone else still holds the old one. Not a PTE_SW_SHMEM page: there the
+     * sharing is the point (MAP_SHARED, SysV shm), and it must survive.
+     *
+     * Only the frame changes here; the permissions do not. If an allocation
+     * fails part-way, the pages already done hold the same bytes with the same
+     * permissions as before, so nothing the caller can see is half-applied. */
+    if (flags & VMM_RW) {
+        for (uint64_t p = start; p < end; p += 0x1000ull) {
+            uint64_t *pte = leaf_pte(pml4_phys, p);
+            uint64_t e = *pte;
+            if (e & (VMM_RW | PTE_SW_SHMEM | PTE_SW_SHARED))
+                continue;                   /* no write is added, or a shared mapping */
+            uint64_t frame = e & PTE_ADDR;
+            if (pmm_refcount_get(frame) <= 1)
+                continue;                   /* sole owner: write is safe to grant */
+            void *copy = ptnode_alloc();
+            if (!copy)
+                return -3;
+            memcpy(copy, (const void *)(uintptr_t)frame, 0x1000);
+            *pte = (e & ~PTE_ADDR) | ((uint64_t)(uintptr_t)copy & PTE_ADDR);
+            invlpg(p);
+            /* Every CPU running this address space must stop using the old
+             * frame BEFORE our reference to it is dropped: after that the last
+             * other holder may free it and it may be handed out again. */
+            tlb_shoot(pml4_phys, p, 1);
+            pmm_free_page(frame);
+        }
     }
 
     /* PASS 2 -- apply. The frame, both SOFTWARE bits and the cache attributes are
