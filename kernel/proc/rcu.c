@@ -98,6 +98,12 @@ void synchronize_rcu(void) {
             want[i] = 1;
     }
 
+    for (int i = PERCPU_MAX - 1; i >= 0; i--) {   /* MUTANT U3: skip the highest */
+        if (want[i]) {
+            want[i] = 0;
+            break;
+        }
+    }
     /* Step 3: wait until every snapshotted counter has moved. The stall clock
      * is the furthest any ticking CPU has advanced since the snapshot, so it
      * runs whichever CPU this thread is on, and across moves between CPUs
