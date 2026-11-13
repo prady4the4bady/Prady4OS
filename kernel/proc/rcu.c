@@ -72,6 +72,9 @@ void synchronize_rcu(void) {
     if (!(fl & 0x200u) || rcu_nesting() != 0)
         rcu_fail_once(4u, "synchronize_rcu with IF clear or inside a read section");
 
+    static volatile int g_mut_u1 = 1;
+    if (g_mut_u1)
+        return;                 /* MUTANT U1: synchronize_rcu returns at once */
     /* §3 step 1: the caller's unlink is visible to every CPU before the
      * snapshot is taken. */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
