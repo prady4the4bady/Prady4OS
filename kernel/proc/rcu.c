@@ -82,22 +82,26 @@ void synchronize_rcu(void) {
      * point changes nothing: that CPU is in the snapshot. */
     struct percpu *self = this_cpu();
     uint64_t snap[PERCPU_MAX];
-    uint8_t  want[PERCPU_MAX];
+    uint8_t  want[PERCPU_MAX];      /* waited on: every ticking CPU but this one */
+    uint8_t  have[PERCPU_MAX];      /* snapshotted: every ticking CPU (stall clock) */
     for (uint32_t i = 0; i < PERCPU_MAX; i++) {
         struct percpu *p = percpu_get(i);
         want[i] = 0;
+        have[i] = 0;
         snap[i] = 0;
-        if (!p || p == self || !p->present ||
+        if (!p || !p->present ||
             !__atomic_load_n(&p->shoot_ready, __ATOMIC_ACQUIRE))
             continue;
         snap[i] = __atomic_load_n(&p->ticks, __ATOMIC_ACQUIRE);
-        want[i] = 1;
+        have[i] = 1;
+        if (p != self)
+            want[i] = 1;
     }
 
     /* Step 3: wait until every snapshotted counter has moved. The stall clock
-     * is ticks of whichever CPU this thread is on, summed across moves. */
-    uint64_t waited = 0, last = 0;
-    struct percpu *on = 0;
+     * is the furthest any ticking CPU has advanced since the snapshot, so it
+     * runs whichever CPU this thread is on, and across moves between CPUs
+     * (CodeRabbit on #123: a per-CPU delta reset on every move never grew). */
     int warned = 0;
     for (;;) {
         int left = 0;
@@ -117,12 +121,14 @@ void synchronize_rcu(void) {
         if (!left)
             break;
 
-        struct percpu *me = this_cpu();
-        uint64_t now = me ? __atomic_load_n(&me->ticks, __ATOMIC_RELAXED) : 0;
-        if (me == on && now >= last)
-            waited += now - last;
-        on = me;
-        last = now;
+        uint64_t waited = 0;
+        for (uint32_t i = 0; i < PERCPU_MAX; i++) {
+            if (!have[i])
+                continue;
+            uint64_t d = __atomic_load_n(&percpu_get(i)->ticks, __ATOMIC_RELAXED) - snap[i];
+            if (d > waited)
+                waited = d;
+        }
         if (!warned && waited >= RCU_STALL_TICKS) {
             warned = 1;
             __atomic_fetch_add(&g_rcu_stalls, 1, __ATOMIC_RELAXED);
@@ -165,7 +171,7 @@ static uint64_t           g_t_sections[PERCPU_MAX];
 
 static inline uint64_t rcu_rdtsc(void) {
     uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) :: "memory");   /* loads stay on their side */
     return ((uint64_t)hi << 32) | lo;
 }
 
@@ -179,7 +185,7 @@ static void rcu_t_reader(void *arg) {
         uint64_t g0 = __atomic_load_n(&p->gen, __ATOMIC_RELAXED);
         uint64_t end = rcu_rdtsc() + g_t_hold_tsc;
         while (rcu_rdtsc() < end)
-            __asm__ volatile("pause");
+            __asm__ volatile("pause" ::: "memory");
         uint64_t m1 = __atomic_load_n(&p->magic, __ATOMIC_RELAXED);
         uint64_t g1 = __atomic_load_n(&p->gen, __ATOMIC_RELAXED);
         rcu_read_unlock(fl);

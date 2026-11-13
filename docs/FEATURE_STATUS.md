@@ -7,6 +7,8 @@ AND is assigned in `tools/ci/gate_shards.txt`. `make ci-shard-check` reads
 **188 gates, 10 shards, 6 excluded**. `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B,
 warning-clean at `-Werror` after a clean rebuild.
 
+**Added 2026-11-12 (DDR-1201, DDR-1200; CodeRabbit on #123): a second way to be gated.** A gate that rebuilds the kernel with a test flag cannot run in a shard, because every shard asserts that `kernel.bin` did not change while its gates ran. Such a gate counts as **gated** when its `smoke-*` target exists in the `Makefile`, it is in `.github/workflows/ci.yml`'s `flag-gates` matrix, and `tools/ci/shard_check.sh` excludes it from the shards with that reason. Two gates use this path: `smoke-zanchor` and `smoke-rcu`.
+
 **Re-measured 2026-10-15 on the combined tree `d201c2c`** (after #43, #44, #46,
 #47 merged without a combined-tree run): `make ci-shard-check` reads **193 gates,
 10 shards, 6 excluded**; `kernel.bin` = `7d429743e211a591`, **1,503,626 B**
