@@ -302,3 +302,20 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
 - **FORBIDDEN lines.** §7's FORBIDDEN list (`[rcu] stall`, `RCU FAIL`) is enforced through arm A's line, not a `FORBIDDEN_SENTINEL`: the line carries `stalls=<n> fails=<n> aborted=<n>`, and the gate requires `stalls=0 fails=0 aborted=0` exactly. Either line during the run therefore fails the gate, and the runner's early exit (DDR-785) stays on. A `FORBIDDEN_SENTINEL` would turn it off and make every run wait out its full window.
 - **Detecting a free under a reader.** A freed node is filled with 0xDD and then `kfree`d, and the next swap's `kmalloc` of the same size class usually gets the same slot back. So the reader checks both the magic word and the node's generation before and after its hold. A poisoned node or a reused one counts in `poison_seen`.
 - **Rule checks.** Rule 1 is checked in `schedule()` (a switch with this CPU's nesting count above 0). Rule 2 is checked in `synchronize_rcu()` for IF and nesting only: the tree has no per-CPU count of held spinlocks to check the spinlock part against. Each prints one `RCU FAIL: …` line per kind.
+
+---
+
+## Amendment 2 (2026-11-13): P5b decisions taken before its code
+
+Read against the tree at `3f9be84`. Each point changes or makes precise a line of §5, §5.2 or D5. They are stated before any P5b code is written (CLAUDE.md non-negotiable 2).
+
+1. **Only the memory is deferred, not the resource release (changes D5).**
+   - `sched_free_tcb` does more than free memory. It waits for the thread to be off-CPU, removes it from any runqueue, closes every fd (`fd_free`), frees the rollback log and drops the cap-table reference. Only then does it free the kernel stack and the tcb.
+   - If the whole call waited for a grace period, a reaped child's fds would stay open until the reaper's next drain. A parent that `wait4`s and then reads a pipe the child held could see end-of-file late. That is a behaviour change no consumer asked for.
+   - The lockless sweep reads only fields inside the tcb: `next`, `state`, `block_deadline` and `block_lk`. It never touches the stack, the fds or the caps.
+   - **So `sched_free_tcb` is split.** The release part runs at once, as today. The tcb, plus its kernel stack to keep the free path simple, goes to `rcu_defer_free` and is freed only after a grace period.
+2. **Who drains.** `rcu_defer_free` pushes onto one list under a leaf lock and never waits. Both unlink paths push to it, `reaper_thread` and `sched_destroy` (and so `sys_wait4`), so `wait4` never blocks on a grace period. On every pass, `reaper_thread` takes the whole list. If it is non-empty, it calls `synchronize_rcu()` once and then frees each entry. An entry pushed after the take waits for the next pass. It was unlinked before it was pushed, so its grace period is covered.
+3. **`timeout_ticks == 0`** returns `-ETIMEDOUT` at once, with `lk` still held and without blocking. Today it blocks until the next tick. §5.2 point 4's argument that deadlines strictly increase needs this.
+4. **The static-lock assert (§5.2 point 2)** checks that `lk` lies in `[__rodata_end, __bss_end)`. That range is the kernel image's `.data` and `.bss` (`kernel/kernel.ld`: `.data` starts at `__rodata_end`, `.bss` ends at `__bss_end`). A failure prints `RCU FAIL: timed wait on a non-static lock` once and still waits correctly. The check is a report, not a refusal, because refusing would change the waiter's behaviour.
+5. **#118's membership pass goes.** DDR-1201 made the sweep find `current_thread` on the ring from `idle0` before starting there. The designed sweep (§5) starts at `idle0->next` and stops at `idle0`, so the membership pass has nothing left to do. The `ZANCHOR_TEST` probe stays: it still forces the window, and arm B then measures the new walk. If it passes, it shows the `idle0` anchor holds without the membership pass.
+6. **Gate order.** `smoke-rcu` keeps arms RA, RB and RC and gains RD, RE and RF in the same `RCU_TORTURE` build. Mutants U4–U9 are one-change commits on the final head, as before. U5, U7 and U9 are stated **possibly not gated** before they run (§8); any of them that survives is recorded as not gated.
