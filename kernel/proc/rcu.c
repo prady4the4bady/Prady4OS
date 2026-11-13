@@ -30,7 +30,7 @@ static void rcu_fail_once(uint32_t bit, const char *what) {
 
 uint64_t rcu_read_lock(void) {
     uint64_t fl;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+    __asm__ volatile("pushfq; pop %0" : "=r"(fl) :: "memory");   /* MUTANT U2: no cli */
     g_rcu_nest[cpu_slot()]++;
     __asm__ volatile("" ::: "memory");
     return fl;
