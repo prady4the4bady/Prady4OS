@@ -7,6 +7,8 @@ AND is assigned in `tools/ci/gate_shards.txt`. `make ci-shard-check` reads
 **188 gates, 10 shards, 6 excluded**. `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B,
 warning-clean at `-Werror` after a clean rebuild.
 
+**Added 2026-11-12 (DDR-1201, DDR-1200; CodeRabbit on #123): a second way to be gated.** A gate that rebuilds the kernel with a test flag cannot run in a shard, because every shard asserts that `kernel.bin` did not change while its gates ran. Such a gate counts as **gated** when its `smoke-*` target exists in the `Makefile`, it is in `.github/workflows/ci.yml`'s `flag-gates` matrix, and `tools/ci/shard_check.sh` excludes it from the shards with that reason. Two gates use this path: `smoke-zanchor` and `smoke-rcu`.
+
 **Re-measured 2026-10-15 on the combined tree `d201c2c`** (after #43, #44, #46,
 #47 merged without a combined-tree run): `make ci-shard-check` reads **193 gates,
 10 shards, 6 excluded**; `kernel.bin` = `7d429743e211a591`, **1,503,626 B**
@@ -53,6 +55,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | SMP bring-up, per-CPU runqueues, stealing, resched IPI | gated | `smoke-smp`, `smoke-smpsched`, `smoke-smppreempt`, `smoke-percpu-sched`, `smoke-resched`, `smoke-rqstress`, `smoke-rqstress-liveness`, `smoke-crosswake` | Multicore scheduling |
 | TCB freed-while-queued fix | gated | `smoke-rqfree` | Reaper cannot free a queued thread |
 | Tick sweep ends when the current thread is off the ring (#115, DDR-1201) | gated in a test build with the window held open (emulated-verified; not verified on real hardware) | `smoke-zanchor` A, B | A timer tick cannot loop forever on a thread that is exiting |
+| Kernel RCU grace periods: IF-off read sections, tick-counter grace periods (DDR-1200, C1.4 P5a) | gated in a test build (emulated-verified; not verified on real hardware) | `smoke-rcu` RA, RB, RC | Kernel code can read shared structures without a lock and free them only when no reader can still see them. No product user yet: the first is P5b, the timer-tick sweep |
 | `mprotect` cannot add write to a frame another process maps (#112, DDR-1202) | gated (emulated-verified; not verified on real hardware) | `smoke-mprotect` F, G, H | One process cannot change another's private memory, or the shared vDSO page |
 | OPEN-2 double dispatch (DDR-1139) | gated (fix confirmed) | `[schedcheck]` in GLOBAL_FORBIDDEN | One thread on one CPU at a time |
 | Capability IPC, ring-3 door | gated | `smoke-sendipc` | Agent-to-agent messages |

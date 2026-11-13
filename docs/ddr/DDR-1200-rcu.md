@@ -273,3 +273,32 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
 
 - **DDR-1181 §2, row P5:** "the scheme is chosen in DDR-1200 (kernel, IF-off read sides, tick-counter grace periods); its code waits for the operator".
 - **`docs/V1_MASTER_CHECKLIST.md`, C1.4 RCU row:** designed in DDR-1200; not ticked until the code merges.
+
+---
+
+## Amendment 1 (2026-11-12): two code parts, P5a and P5b
+
+**Authority.** #45 6761846242 item 3: "The RCU code (DDR-1200), only after #115 has merged. Gate smoke-rcu, mutants U1–U9; record any survivor as not gated." #115 merged as #118 `baac4dd`. §9's "waits for the operator" is now answered by that item.
+
+**Why two parts.** §5's consumer changes the timed-wait protocol on every timed waiter, not only the sweep. That means a new `block_lk`, atomic accesses to `state` and `block_deadline`, and the waker discipline on the five callers of §5.2 point 4. A red run on one PR holding all of it would not say which half broke. Each part below has its own arms and mutants, and each arm is checked for vacuity on its own part.
+
+**A split that does not work.** Putting the deferred tcb free (D5) into the first part, with arm RF and mutant U6, makes U6 vacuous. Every ring reader stays under `g_sched_lock` until the sweep goes lockless, so a plain `kfree` after the unlink is still safe and RF cannot turn red. D5 therefore goes with its first lockless reader.
+
+| part | code | arms | mutants |
+|---|---|---|---|
+| **P5a**, the grace-period core | `kernel/proc/rcu.[ch]`: `rcu_read_lock`/`unlock` with the nesting count and the §3 rule asserts, `rcu_dereference`, `rcu_assign_pointer`, `synchronize_rcu` with the stall line. The locked tick increment (§3). The `RCU_TORTURE` flag, the `smoke-rcu` target and its CI job. | RA, RB, RC, on a test-only `g_slot`. They do not touch the ring. | U1, U2, U3. The locked increment stays stated not gated (§8). |
+| **P5b**, the first consumer | §5 and §5.1–§5.2: the lockless `idle0`-anchored sweep, `block_lk`, the atomics, the act step and the waker discipline. D5: `rcu_defer_free` and the reaper drain. | RD, RE, RF | U4, U5, U6, U7, U8, U9 |
+
+**P5a has no product consumer.** Until P5b, `rcu.[ch]` is used only by the torture test. The locked increment is the only default-build change in P5a. It changes the instruction, not the behaviour: one `lock xadd` per tick per CPU in place of a plain add.
+
+**Which CPUs `synchronize_rcu` waits on (§3 rule 3, checked against the code at `baac4dd`).**
+- An AP sets `shoot_ready` in `smp.c:272`, one call before it arms its own timer (`smp.c:273`), with IF still clear until `sched_ap_enter`. A grace period that snapshots such a CPU waits for its first tick. That is a short wait during AP start, never an early free.
+- `ticks != 0` would be the wrong test. An AP can begin a read section after `sched_ap_enter` and before its first tick. A writer that skipped it then could free under it. So the snapshot uses `shoot_ready`, as §3 says.
+
+**Order:** P5a first, then P5b. The checklist RCU item is ticked only when P5b merges.
+
+**P5a as built (changes from §7, stated here so the gate is read correctly).**
+- **Swap count.** RA runs `RCU_T_SWAPS` = 400 swaps, not the ≥ 2,000 §7 proposed. Each swap is one grace period, and a reader holds IF clear for 1.5 ticks of TSC time per section (RB), so 2,000 swaps would take roughly 2,000 × 2.5 ticks under TCG, about 50 s before TCG's slowdown. 400 keeps the gate inside its 240 s window. RC still needs at least 100 sections per CPU, and each reader completes several hundred in 400 swaps.
+- **FORBIDDEN lines.** §7's FORBIDDEN list (`[rcu] stall`, `RCU FAIL`) is enforced through arm A's line, not a `FORBIDDEN_SENTINEL`: the line carries `stalls=<n> fails=<n> aborted=<n>`, and the gate requires `stalls=0 fails=0 aborted=0` exactly. Either line during the run therefore fails the gate, and the runner's early exit (DDR-785) stays on. A `FORBIDDEN_SENTINEL` would turn it off and make every run wait out its full window.
+- **Detecting a free under a reader.** A freed node is filled with 0xDD and then `kfree`d, and the next swap's `kmalloc` of the same size class usually gets the same slot back. So the reader checks both the magic word and the node's generation before and after its hold. A poisoned node or a reused one counts in `poison_seen`.
+- **Rule checks.** Rule 1 is checked in `schedule()` (a switch with this CPU's nesting count above 0). Rule 2 is checked in `synchronize_rcu()` for IF and nesting only: the tree has no per-CPU count of held spinlocks to check the spinlock part against. Each prints one `RCU FAIL: …` line per kind.
