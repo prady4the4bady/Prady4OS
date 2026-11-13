@@ -3664,8 +3664,8 @@ smoke-rcu: $(IMG) fat-image sfs-image
 	touch kernel/proc/rcu.c
 	$(MAKE) image RCU_TORTURE=1 RCU_T_SWAPS=$(RCU_T_SWAPS)
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/rcu.log KEEP_SERIAL=1 \
-	TIMEOUT_S=240 QEMU_SMP=4 \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_RCU_A swaps=$(RCU_T_SWAPS) poison_seen=0 cpus=4 stalls=0 fails=0 aborted=0\nPRADYOS_RCU_C seen_cpus=4')" \
+	TIMEOUT_S=420 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_RCU_A swaps=$(RCU_T_SWAPS) poison_seen=0 cpus=4 stalls=0 fails=0 aborted=0\nPRADYOS_RCU_C seen_cpus=4\nPRADYOS_RCU_D tick_lock=0 sweeps_ok=1\nPRADYOS_RCU_E woke=20 late_ok=1 sat_armed=80 sat_woke=80 sat_late_ok=1 sat_acts_ok=1 rewait_ok=20 hol_ok=1 churn_ok=1 rq_woke=64 rq_late_ok=1 rq_contended_ok=1 aborted=0\nPRADYOS_RCU_F rounds=500 bad_node=0 hold_rounds=20 stalls=0 fails=0')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
 	  rc=$$? ; \
 	  grep -a '\[rcu\]\|PRADYOS_RCU\|RCU FAIL' build/gatelogs/rcu.log || true ; \
