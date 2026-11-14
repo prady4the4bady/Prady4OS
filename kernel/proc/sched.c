@@ -2576,8 +2576,8 @@ static void sched_timed_sweep(void) {
 #endif
         /* §5.1 point 2: state with acquire first; the deadline only after
          * seeing BLOCKED, so it is this wait's deadline, never an older one. */
-        if (__atomic_load_n(&_t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED) {
-            uint64_t _d = __atomic_load_n(&_t->block_deadline, __ATOMIC_RELAXED);
+        uint64_t _d = __atomic_load_n(&_t->block_deadline, __ATOMIC_RELAXED);   /* MUTANT U7 */
+        if (__atomic_load_n(&_t->state, __ATOMIC_RELAXED) == THREAD_BLOCKED) {
             if (_d != 0 && g_ticks >= _d) {
                 int _a = sched_timed_act(_t, _d);
 #if RCU_TORTURE
