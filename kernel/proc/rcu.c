@@ -318,8 +318,11 @@ struct rcu_w {
     uint32_t          early, early2;
     uint64_t          late2, waits;
     uint32_t          late_start;     /* started after its absolute deadline */
+    uint32_t          witness;        /* (e): record g_churn_total around the wait */
+    uint64_t          wit0, wit1;     /* (e): just before it blocked, just after   */
 };
 static struct rcu_w g_w[RCU_T_NW];
+static uint64_t     g_churn_total;       /* (e): churn waits completed, all churners */
 static uint64_t     g_tick_tsc;          /* TSC cycles per tick */
 static volatile uint32_t g_yield_stop;
 
@@ -337,6 +340,7 @@ static void rcu_w_reset(struct rcu_w *w) {
     w->late = 0; w->late_tsc = 0; w->dl1 = 0;
     w->early = 0; w->early2 = 0; w->late2 = 0; w->waits = 0;
     w->late_start = 0;
+    w->witness = 0; w->wit0 = 0; w->wit1 = 0;
     spin_unlock_irqrestore(&w->lk, fl);
 }
 
@@ -351,7 +355,11 @@ static int rcu_w_wait(struct rcu_w *w, uint64_t to, uint64_t *late,
         *dl_out = dl;
     __atomic_store_n(&w->armed, 1u, __ATOMIC_RELEASE);
     uint64_t c0 = rcu_rdtsc();
+    if (w->witness)
+        w->wit0 = __atomic_load_n(&g_churn_total, __ATOMIC_ACQUIRE);
     int rc = sched_block_timeout(&w->lk, &w->done, to);
+    if (w->witness)
+        w->wit1 = __atomic_load_n(&g_churn_total, __ATOMIC_ACQUIRE);
     uint64_t t1 = g_ticks, c1 = rcu_rdtsc();
     spin_unlock_irqrestore(&w->lk, fl);
     if (late)
@@ -407,6 +415,7 @@ static void rcu_t_churner(void *arg) {
     while (g_ticks < w->until) {
         rcu_w_wait(w, 1, 0, 0, 0, 0);
         __atomic_add_fetch(&w->waits, 1, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&g_churn_total, 1, __ATOMIC_RELEASE);
     }
     __atomic_store_n(&w->finished, 1u, __ATOMIC_RELEASE);
     sched_exit(0);
@@ -665,26 +674,17 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             yield();
         rcu_w_reset(&g_w[0]);
         g_w[0].timeout = 50;
-        if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1)) {
+        /* The measured waiter reads the churn count itself, just before it
+         * blocks and just after it wakes (CodeRabbit on #125), so the overlap
+         * counts only churn waits completed while it was blocked. 0 means no
+         * overlap, and churn_ok stays 0. */
+        g_w[0].witness = 1;
+        if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1) ||
+            !rcu_w_join(0, 1, RCU_T_SETTLE)) {
             out->aborted = 5;
             return;
         }
-        /* Churn waits completed while the measured waiter was armed. 0 means
-         * the churn did not overlap it, and churn_ok stays 0 (CodeRabbit on
-         * #125). */
-        uint64_t adl = g_ticks + RCU_T_SETTLE;
-        while (!__atomic_load_n(&g_w[0].armed, __ATOMIC_ACQUIRE) && g_ticks < adl)
-            yield();
-        uint64_t w0 = 0, w1 = 0;
-        for (uint32_t i = 1; i <= n; i++)
-            w0 += __atomic_load_n(&g_w[i].waits, __ATOMIC_RELAXED);
-        if (!rcu_w_join(0, 1, RCU_T_SETTLE)) {
-            out->aborted = 5;
-            return;
-        }
-        for (uint32_t i = 1; i <= n; i++)
-            w1 += __atomic_load_n(&g_w[i].waits, __ATOMIC_RELAXED);
-        out->churn_overlap = (uint32_t)(w1 - w0);
+        out->churn_overlap = (uint32_t)(g_w[0].wit1 - g_w[0].wit0);
         if (!rcu_w_join(1, n, RCU_T_SETTLE)) {
             out->aborted = 5;
             return;
@@ -780,38 +780,33 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
     __atomic_store_n(&g_rcu_rf_on, 0u, __ATOMIC_RELEASE);
 
     /* RF phase 2 (U9 window): 20 rounds, each victim held on its CPU as an
-     * unlinked current ZOMBIE for two ticks. */
-    __atomic_store_n(&g_rcu_rf_hold, 1u, __ATOMIC_RELEASE);
+     * unlinked current ZOMBIE for two of that CPU's ticks. Each round is bound
+     * to one tcb (CodeRabbit on #125): the victim is created blocked, its tcb
+     * is published, and only then is it made runnable. The hold runs only for
+     * that tcb, sees only that tcb's unlink, and acknowledges with that tcb. A
+     * phase-1 victim still on its way out cannot be held or counted. */
     for (uint32_t r = 0; r < 20 && !out->aborted; r++) {
-        uint64_t u0 = __atomic_load_n(&g_rcu_sw.rf_unlinked, __ATOMIC_ACQUIRE);
-        uint64_t h0 = __atomic_load_n(&g_rcu_sw.rf_holds_ok, __ATOMIC_ACQUIRE);
-        /* The victim's hold compares against this value: an unlink that lands
-         * before the hold starts still counts as "after the unlink". */
-        __atomic_store_n(&g_rcu_rf_u0, u0, __ATOMIC_RELEASE);
-        if (!sched_create(rcu_t_victim, 0, g_rcu_rf_name)) {
+        __atomic_store_n(&g_rcu_rf_acked, (struct tcb *)0, __ATOMIC_RELEASE);
+        __atomic_store_n(&g_rcu_rf_vunlinked, (struct tcb *)0, __ATOMIC_RELEASE);
+        struct tcb *v = sched_create_blocked(rcu_t_victim, 0, g_rcu_rf_name);
+        if (!v) {
             out->aborted = 8;
             break;
         }
+        __atomic_store_n(&g_rcu_rf_victim, v, __ATOMIC_RELEASE);
+        sched_unblock(v);
+        /* v stays allocated until its hold ends: the reaper's free waits for
+         * it to be off its CPU, and then a grace period. */
         uint64_t dl = g_ticks + RCU_T_SETTLE;
-        while (__atomic_load_n(&g_rcu_sw.rf_unlinked, __ATOMIC_ACQUIRE) == u0 && g_ticks < dl)
+        while (__atomic_load_n(&g_rcu_rf_acked, __ATOMIC_ACQUIRE) != v && g_ticks < dl)
             yield();
-        if (__atomic_load_n(&g_rcu_sw.rf_unlinked, __ATOMIC_ACQUIRE) == u0) {
-            out->aborted = 8;
-            break;
-        }
-        /* The round counts only when this victim's hold saw two of its own
-         * CPU's ticks after the unlink (CodeRabbit on #125); elapsed BSP time
-         * is no substitute. */
-        dl = g_ticks + RCU_T_SETTLE;
-        while (__atomic_load_n(&g_rcu_sw.rf_holds_ok, __ATOMIC_ACQUIRE) == h0 && g_ticks < dl)
-            yield();
-        if (__atomic_load_n(&g_rcu_sw.rf_holds_ok, __ATOMIC_ACQUIRE) == h0) {
+        if (__atomic_load_n(&g_rcu_rf_acked, __ATOMIC_ACQUIRE) != v) {
             out->aborted = 8;
             break;
         }
         out->hold_rounds++;
     }
-    __atomic_store_n(&g_rcu_rf_hold, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_rcu_rf_victim, (struct tcb *)0, __ATOMIC_RELEASE);
 }
 uint32_t rcu_torture_spawn_fail(void) { return g_spawn_fail; }
 #endif

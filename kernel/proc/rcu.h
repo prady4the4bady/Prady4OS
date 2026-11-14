@@ -89,9 +89,10 @@ struct rcu_sweep_stats {
 extern struct rcu_sweep_stats g_rcu_sw;
 extern const char g_rcu_rf_name[];       /* the name every RF victim carries      */
 extern volatile uint32_t g_rcu_rf_on;    /* 1: the sweep pauses on RF victims     */
-extern volatile uint32_t g_rcu_rf_hold;  /* 1: an exiting RF victim is held on-CPU */
+extern struct tcb *volatile g_rcu_rf_victim;    /* RF phase 2: the one tcb to hold   */
+extern struct tcb *volatile g_rcu_rf_vunlinked; /* set when that tcb is unlinked     */
+extern struct tcb *volatile g_rcu_rf_acked;     /* set by its hold: window complete  */
 extern uint64_t g_rcu_rf_pause_tsc;      /* that pause, TSC cycles                */
-extern volatile uint64_t g_rcu_rf_u0;    /* rf_unlinked before the held victim    */
 
 struct rcu_p5b_result {
     /* RE */

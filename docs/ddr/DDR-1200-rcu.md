@@ -367,8 +367,8 @@ Written with the P5b code, before its mutants run. Each point changes or makes p
     - The waiters' static locks are initialised once. A reset no longer rewrites a lock that a stale sweep may still hold, and the other fields are reset under that lock.
     - A waiter that starts after its absolute deadline fails its sub-arm's setup. Before, it waited zero ticks and counted as an on-time wake.
     - RE (d) creates the free-lock waiter first, so it comes after the 32 busy-lock waiters in the walk.
-    - RE (e) requires churn waits while the measured waiter is armed (`churn_overlap > 0`). The churn now runs 200 ticks.
-    - RF phase 2 counts a round only when that victim's hold has seen two of its own CPU's ticks after the unlink (`rf_holds_ok`). The hold compares against `rf_unlinked` as the test read it before creating the victim, not a value the hold samples itself.
+    - RE (e) requires churn waits completed while the measured waiter was blocked (`churn_overlap > 0`). The waiter itself reads a global churn count just before it blocks and just after it wakes, so a delayed controller cannot count churn from after the wait (second CodeRabbit round). The churn now runs 200 ticks.
+    - RF phase 2 binds each round to one tcb (second CodeRabbit round). The victim is created blocked, its tcb is published, and only then is it unblocked. The hold runs only for that tcb and sees only that tcb's unlink, which still counts if it landed before the hold started. It acknowledges with that tcb once two of its CPU's ticks have landed after the unlink, and the round counts only on that acknowledgement. A phase-1 victim still on its way out can be neither held nor counted.
     - Amendment 2 point 4 no longer says a wait on a non-static lock is safe.
     - Also: RE (f) runs up to four rounds until the sweep has met contention. Every round must wake all 64 on time (`rq_woke_ok`). In local runs, `rq_contended` was 0 in 2 of 7 runs on code whose (f) was otherwise unchanged.
 11. **Mutant screening, local QEMU (TCG), not CI evidence.** Each mutant is one change on `bcbd269`, run through `smoke-rcu`. CI runs on the final head follow.

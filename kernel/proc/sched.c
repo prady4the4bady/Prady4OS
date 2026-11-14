@@ -194,9 +194,10 @@ void sched_take_unblock_stats(uint32_t *cas_out, uint32_t *rqon_out, uint32_t *s
 struct rcu_sweep_stats g_rcu_sw;
 const char g_rcu_rf_name[] = "rcurf";
 volatile uint32_t g_rcu_rf_on;
-volatile uint32_t g_rcu_rf_hold;
+struct tcb *volatile g_rcu_rf_victim;
+struct tcb *volatile g_rcu_rf_vunlinked;
+struct tcb *volatile g_rcu_rf_acked;
 uint64_t g_rcu_rf_pause_tsc;
-volatile uint64_t g_rcu_rf_u0;
 static volatile uint8_t g_rcu_in_tick[PERCPU_MAX];   /* RD: a sweep is running here */
 static volatile uint8_t g_rcu_in_act[PERCPU_MAX];    /* RE (f): an act's push is   */
 static inline uint32_t rcu_t_cpu(void) {
@@ -1594,6 +1595,8 @@ static void sched_ring_unlink(struct tcb *t) {
 #if RCU_TORTURE
     if (__atomic_load_n(&t->name, __ATOMIC_RELAXED) == g_rcu_rf_name)
         __atomic_add_fetch(&g_rcu_sw.rf_unlinked, 1, __ATOMIC_RELEASE);
+    if (t == __atomic_load_n(&g_rcu_rf_victim, __ATOMIC_ACQUIRE))
+        __atomic_store_n(&g_rcu_rf_vunlinked, t, __ATOMIC_RELEASE);
 #endif
 #if ZANCHOR_TEST
     if (t == __atomic_load_n(&g_za_victim, __ATOMIC_ACQUIRE))
@@ -1916,20 +1919,22 @@ static int runnable(const struct tcb *t) {
  * with g_in_switch set so the tick does not re-enter the scheduler. */
 #define RCU_T_HOLD_TICKS 100u
 #define RCU_T_HOLD_SPINS 200000000u
-static void rcu_t_rf_hold(int cpu) {
+static void rcu_t_rf_hold(struct tcb *self, int cpu) {
     struct percpu *pc = this_cpu();
     if (!pc)
         return;
-    /* The test stored rf_unlinked before it created this victim: an unlink
-     * that landed before this hold started is still seen (CodeRabbit on #125). */
-    uint64_t u0 = __atomic_load_n(&g_rcu_rf_u0, __ATOMIC_ACQUIRE);
+    /* Bound to this one tcb (CodeRabbit on #125): only the victim the test
+     * published is held, "unlinked" means this tcb was unlinked (an unlink
+     * that landed before the hold started still counts), and the
+     * acknowledgement names this tcb, so no other victim's hold can be
+     * counted for it. */
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
     uint64_t t0 = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED), tu = 0, now = t0;
     int seen = 0;
     uint32_t spins = 0;
     for (;;) {
         now = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
-        if (!seen && __atomic_load_n(&g_rcu_sw.rf_unlinked, __ATOMIC_ACQUIRE) != u0) {
+        if (!seen && __atomic_load_n(&g_rcu_rf_vunlinked, __ATOMIC_ACQUIRE) == self) {
             seen = 1;
             tu = now;
         }
@@ -1941,8 +1946,10 @@ static void rcu_t_rf_hold(int cpu) {
     }
     if (seen)
         __atomic_add_fetch(&g_rcu_sw.rf_zhits, now - tu, __ATOMIC_RELAXED);
-    if (seen && now - tu >= 2)
-        __atomic_add_fetch(&g_rcu_sw.rf_holds_ok, 1, __ATOMIC_RELEASE);
+    if (seen && now - tu >= 2) {
+        __atomic_add_fetch(&g_rcu_sw.rf_holds_ok, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_rcu_rf_acked, self, __ATOMIC_RELEASE);
+    }
     __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
 }
 #endif
@@ -1961,10 +1968,9 @@ static void schedule_locked(uint64_t fl) {
         za_hold(cpu);
 #endif
 #if RCU_TORTURE
-    if (__atomic_load_n(&prev->state, __ATOMIC_ACQUIRE) == THREAD_ZOMBIE &&
-        __atomic_load_n(&g_rcu_rf_hold, __ATOMIC_ACQUIRE) &&
-        __atomic_load_n(&prev->name, __ATOMIC_RELAXED) == g_rcu_rf_name)
-        rcu_t_rf_hold(cpu);
+    if (prev == __atomic_load_n(&g_rcu_rf_victim, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&prev->state, __ATOMIC_ACQUIRE) == THREAD_ZOMBIE)
+        rcu_t_rf_hold(prev, cpu);
 #endif
 
     /* rq-1: O(1) pick — own FIFO first, then steal; no more ring scan. Safe
