@@ -2443,10 +2443,8 @@ static int sched_timed_act(struct tcb *t, uint64_t d_seen) {
     if (!spin_trylock(lk))
         return 0;                          /* busy: retried next tick, every CPU */
     int acted = 0;
-    if (__atomic_load_n(&t->block_lk, __ATOMIC_RELAXED) == lk &&
-        __atomic_load_n(&t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED &&
-        __atomic_load_n(&t->block_deadline, __ATOMIC_RELAXED) == d_seen &&
-        g_ticks >= d_seen) {
+    (void)d_seen;                          /* MUTANT U5: no same-wait checks */
+    if (__atomic_load_n(&t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED) {
         __atomic_store_n(&t->wake_timed_out, 1, __ATOMIC_RELAXED);
         __atomic_store_n(&t->block_deadline, 0, __ATOMIC_RELAXED);
 #if RCU_TORTURE
