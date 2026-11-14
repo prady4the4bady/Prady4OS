@@ -300,6 +300,7 @@ void rcu_torture(uint64_t swaps, struct rcu_torture_result *out) {
  * storage (Amendment 2 point 4), and the test obeys the rule it checks. */
 #define RCU_T_NW        112u
 #define RCU_T_SETTLE    600u          /* ticks a sub-arm may take to finish */
+#define RCU_T_F_ROUNDS  4u            /* (f): at most this many rounds        */
 
 struct rcu_w {
     spinlock_t        lk;
@@ -316,13 +317,18 @@ struct rcu_w {
     uint64_t          late, late_tsc, dl1;
     uint32_t          early, early2;
     uint64_t          late2, waits;
+    uint32_t          late_start;     /* started after its absolute deadline */
 };
 static struct rcu_w g_w[RCU_T_NW];
 static uint64_t     g_tick_tsc;          /* TSC cycles per tick */
 static volatile uint32_t g_yield_stop;
 
+/* The lock is initialised once, in rcu_torture_p5b, never here: a sweep that
+ * loaded block_lk before the last waiter cleared it may still try or hold
+ * this lock, and rewriting it would drop that ownership (CodeRabbit on #125).
+ * The other fields are reset under the lock. */
 static void rcu_w_reset(struct rcu_w *w) {
-    w->lk = (spinlock_t)SPINLOCK_INIT;
+    uint64_t fl = spin_lock_irqsave(&w->lk);
     w->done = 0; w->phase = 0;
     w->timeout = 0; w->abs = 0; w->timeout2 = 0; w->until = 0;
     w->pin = -1; w->self = 0;
@@ -330,6 +336,8 @@ static void rcu_w_reset(struct rcu_w *w) {
     w->rc = 0; w->rc2 = 0;
     w->late = 0; w->late_tsc = 0; w->dl1 = 0;
     w->early = 0; w->early2 = 0; w->late2 = 0; w->waits = 0;
+    w->late_start = 0;
+    spin_unlock_irqrestore(&w->lk, fl);
 }
 
 /* One timed wait under w->lk. Returns the result; *late is ticks past the
@@ -362,7 +370,14 @@ static void rcu_t_waiter(void *arg) {
     uint64_t to = w->timeout;
     if (w->abs) {
         uint64_t now = g_ticks;
-        to = (w->abs > now) ? w->abs - now : 0;
+        if (now >= w->abs) {
+            /* Too late to test the sweep: a zero-tick wait would time out at
+             * once and look like an on-time wake. The sub-arm fails setup. */
+            w->late_start = 1;
+            __atomic_store_n(&w->finished, 1u, __ATOMIC_RELEASE);
+            sched_exit(0);
+        }
+        to = w->abs - now;
     }
     w->rc = rcu_w_wait(w, to, &w->late, &w->late_tsc, &w->early, 0);
     __atomic_store_n(&w->finished, 1u, __ATOMIC_RELEASE);
@@ -391,7 +406,7 @@ static void rcu_t_churner(void *arg) {
     __atomic_store_n(&w->armed, 1u, __ATOMIC_RELEASE);
     while (g_ticks < w->until) {
         rcu_w_wait(w, 1, 0, 0, 0, 0);
-        w->waits++;
+        __atomic_add_fetch(&w->waits, 1, __ATOMIC_RELAXED);
     }
     __atomic_store_n(&w->finished, 1u, __ATOMIC_RELEASE);
     sched_exit(0);
@@ -431,6 +446,12 @@ static int rcu_w_join(uint32_t first, uint32_t n, uint64_t bound) {
             return 0;
         yield();
     }
+}
+static uint32_t rcu_w_late_starts(uint32_t first, uint32_t n) {
+    uint32_t c = 0;
+    for (uint32_t i = first; i < first + n; i++)
+        c += g_w[i].late_start;
+    return c;
 }
 static uint32_t rcu_w_armed(uint32_t first, uint32_t n) {
     uint32_t a = 0;
@@ -482,6 +503,8 @@ static int rcu_t_settle(struct rcu_p5b_result *out) {
 void rcu_torture_p5b(struct rcu_p5b_result *out) {
     for (uint32_t i = 0; i < sizeof *out; i++)
         ((uint8_t *)out)[i] = 0;
+    for (uint32_t i = 0; i < RCU_T_NW; i++)
+        g_w[i].lk = (spinlock_t)SPINLOCK_INIT;    /* once; see rcu_w_reset */
 
     /* TSC per tick, over 20 ticks with IF set. */
     uint64_t k = g_ticks;
@@ -530,6 +553,8 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             out->aborted = 2;
             return;
         }
+        if (rcu_w_late_starts(0, n))
+            out->aborted = 2;
         out->sat_acts_max = __atomic_load_n(&g_rcu_sw.acts_max, __ATOMIC_RELAXED);
         for (uint32_t i = 0; i < n; i++) {
             if (g_w[i].rc == -ETIMEDOUT && !g_w[i].early)
@@ -584,7 +609,13 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             rcu_w_reset(&g_w[i]);
             g_w[i].abs = abs;
         }
-        for (uint32_t i = 0; i < n; i++)
+        /* A new tcb goes into the ring right after its creator, so the
+         * thread created first ends up last in the walk from idle0. g_w[32],
+         * the free-lock waiter, is created first: every busy-lock waiter is
+         * then reached before it (CodeRabbit on #125). */
+        if (!rcu_t_spawn(rcu_t_waiter, &g_w[32], "rcuwd", -1))
+            out->aborted = 4;
+        for (uint32_t i = 0; i < 32; i++)
             if (!rcu_t_spawn(rcu_t_waiter, &g_w[i], "rcuwd", -1))
                 out->aborted = 4;
         while (g_ticks + 3 < abs)
@@ -608,7 +639,7 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             spin_unlock(&g_w[i].lk);
         __asm__ volatile("push %0; popfq" :: "r"(fl) : "memory", "cc");
         current_thread->pin_cpu = -1;
-        if (!rcu_w_join(0, n, RCU_T_SETTLE)) {
+        if (!rcu_w_join(0, n, RCU_T_SETTLE) || rcu_w_late_starts(0, n)) {
             out->aborted = 4;
             return;
         }
@@ -623,7 +654,7 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
     /* (e) re-block churn: 64 threads on 1-tick waits while one waits 50. */
     {
         const uint32_t n = 64;
-        uint64_t until = g_ticks + 120;
+        uint64_t until = g_ticks + 200;
         for (uint32_t i = 1; i <= n; i++) {
             rcu_w_reset(&g_w[i]);
             g_w[i].until = until;
@@ -634,8 +665,27 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             yield();
         rcu_w_reset(&g_w[0]);
         g_w[0].timeout = 50;
-        if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1) ||
-            !rcu_w_join(0, n + 1, RCU_T_SETTLE)) {
+        if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1)) {
+            out->aborted = 5;
+            return;
+        }
+        /* Churn waits completed while the measured waiter was armed. 0 means
+         * the churn did not overlap it, and churn_ok stays 0 (CodeRabbit on
+         * #125). */
+        uint64_t adl = g_ticks + RCU_T_SETTLE;
+        while (!__atomic_load_n(&g_w[0].armed, __ATOMIC_ACQUIRE) && g_ticks < adl)
+            yield();
+        uint64_t w0 = 0, w1 = 0;
+        for (uint32_t i = 1; i <= n; i++)
+            w0 += __atomic_load_n(&g_w[i].waits, __ATOMIC_RELAXED);
+        if (!rcu_w_join(0, 1, RCU_T_SETTLE)) {
+            out->aborted = 5;
+            return;
+        }
+        for (uint32_t i = 1; i <= n; i++)
+            w1 += __atomic_load_n(&g_w[i].waits, __ATOMIC_RELAXED);
+        out->churn_overlap = (uint32_t)(w1 - w0);
+        if (!rcu_w_join(1, n, RCU_T_SETTLE)) {
             out->aborted = 5;
             return;
         }
@@ -650,9 +700,18 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
     if (!rcu_t_settle(out))
         return;
     /* (f) runqueue contention: 64 waiters pinned to one CPU expire together
-     * while three threads pinned to that CPU yield in a loop. */
-    {
+     * while three threads pinned to that CPU yield in a loop. Pinning makes the
+     * sweep's pushes meet the yielders on the runqueue lock likely, not certain
+     * (measured locally: rq_contended was 0 in 2 of 7 runs), so a round with
+     * no contended push is run again, up to RCU_T_F_ROUNDS times. Every round
+     * must wake all 64 on time; rq_contended is the total over the rounds. */
+    out->rq_woke_ok = 1;
+    for (uint32_t fr = 0; fr < RCU_T_F_ROUNDS && out->rq_contended == 0; fr++) {
+        if (fr && !rcu_t_settle(out))
+            return;
+        out->rq_rounds++;
         const uint32_t n = 64;
+        uint32_t woke = 0;
         int32_t tc = rcu_t_last_cpu();
         uint64_t c0 = __atomic_load_n(&g_rcu_sw.rq_contended, __ATOMIC_RELAXED);
         __atomic_store_n(&g_yield_stop, 0u, __ATOMIC_RELEASE);
@@ -677,20 +736,24 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
         while (__atomic_load_n(&g_t_live, __ATOMIC_ACQUIRE) != 0 && g_ticks < dl)
             yield();
         out->f_armed = rcu_w_armed(0, n);
+        out->f_fin = 0;
         for (uint32_t i = 0; i < n; i++)
             out->f_fin += __atomic_load_n(&g_w[i].finished, __ATOMIC_ACQUIRE);
         out->f_live = __atomic_load_n(&g_t_live, __ATOMIC_ACQUIRE);
-        if (!joined || out->f_live != 0) {
+        if (!joined || out->f_live != 0 || rcu_w_late_starts(0, n)) {
             out->aborted = 6;
             return;
         }
         for (uint32_t i = 0; i < n; i++) {
             if (g_w[i].rc == -ETIMEDOUT && !g_w[i].early)
-                out->rq_woke++;
+                woke++;
             rcu_umax32(&out->rq_late, g_w[i].late);
             rcu_umax64(&out->late_tsc_max, g_w[i].late_tsc);
         }
-        out->rq_contended = __atomic_load_n(&g_rcu_sw.rq_contended, __ATOMIC_RELAXED) - c0;
+        out->rq_woke += woke;
+        if (woke != n)
+            out->rq_woke_ok = 0;
+        out->rq_contended += __atomic_load_n(&g_rcu_sw.rq_contended, __ATOMIC_RELAXED) - c0;
     }
 
     if (!rcu_t_settle(out))
@@ -721,6 +784,10 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
     __atomic_store_n(&g_rcu_rf_hold, 1u, __ATOMIC_RELEASE);
     for (uint32_t r = 0; r < 20 && !out->aborted; r++) {
         uint64_t u0 = __atomic_load_n(&g_rcu_sw.rf_unlinked, __ATOMIC_ACQUIRE);
+        uint64_t h0 = __atomic_load_n(&g_rcu_sw.rf_holds_ok, __ATOMIC_ACQUIRE);
+        /* The victim's hold compares against this value: an unlink that lands
+         * before the hold starts still counts as "after the unlink". */
+        __atomic_store_n(&g_rcu_rf_u0, u0, __ATOMIC_RELEASE);
         if (!sched_create(rcu_t_victim, 0, g_rcu_rf_name)) {
             out->aborted = 8;
             break;
@@ -732,10 +799,16 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             out->aborted = 8;
             break;
         }
-        /* Let its hold end before the next one starts. */
-        uint64_t t = g_ticks;
-        while (g_ticks - t < 4)
+        /* The round counts only when this victim's hold saw two of its own
+         * CPU's ticks after the unlink (CodeRabbit on #125); elapsed BSP time
+         * is no substitute. */
+        dl = g_ticks + RCU_T_SETTLE;
+        while (__atomic_load_n(&g_rcu_sw.rf_holds_ok, __ATOMIC_ACQUIRE) == h0 && g_ticks < dl)
             yield();
+        if (__atomic_load_n(&g_rcu_sw.rf_holds_ok, __ATOMIC_ACQUIRE) == h0) {
+            out->aborted = 8;
+            break;
+        }
         out->hold_rounds++;
     }
     __atomic_store_n(&g_rcu_rf_hold, 0u, __ATOMIC_RELEASE);

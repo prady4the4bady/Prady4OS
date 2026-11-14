@@ -84,12 +84,14 @@ struct rcu_sweep_stats {
     uint64_t deferred_live; /* tcbs pushed to rcu_defer_free and not yet freed   */
     uint64_t rf_unlinked;   /* RF: victims unlinked so far                       */
     uint64_t rf_zhits;      /* RF (U9 window): ticks on an unlinked current zombie */
+    uint64_t rf_holds_ok;   /* RF (U9 window): holds that saw 2 local ticks after the unlink */
 };
 extern struct rcu_sweep_stats g_rcu_sw;
 extern const char g_rcu_rf_name[];       /* the name every RF victim carries      */
 extern volatile uint32_t g_rcu_rf_on;    /* 1: the sweep pauses on RF victims     */
 extern volatile uint32_t g_rcu_rf_hold;  /* 1: an exiting RF victim is held on-CPU */
 extern uint64_t g_rcu_rf_pause_tsc;      /* that pause, TSC cycles                */
+extern volatile uint64_t g_rcu_rf_u0;    /* rf_unlinked before the held victim    */
 
 struct rcu_p5b_result {
     /* RE */
@@ -99,7 +101,9 @@ struct rcu_p5b_result {
     uint32_t rewait_ok, rewait_early;                 /* (c) */
     uint32_t hol_woke, hol_late;                      /* (d) */
     uint32_t churn_woke, churn_late, churn_waits;     /* (e) */
-    uint32_t rq_woke, rq_late;                        /* (f) */
+    uint32_t churn_overlap;                           /* (e): churn waits while it was armed */
+    uint32_t rq_woke, rq_late;                        /* (f): totals over the rounds */
+    uint32_t rq_woke_ok, rq_rounds;                   /* (f): every round woke all 64 */
     uint32_t f_armed, f_fin, f_live;                  /* (f): where it stopped */
     uint64_t rq_contended;                            /* (f) */
     uint64_t late_tsc_max;

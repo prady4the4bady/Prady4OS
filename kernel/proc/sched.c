@@ -196,6 +196,7 @@ const char g_rcu_rf_name[] = "rcurf";
 volatile uint32_t g_rcu_rf_on;
 volatile uint32_t g_rcu_rf_hold;
 uint64_t g_rcu_rf_pause_tsc;
+volatile uint64_t g_rcu_rf_u0;
 static volatile uint8_t g_rcu_in_tick[PERCPU_MAX];   /* RD: a sweep is running here */
 static volatile uint8_t g_rcu_in_act[PERCPU_MAX];    /* RE (f): an act's push is   */
 static inline uint32_t rcu_t_cpu(void) {
@@ -1919,7 +1920,9 @@ static void rcu_t_rf_hold(int cpu) {
     struct percpu *pc = this_cpu();
     if (!pc)
         return;
-    uint64_t u0 = __atomic_load_n(&g_rcu_sw.rf_unlinked, __ATOMIC_ACQUIRE);
+    /* The test stored rf_unlinked before it created this victim: an unlink
+     * that landed before this hold started is still seen (CodeRabbit on #125). */
+    uint64_t u0 = __atomic_load_n(&g_rcu_rf_u0, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
     uint64_t t0 = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED), tu = 0, now = t0;
     int seen = 0;
@@ -1938,6 +1941,8 @@ static void rcu_t_rf_hold(int cpu) {
     }
     if (seen)
         __atomic_add_fetch(&g_rcu_sw.rf_zhits, now - tu, __ATOMIC_RELAXED);
+    if (seen && now - tu >= 2)
+        __atomic_add_fetch(&g_rcu_sw.rf_holds_ok, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
 }
 #endif

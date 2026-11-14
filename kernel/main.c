@@ -1946,8 +1946,8 @@ static void fs_test_thread(void *arg) {
         kline_s(&k, " sat_acts_ok=");           kline_d(&k, pr.sat_acts_max > 32);
         kline_s(&k, " rewait_ok=");             kline_d(&k, pr.rewait_ok);
         kline_s(&k, " hol_ok=");                kline_d(&k, pr.hol_woke && pr.hol_late <= 1);
-        kline_s(&k, " churn_ok=");              kline_d(&k, pr.churn_woke && pr.churn_late <= 1);
-        kline_s(&k, " rq_woke=");               kline_d(&k, pr.rq_woke);
+        kline_s(&k, " churn_ok=");              kline_d(&k, pr.churn_woke && pr.churn_late <= 1 && pr.churn_overlap > 0);
+        kline_s(&k, " rq_woke_ok=");            kline_d(&k, pr.rq_woke_ok);
         kline_s(&k, " rq_late_ok=");            kline_d(&k, pr.rq_late <= 2);
         kline_s(&k, " rq_contended_ok=");       kline_d(&k, pr.rq_contended > 0);
         kline_s(&k, " aborted=");               kline_d(&k, pr.aborted);
@@ -1961,11 +1961,16 @@ static void fs_test_thread(void *arg) {
         kline_s(&k, " hol_late=");              kline_d(&k, pr.hol_late);
         kline_s(&k, " churn_late=");            kline_d(&k, pr.churn_late);
         kline_s(&k, " churn_waits=");           kline_d(&k, pr.churn_waits);
+        kline_s(&k, " churn_overlap=");         kline_d(&k, pr.churn_overlap);
+        kline_s(&k, " rq_woke=");               kline_d(&k, pr.rq_woke);
+        kline_s(&k, " rq_rounds=");             kline_d(&k, pr.rq_rounds);
         kline_s(&k, " rq_late=");               kline_d(&k, pr.rq_late);
         kline_s(&k, " rq_contended=");          kline_d(&k, pr.rq_contended);
         kline_s(&k, " sweep_max=");             kline_d(&k, __atomic_load_n(&g_rcu_sw.sweep_max_tsc, __ATOMIC_RELAXED));
         kline_s(&k, " late_tsc_max=");          kline_d(&k, pr.late_tsc_max);
-        kline_s(&k, " f_armed=");               kline_d(&k, pr.f_armed);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        kline_init(&k);
+        kline_s(&k, "[rcu] E2 f_armed=");       kline_d(&k, pr.f_armed);
         kline_s(&k, " f_fin=");                 kline_d(&k, pr.f_fin);
         kline_s(&k, " f_live=");                kline_d(&k, pr.f_live);
         kline_s(&k, " spawn_fail=");            kline_d(&k, rcu_torture_spawn_fail());
