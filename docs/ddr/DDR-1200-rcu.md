@@ -303,6 +303,20 @@ FORBIDDEN: `[rcu] stall`, `RCU FAIL`.
 - **Detecting a free under a reader.** A freed node is filled with 0xDD and then `kfree`d, and the next swap's `kmalloc` of the same size class usually gets the same slot back. So the reader checks both the magic word and the node's generation before and after its hold. A poisoned node or a reused one counts in `poison_seen`.
 - **Rule checks.** Rule 1 is checked in `schedule()` (a switch with this CPU's nesting count above 0). Rule 2 is checked in `synchronize_rcu()` for IF and nesting only: the tree has no per-CPU count of held spinlocks to check the spinlock part against. Each prints one `RCU FAIL: …` line per kind.
 
+**P5a evidence (#123, merged as `3f9be84`).** QEMU (TCG, 4 vCPU) only; not verified on real hardware.
+- **Head `57eb09f`**, run [43395743995](https://github.com/prady4the4bady/Prady4OS/actions/runs/43395743995): `[rcu] cpus=4 swaps=400 poison_seen=0 sections_min=402 stalls=0 fails=0 aborted=0`, `PRADYOS_RCU_C seen_cpus=4`.
+- **Mutants on that head.** Each failed in the gate itself, not in the build.
+
+| mutant | change | result | run |
+|---|---|---|---|
+| U1 | `synchronize_rcu` returns at once | `poison_seen=3`, `seen_cpus=0` (the swaps finished before the readers ran) | [43395914395](https://github.com/prady4the4bady/Prady4OS/actions/runs/43395914395) |
+| U2 | `rcu_read_lock` does not mask IF | `poison_seen=331 fails=6`, `RCU FAIL: switch inside a read section` | [43395917959](https://github.com/prady4the4bady/Prady4OS/actions/runs/43395917959) |
+| U3 | the highest ticking CPU is not waited on | `poison_seen=126`, `seen_cpus=4` | [43400833607](https://github.com/prady4the4bady/Prady4OS/actions/runs/43400833607) |
+
+- **Not gated, as §8 stated before the code:** the locked tick increment.
+- **Changed after review (CodeRabbit on #123, in `57eb09f`):**
+  - the stall clock is the furthest any ticking CPU has advanced since the snapshot, so a writer that moves between CPUs still reaches the stall line;
+  - the torture hold loop's `rdtsc` and `pause` have `"memory"` clobbers, so the after-hold loads stay after the hold.
 ---
 
 ## Amendment 2 (2026-11-13): P5b decisions taken before its code
