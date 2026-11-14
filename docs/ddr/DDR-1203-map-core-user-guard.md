@@ -21,7 +21,7 @@ DDR-1196 closed the one path that reached it (an `mmap` hint that wrapped). DDR-
 
 It returns -1, which every caller already handles as a failed map. It writes nothing, so no entry is promoted and no table is allocated.
 
-**D2. It is reported, once.** The first refusal prints `[vmm] FAIL: user leaf under a kernel-shared top-level entry va=<va> slot=<n>` and sets a counter, `g_vmm_user_guard_hits`. The line goes into `GLOBAL_FORBIDDEN` (`tools/qemu_runner/boot_test.sh`), appended before its final line as the rules require; the count rises from 77 to 78, and CLAUDE.md's number moves with it. Every boot gate then fails if any path reaches the guard. That is the intent: by DDR-1198 no product path should.
+**D2. It is reported, once.** Every refusal adds 1 to a counter, `g_vmm_user_guard_hits`. The first *unexpected* refusal prints `[vmm] FAIL: user leaf under a kernel-shared top-level entry va=<va> slot=<n>`, and a once-flag, `g_vmm_user_guard_reported`, stops it printing again. Only an unexpected refusal reads or sets that flag. A refusal made while the probe's expect latch (§4) is set prints the expected line instead and leaves the flag clear, so the probe's refusals cannot use up the report (CodeRabbit on #126). The line goes into `GLOBAL_FORBIDDEN` (`tools/qemu_runner/boot_test.sh`), appended before its final line as the rules require; the count rises from 77 to 78, and CLAUDE.md's number moves with it. Every boot gate then fails if any path reaches the guard. That is the intent: by DDR-1198 no product path should.
 
 **D3. Before `g_kernel_pml4` is set** (early boot, `vmm.c:34`), the guard is skipped: there is no master to compare against, and no user mapping exists yet.
 
@@ -46,7 +46,7 @@ The arms run on a fresh address space from `vmm_new_address_space`, never on a l
 | G-C | `vmm_map_in(g_kernel_pml4, <slot 1 VA>, frame, VMM_USER)` (D1 rule 2) | returns -1; the master's slot 1 stays empty | returns 0 and fills master slot 1: fails |
 | G-D (control) | `vmm_map_in(as, <slot 1 VA>, frame, VMM_USER \| VMM_RW)`, then unmap it | returns 0 and the leaf is present: the guard does not block a legal user map | passes on both trees; it is the control that keeps G-A to G-C from passing by refusing everything |
 
-`g_vmm_user_guard_hits` counts the three refusals. The probe expects exactly 3 and prints `PRADYOS_MAPGUARD a=1 b=1 c=1 d=1 hits=3`. Because the probe trips the guard on purpose, the `[vmm] FAIL` line of D2 would fail its own gate. So the probe sets a probe-only expect latch around the three calls, the way `fault_expect.h` (DDR-1040) does for expected faults, and the guard then prints `[vmm] guard refused (expected)` instead. The latch is cleared before the probe returns, so any later refusal prints the forbidden line.
+`g_vmm_user_guard_hits` counts the three refusals. The probe expects exactly 3 and prints `PRADYOS_MAPGUARD a=1 b=1 c=1 d=1 hits=3`. Because the probe trips the guard on purpose, the `[vmm] FAIL` line of D2 would fail its own gate. So the probe sets a probe-only expect latch around the three calls, the way `fault_expect.h` (DDR-1040) does for expected faults, and the guard then prints `[vmm] guard refused (expected)` instead. The latch is cleared before the probe returns. Because expected refusals never set the once-flag (D2), the first refusal after that, whether or not the probe has run, prints the forbidden line.
 
 The gate is `smoke-mapguard` (new, in a shard, `QEMU_PROBES=mapguard`). It does not rebuild the kernel, so it goes into a shard, not into `flag-gates`.
 
@@ -58,6 +58,7 @@ The gate is `smoke-mapguard` (new, in a shard, `QEMU_PROBES=mapguard`). It does 
 | M2 | rule 2 removed | G-C |
 | M3 | the guard runs after the first `descend`, not before it | G-A: the master's slot-511 entry is promoted even though the map returns -1 |
 | M4 | the expect latch is not cleared after the probe | none of the probe's arms. It is stated **not gated**: the latch only changes which line a later refusal prints, and no later path refuses. |
+| M5 | an expected refusal also sets the once-flag | none of the probe's arms, for the same reason as M4: only a later unexpected refusal would show it, and no path makes one. Stated **not gated**. |
 
 ## 6. Size
 
