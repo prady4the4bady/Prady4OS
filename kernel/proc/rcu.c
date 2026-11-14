@@ -683,18 +683,20 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             yield();
         rcu_w_reset(&g_w[0]);
         g_w[0].timeout = 50;
-        /* The overlap is observed directly (third to fifth CodeRabbit rounds on
-         * #125). For about 10 ticks the controller polls the churners. One
-         * observation counts when, in this order:
+        /* A churner re-block that BEGAN inside the measured wait is observed
+         * directly (third to sixth CodeRabbit rounds on #125):
          *   1. the measured waiter is seen BLOCKED in its wait;
-         *   2. a churner's completed-wait count is already >= 1;
-         *   3. that churner is seen BLOCKED in its own timed wait;
-         *   4. the measured waiter is seen BLOCKED in its wait again.
-         * The measured waiter blocks once, so 1 and 4 bracket 3 inside its one
-         * blocked period. A wait completes before its count rises, so a block
-         * seen after a count >= 1 is a later block than the churner's first:
-         * a re-block, observed in THREAD_BLOCKED while the measured waiter was
-         * blocked. No observation: the sub-arm aborts. */
+         *   2. then each churner's completed-wait count is snapshotted;
+         *   3. for about 10 ticks the controller polls: one observation counts
+         *      when a churner's count is above its snapshot, then that churner
+         *      is seen BLOCKED, then the measured waiter is seen BLOCKED again.
+         * A count above the snapshot rose after step 2. The churner raises it
+         * (release) only after a wait has completed, and the acquire read means
+         * the BLOCKED seen next belongs to a later wait, which began after the
+         * rise, so after step 1. The measured waiter blocks once, so step 1
+         * and the final check bracket that block transition inside its one
+         * blocked period. A churner blocked since before step 1 is never
+         * counted. No observation: the sub-arm aborts. */
         if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1)) {
             out->aborted = 5;
             return;
@@ -702,14 +704,18 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
         uint64_t adl = g_ticks + RCU_T_SETTLE;
         while (!rcu_w_blocked(&g_w[0]) && g_ticks < adl)
             yield();
+        static uint64_t snap[RCU_T_NW];
+        int pre = rcu_w_blocked(&g_w[0]);
+        for (uint32_t i = 1; i <= n; i++)
+            snap[i] = __atomic_load_n(&g_w[i].waits, __ATOMIC_SEQ_CST);
         uint64_t tb = g_ticks;
-        while (g_ticks - tb < 10) {
+        while (pre && g_ticks - tb < 10) {
             for (uint32_t i = 1; i <= n; i++) {
                 if (!rcu_w_blocked(&g_w[0]))
                     break;
-                uint64_t done_waits = __atomic_load_n(&g_w[i].waits, __ATOMIC_ACQUIRE);
+                uint64_t done_waits = __atomic_load_n(&g_w[i].waits, __ATOMIC_SEQ_CST);
                 int cb = rcu_w_blocked(&g_w[i]);
-                if (done_waits >= 1 && cb && rcu_w_blocked(&g_w[0]))
+                if (done_waits > snap[i] && cb && rcu_w_blocked(&g_w[0]))
                     out->churn_overlap++;
             }
             yield();
