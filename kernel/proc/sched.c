@@ -1651,6 +1651,7 @@ static void rcu_defer_free(struct tcb *t) {
 /* The reaper's drain: take the whole list, wait one grace period, free each
  * entry. An entry pushed after the take was unlinked before it was pushed, so
  * the next pass's grace period covers it. Kernel-thread context, IF set. */
+__attribute__((used)) static void (*volatile u6_keep)(struct tcb *) = rcu_defer_free;   /* MUTANT U6 */
 static void sched_reap_deferred(void) {
     uint64_t fl = spin_lock_irqsave(&g_rcu_defer_lock);
     struct tcb *list = g_rcu_defer_head;
@@ -1733,7 +1734,7 @@ static void sched_free_tcb(struct tcb *t) {
     /* DDR-1200 D5, Amendment 2 point 1: every resource above is released at
      * once, as before. Only the memory a lockless tick sweep may still be
      * reading (the tcb; the kernel stack goes with it) waits a grace period. */
-    rcu_defer_free(t);
+    sched_tcb_free_mem(t);                 /* MUTANT U6: no grace period */
 }
 
 /* DDR-743: snapshot the index-th ring thread for SYS_GETPROCS. Walks the
