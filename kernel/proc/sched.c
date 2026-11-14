@@ -2492,6 +2492,7 @@ static int rcu_t_rf_check(struct tcb *t) {
  * no per-sweep cap (§5 step 3). DDR-1201's membership pass is gone (Amendment
  * 2 point 5): the walk no longer starts at current_thread. */
 static void sched_timed_sweep(void) {
+    uint64_t _u4 = irq_save();             /* MUTANT U4: g_sched_lock around the scan */
     uint64_t _rf = rcu_read_lock();
 #if RCU_TORTURE
     uint64_t _c0 = rcu_t_tsc();
@@ -2641,6 +2642,7 @@ static void sched_timed_sweep(void) {
 #endif
     }
     rcu_read_unlock(_rf);
+    irq_restore(_u4);                      /* MUTANT U4 */
 #if RCU_TORTURE
     __atomic_add_fetch(&g_rcu_sw.sweeps, 1, __ATOMIC_RELAXED);
     rcu_t_max(&g_rcu_sw.acts_max, _acts);
