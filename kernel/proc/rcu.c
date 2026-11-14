@@ -318,8 +318,6 @@ struct rcu_w {
     uint32_t          early, early2;
     uint64_t          late2, waits;
     uint32_t          late_start;     /* started after its absolute deadline */
-    uint32_t          witness;        /* (e): record g_churn_total around the wait */
-    uint64_t          wit0, wit1;     /* (e): just before it blocked, just after   */
 };
 static struct rcu_w g_w[RCU_T_NW];
 static uint64_t     g_churn_total;       /* (e): churn waits completed, all churners */
@@ -340,7 +338,6 @@ static void rcu_w_reset(struct rcu_w *w) {
     w->late = 0; w->late_tsc = 0; w->dl1 = 0;
     w->early = 0; w->early2 = 0; w->late2 = 0; w->waits = 0;
     w->late_start = 0;
-    w->witness = 0; w->wit0 = 0; w->wit1 = 0;
     spin_unlock_irqrestore(&w->lk, fl);
 }
 
@@ -355,11 +352,7 @@ static int rcu_w_wait(struct rcu_w *w, uint64_t to, uint64_t *late,
         *dl_out = dl;
     __atomic_store_n(&w->armed, 1u, __ATOMIC_RELEASE);
     uint64_t c0 = rcu_rdtsc();
-    if (w->witness)
-        w->wit0 = __atomic_load_n(&g_churn_total, __ATOMIC_ACQUIRE);
     int rc = sched_block_timeout(&w->lk, &w->done, to);
-    if (w->witness)
-        w->wit1 = __atomic_load_n(&g_churn_total, __ATOMIC_ACQUIRE);
     uint64_t t1 = g_ticks, c1 = rcu_rdtsc();
     spin_unlock_irqrestore(&w->lk, fl);
     if (late)
@@ -375,6 +368,7 @@ static int rcu_w_wait(struct rcu_w *w, uint64_t to, uint64_t *late,
 
 static void rcu_t_waiter(void *arg) {
     struct rcu_w *w = arg;
+    __atomic_store_n(&w->self, current_thread, __ATOMIC_RELEASE);
     uint64_t to = w->timeout;
     if (w->abs) {
         uint64_t now = g_ticks;
@@ -456,6 +450,20 @@ static int rcu_w_join(uint32_t first, uint32_t n, uint64_t bound) {
         yield();
     }
 }
+/* 1 if w's waiter is in its timed wait on w->lk at this instant: BLOCKED,
+ * with block_lk naming w->lk. Read inside a read section and only while the
+ * waiter has not finished, so its tcb cannot be freed under the read (D5). */
+static int rcu_w_blocked(struct rcu_w *w) {
+    int b = 0;
+    uint64_t fl = rcu_read_lock();
+    struct tcb *t = __atomic_load_n(&w->self, __ATOMIC_ACQUIRE);
+    if (t && !__atomic_load_n(&w->finished, __ATOMIC_ACQUIRE))
+        b = __atomic_load_n(&t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED &&
+            __atomic_load_n(&t->block_lk, __ATOMIC_ACQUIRE) == &w->lk;
+    rcu_read_unlock(fl);
+    return b;
+}
+
 static uint32_t rcu_w_late_starts(uint32_t first, uint32_t n) {
     uint32_t c = 0;
     for (uint32_t i = first; i < first + n; i++)
@@ -674,17 +682,32 @@ void rcu_torture_p5b(struct rcu_p5b_result *out) {
             yield();
         rcu_w_reset(&g_w[0]);
         g_w[0].timeout = 50;
-        /* The measured waiter reads the churn count itself, just before it
-         * blocks and just after it wakes (CodeRabbit on #125), so the overlap
-         * counts only churn waits completed while it was blocked. 0 means no
-         * overlap, and churn_ok stays 0. */
-        g_w[0].witness = 1;
-        if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1) ||
-            !rcu_w_join(0, 1, RCU_T_SETTLE)) {
+        /* The overlap is bracketed by the waiter's own state (third CodeRabbit
+         * round on #125). The churn count is read only between two
+         * observations of the waiter BLOCKED in this wait, about 10 ticks
+         * apart. It blocks exactly once, so every churn wait counted between
+         * the brackets completed while it was blocked, not in the window after
+         * the sweep made it READY. No overlap observed: the sub-arm aborts. */
+        if (!rcu_t_spawn(rcu_t_waiter, &g_w[0], "rcuwe", -1)) {
             out->aborted = 5;
             return;
         }
-        out->churn_overlap = (uint32_t)(g_w[0].wit1 - g_w[0].wit0);
+        uint64_t adl = g_ticks + RCU_T_SETTLE;
+        while (!rcu_w_blocked(&g_w[0]) && g_ticks < adl)
+            yield();
+        uint64_t c_a = __atomic_load_n(&g_churn_total, __ATOMIC_ACQUIRE);
+        int in_a = rcu_w_blocked(&g_w[0]);
+        uint64_t tb = g_ticks;
+        while (g_ticks - tb < 10)
+            yield();
+        uint64_t c_b = __atomic_load_n(&g_churn_total, __ATOMIC_ACQUIRE);
+        int in_b = rcu_w_blocked(&g_w[0]);
+        if (in_a && in_b)
+            out->churn_overlap = (uint32_t)(c_b - c_a);
+        if (!rcu_w_join(0, 1, RCU_T_SETTLE) || out->churn_overlap == 0) {
+            out->aborted = 5;
+            return;
+        }
         if (!rcu_w_join(1, n, RCU_T_SETTLE)) {
             out->aborted = 5;
             return;
