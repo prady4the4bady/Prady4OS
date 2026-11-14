@@ -64,14 +64,14 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 ## Hard-won facts (full list in the archive, §INV)
 
 - **Build:**
-  - `make image` does not always rebuild after a `-D` flag or a `.c` change: remove the `.o` and verify by **hash**, never by size.
+  - `build/kernel.bin` depends on the sources, not on the `.o` files or `KCFLAGS` (`Makefile:490`): a `-D` flag alone does not rebuild it, and removing `.o` files does not either. Touch a kernel source first, then verify by **hash**, never by size (CodeRabbit on #124).
   - `TIMEOUT_S=<n> make smoke-x` is ignored; use `make TIMEOUT_S=<n> smoke-x`.
   - `kputhex` already prints `0x`; `kprintf` does not exist.
 - **Size:** `kernel.bin` is **1,638,794 B** against the 1,703,936 B size gate — **65,142 B of headroom** (measured at `baac4dd`, after #118 and #120). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
 - **NSI:** max defined 119 on this branch (`SYS_MSYNC`, DDR-1178 A4); 112–115 are DDR-1178 A2 SysV (#78), 116 `SYS_SHM_OPEN` is DDR-1178 A3 (#80), 117 `SYS_FUTEX`, 118 `SYS_SCHED_CPU`, so next free is 120 (verify against `kernel/syscall/syscall.h`).
 - **Boot:** PT_HI is implemented twice, in `boot/stage2/stage2.asm` and `boot/uefi/loader.c`; change both together.
 - **`[apfreeze]`** has at least five producers. Resolve its RIP before naming a cause.
-- **Container limits:** this container has no `mkfs.fat`, so most smoke gates cannot boot locally. CI is the evidence.
+- **Container limits:** `mkfs.fat` and QEMU are not preinstalled. `apt-get update && apt-get install -y dosfstools mtools qemu-system-x86` makes smoke gates boot locally (done 2026-11-13; `smoke-rcu` booted). Local runs screen; CI is the evidence.
 
 ## Open defects (do not claim closed)
 

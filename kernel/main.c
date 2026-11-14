@@ -1921,6 +1921,74 @@ static void fs_test_thread(void *arg) {
         kline_s(&k, "PRADYOS_RCU_C seen_cpus=");  kline_d(&k, rr.seen_cpus);
         kline_s(&k, "\r\n"); kline_emit(&k);
     }
+    /* DDR-1200 §7 (P5b: arms RD, RE, RF; Amendment 3). Each line starts with
+     * the asserted fields, computed here from the measured values, and ends
+     * with the values themselves as data. stalls and fails cover the whole
+     * run, so a stall line or an RCU FAIL during P5b also fails the gate. */
+    {
+        struct rcu_p5b_result pr;
+        rcu_torture_p5b(&pr);
+        uint64_t sweeps = __atomic_load_n(&g_rcu_sw.sweeps, __ATOMIC_RELAXED);
+        uint64_t tlock  = __atomic_load_n(&g_rcu_sw.tick_lock, __ATOMIC_RELAXED);
+        kline k; kline_init(&k);
+        /* RD: no sweep, on any CPU, ever took g_sched_lock. */
+        kline_s(&k, "PRADYOS_RCU_D tick_lock="); kline_d(&k, tlock);
+        kline_s(&k, " sweeps_ok=");             kline_d(&k, sweeps >= 1000);
+        kline_s(&k, " | sweeps=");              kline_d(&k, sweeps);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* RE: timed waits time out, on time, in every sub-arm. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_E woke=");     kline_d(&k, pr.woke);
+        kline_s(&k, " late_ok=");               kline_d(&k, pr.late_max <= 1);
+        kline_s(&k, " sat_armed=");             kline_d(&k, pr.sat_armed);
+        kline_s(&k, " sat_woke=");              kline_d(&k, pr.sat_woke);
+        kline_s(&k, " sat_late_ok=");           kline_d(&k, pr.sat_late_max <= 1);
+        kline_s(&k, " sat_acts_ok=");           kline_d(&k, pr.sat_acts_max > 32);
+        kline_s(&k, " rewait_ok=");             kline_d(&k, pr.rewait_ok);
+        kline_s(&k, " hol_ok=");                kline_d(&k, pr.hol_woke && pr.hol_late <= 1);
+        kline_s(&k, " churn_ok=");              kline_d(&k, pr.churn_woke && pr.churn_late <= 1 && pr.churn_overlap > 0);
+        kline_s(&k, " rq_woke_ok=");            kline_d(&k, pr.rq_woke_ok);
+        kline_s(&k, " rq_late_ok=");            kline_d(&k, pr.rq_late <= 2);
+        kline_s(&k, " rq_contended_ok=");       kline_d(&k, pr.rq_contended > 0);
+        kline_s(&k, " aborted=");               kline_d(&k, pr.aborted);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* RE, the measured values (data; a kline holds 256 bytes). */
+        kline_init(&k);
+        kline_s(&k, "[rcu] E late_max=");       kline_d(&k, pr.late_max);
+        kline_s(&k, " sat_late_max=");          kline_d(&k, pr.sat_late_max);
+        kline_s(&k, " sat_acts_max=");          kline_d(&k, pr.sat_acts_max);
+        kline_s(&k, " rewait_early=");          kline_d(&k, pr.rewait_early);
+        kline_s(&k, " hol_late=");              kline_d(&k, pr.hol_late);
+        kline_s(&k, " churn_late=");            kline_d(&k, pr.churn_late);
+        kline_s(&k, " churn_waits=");           kline_d(&k, pr.churn_waits);
+        kline_s(&k, " churn_overlap=");         kline_d(&k, pr.churn_overlap);
+        kline_s(&k, " rq_woke=");               kline_d(&k, pr.rq_woke);
+        kline_s(&k, " rq_rounds=");             kline_d(&k, pr.rq_rounds);
+        kline_s(&k, " rq_late=");               kline_d(&k, pr.rq_late);
+        kline_s(&k, " rq_contended=");          kline_d(&k, pr.rq_contended);
+        kline_s(&k, " sweep_max=");             kline_d(&k, __atomic_load_n(&g_rcu_sw.sweep_max_tsc, __ATOMIC_RELAXED));
+        kline_s(&k, " late_tsc_max=");          kline_d(&k, pr.late_tsc_max);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        kline_init(&k);
+        kline_s(&k, "[rcu] E2 f_armed=");       kline_d(&k, pr.f_armed);
+        kline_s(&k, " f_fin=");                 kline_d(&k, pr.f_fin);
+        kline_s(&k, " f_live=");                kline_d(&k, pr.f_live);
+        kline_s(&k, " spawn_fail=");            kline_d(&k, rcu_torture_spawn_fail());
+        kline_s(&k, " ring_base=");             kline_d(&k, pr.ring_base);
+        kline_s(&k, " settle_max=");            kline_d(&k, pr.settle_max);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* RF: no tcb was freed under a sweep standing on it. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_F rounds=");   kline_d(&k, pr.rounds);
+        kline_s(&k, " bad_node=");              kline_d(&k, __atomic_load_n(&g_rcu_sw.bad_node, __ATOMIC_RELAXED));
+        kline_s(&k, " hold_rounds=");           kline_d(&k, pr.hold_rounds);
+        kline_s(&k, " stalls=");                kline_d(&k, rcu_stalls());
+        kline_s(&k, " fails=");                 kline_d(&k, rcu_fail_bits());
+        kline_s(&k, " | deferred_max=");        kline_d(&k, __atomic_load_n(&g_rcu_sw.deferred_max, __ATOMIC_RELAXED));
+        kline_s(&k, " ring_len_max=");          kline_d(&k, __atomic_load_n(&g_rcu_sw.ring_len_max, __ATOMIC_RELAXED));
+        kline_s(&k, " zhits=");                 kline_d(&k, __atomic_load_n(&g_rcu_sw.rf_zhits, __ATOMIC_RELAXED));
+        kline_s(&k, "\r\n"); kline_emit(&k);
+    }
 #endif
     int mnt = -1, blk = -1;
     int inst_root = disk_root_select();

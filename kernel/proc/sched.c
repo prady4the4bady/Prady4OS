@@ -187,6 +187,36 @@ void sched_take_unblock_stats(uint32_t *cas_out, uint32_t *rqon_out, uint32_t *s
     if (state_out) *state_out = __atomic_load_n(&g_ub_last_state, __ATOMIC_RELAXED);
 }
 
+#if RCU_TORTURE
+#include "percpu.h"
+/* DDR-1200 §7 (P5b arms RD, RE (f), RF): counters the sweep and the free path
+ * keep in the `make smoke-rcu` build only. Declared in rcu.h. */
+struct rcu_sweep_stats g_rcu_sw;
+const char g_rcu_rf_name[] = "rcurf";
+volatile uint32_t g_rcu_rf_on;
+struct tcb *volatile g_rcu_rf_victim;
+struct tcb *volatile g_rcu_rf_vunlinked;
+struct tcb *volatile g_rcu_rf_acked;
+uint64_t g_rcu_rf_pause_tsc;
+static volatile uint8_t g_rcu_in_tick[PERCPU_MAX];   /* RD: a sweep is running here */
+static volatile uint8_t g_rcu_in_act[PERCPU_MAX];    /* RE (f): an act's push is   */
+static inline uint32_t rcu_t_cpu(void) {
+    struct percpu *pc = this_cpu();
+    return pc ? pc->cpu_idx : 0;
+}
+static inline uint64_t rcu_t_tsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+static inline void rcu_t_max(uint64_t *p, uint64_t v) {
+    uint64_t cur = __atomic_load_n(p, __ATOMIC_RELAXED);
+    while (v > cur &&
+           !__atomic_compare_exchange_n(p, &cur, v, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+        ;
+}
+#endif
+
 static void rq_push(int cpu, struct tcb *t) {
     if (__atomic_exchange_n(&t->rq_on, 1, __ATOMIC_ACQ_REL)) {
         __atomic_add_fetch(&g_ub_rqon_skip, 1, __ATOMIC_RELAXED);   /* DDR-936 */
@@ -198,7 +228,22 @@ static void rq_push(int cpu, struct tcb *t) {
     if (t->pin_cpu >= 0)
         cpu = t->pin_cpu;
     struct rq *q = &g_rq[cpu];
+#if RCU_TORTURE
+    /* RE (f): a push made by the sweep's act step tries the lock first and
+     * counts a miss, then takes it as usual. Every other push is unchanged. */
+    uint64_t fl;
+    if (g_rcu_in_act[rcu_t_cpu()]) {
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
+        if (!spin_trylock(&q->lock)) {
+            __atomic_add_fetch(&g_rcu_sw.rq_contended, 1, __ATOMIC_RELAXED);
+            spin_lock(&q->lock);
+        }
+    } else {
+        fl = spin_lock_irqsave(&q->lock);
+    }
+#else
     uint64_t fl = spin_lock_irqsave(&q->lock);
+#endif
     t->rq_next = 0;
     if (q->tail) q->tail->rq_next = t; else q->head = t;
     q->tail = t;
@@ -884,6 +929,10 @@ void sched_set_init_pid(uint32_t pid) { g_init_pid = pid; }
  * and takes no g_sched_lock, which the futex lock order relies on (DDR-1181
  * A1.3; DDR-1195 §4). */
 static inline uint64_t irq_save(void) {
+#if RCU_TORTURE
+    if (g_rcu_in_tick[rcu_t_cpu()])        /* RD (DDR-1200 §7) */
+        __atomic_add_fetch(&g_rcu_sw.tick_lock, 1, __ATOMIC_RELAXED);
+#endif
     return spin_lock_irqsave(&g_sched_lock);
 }
 static inline void irq_restore(uint64_t f) {
@@ -928,7 +977,7 @@ static void thread_trampoline(void) {
      * It is released with a RELEASE store by finish_task_switch() in whichever
      * thread next resumes on this CPU — strictly after the switch has left this
      * stack — exactly as sched_exit() relies on for ZOMBIEs. */
-    current_thread->state = THREAD_DONE;
+    __atomic_store_n(&current_thread->state, THREAD_DONE, __ATOMIC_RELEASE);
     schedule();
     for (;;)                        /* unreachable */
         __asm__ volatile("hlt");
@@ -1167,6 +1216,8 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_thread       = 0;
     t->clear_tid       = 0;
     t->fx_lock         = 0;   /* DDR-1181 A1.3: not in a futex wait */
+    t->block_lk        = 0;   /* DDR-1200 §5.2: not in a timed wait; kmalloc does not zero */
+    t->rcu_next        = 0;   /* DDR-1200 D5: not waiting for a grace period */
     t->pin_cpu         = -1;  /* DDR-1186: unpinned; kmalloc does not zero */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
@@ -1269,7 +1320,9 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
      * the links. Uncontended on one CPU. */
     uint64_t fl = irq_save();
     t->next = current_thread->next;
-    current_thread->next = t;
+    /* DDR-1200 §5: the tick sweep walks the ring with no lock. Release orders
+     * every store above (state, deadline, next) before the node is reachable. */
+    rcu_assign_pointer(current_thread->next, t);
     irq_restore(fl);
     /* rq-1: a READY-at-insert (kernel) thread goes straight onto this CPU's
      * ready FIFO; BLOCKED user threads are enqueued by their sched_unblock. */
@@ -1536,15 +1589,90 @@ static void sched_ring_unlink(struct tcb *t) {
     struct tcb *p = t->next;
     while (p->next != t)
         p = p->next;
-    p->next = t->next;
+    /* DDR-1200 §5: t->next is left as it is, so a lockless sweep standing on t
+     * walks back into the ring. t is freed only after a grace period (D5). */
+    rcu_assign_pointer(p->next, t->next);
+#if RCU_TORTURE
+    if (__atomic_load_n(&t->name, __ATOMIC_RELAXED) == g_rcu_rf_name)
+        __atomic_add_fetch(&g_rcu_sw.rf_unlinked, 1, __ATOMIC_RELEASE);
+    if (t == __atomic_load_n(&g_rcu_rf_victim, __ATOMIC_ACQUIRE))
+        __atomic_store_n(&g_rcu_rf_vunlinked, t, __ATOMIC_RELEASE);
+#endif
 #if ZANCHOR_TEST
     if (t == __atomic_load_n(&g_za_victim, __ATOMIC_ACQUIRE))
         __atomic_store_n(&g_za_unlinked, 1u, __ATOMIC_RELEASE);
 #endif
 }
 
+/* DDR-1200 D5 (C1.4 P5b): the memory of a tcb that was on the ring is freed
+ * only after a grace period, because the timer-tick sweep walks the ring with
+ * no lock and may be standing on it (§5). Amendment 2 point 2: both unlink
+ * paths (reaper_thread, sched_destroy) push here and never wait; the reaper
+ * drains. The list lock is a leaf: nothing is taken under it. */
+static spinlock_t   g_rcu_defer_lock = SPINLOCK_INIT;
+static struct tcb  *g_rcu_defer_head;
+static uint64_t     g_rcu_defer_n;
+
+/* The memory itself. Runs after a grace period (or, for a tcb that never
+ * reached the ring, at once). */
+static void sched_tcb_free_mem(struct tcb *t) {
+    uint64_t kb = t->kstack_base;
+    int idle = t->is_idle;
+#if RCU_TORTURE
+    /* RF: a sweep that still stood on this node would read the poison. */
+    memset(t, 0xDD, sizeof *t);
+#endif
+    /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
+     * idle tcb carries a real kstack_base, and NEITHER idle stack came from
+     * kmalloc -- the BSP's is boot.asm's .bss `kernel_stack` and each AP's is a
+     * pmm_alloc_pages(2) block -- so kfree()ing one would hand the slab
+     * allocator an address it never issued. No idle can reach here TODAY
+     * (enumerated: the reaper takes only THREAD_ZOMBIE, which an idle never
+     * becomes, and every sched_destroy caller passes a tcb it created itself or
+     * a zombie child found by pid), but that is a property of the callers, and
+     * this change would make it silently load-bearing. State it here instead. */
+    if (kb && !idle)
+        kfree((void *)(uintptr_t)kb);
+    kfree(t);
+}
+
+static void rcu_defer_free(struct tcb *t) {
+    uint64_t fl = spin_lock_irqsave(&g_rcu_defer_lock);
+    t->rcu_next = g_rcu_defer_head;
+    g_rcu_defer_head = t;
+    g_rcu_defer_n++;
+#if RCU_TORTURE
+    rcu_t_max(&g_rcu_sw.deferred_max, g_rcu_defer_n);
+    __atomic_add_fetch(&g_rcu_sw.deferred_live, 1, __ATOMIC_RELAXED);
+#endif
+    spin_unlock_irqrestore(&g_rcu_defer_lock, fl);
+}
+
+/* The reaper's drain: take the whole list, wait one grace period, free each
+ * entry. An entry pushed after the take was unlinked before it was pushed, so
+ * the next pass's grace period covers it. Kernel-thread context, IF set. */
+static void sched_reap_deferred(void) {
+    uint64_t fl = spin_lock_irqsave(&g_rcu_defer_lock);
+    struct tcb *list = g_rcu_defer_head;
+    g_rcu_defer_head = 0;
+    g_rcu_defer_n = 0;
+    spin_unlock_irqrestore(&g_rcu_defer_lock, fl);
+    if (!list)
+        return;
+    synchronize_rcu();
+    while (list) {
+        struct tcb *n = list->rcu_next;
+        sched_tcb_free_mem(list);
+#if RCU_TORTURE
+        __atomic_sub_fetch(&g_rcu_sw.deferred_live, 1, __ATOMIC_RELEASE);
+#endif
+        list = n;
+    }
+}
+
 /* Free a thread's per-process resources (open files, cap table, kstack, TCB).
- * Takes NO scheduler lock — kfree/fd_free take their own; t must already be
+ * The kstack and the TCB go to rcu_defer_free (DDR-1200 D5); the rest is
+ * released here, at once. Takes NO scheduler lock — kfree/fd_free take their own; t must already be
  * unlinked and not running anywhere. Freeing outside g_sched_lock keeps that
  * leaf lock short (the reaper otherwise held it across vmm teardown). */
 static void sched_free_tcb(struct tcb *t) {
@@ -1602,18 +1730,10 @@ static void sched_free_tcb(struct tcb *t) {
         aether_rb_free(t);
     if (t->caps)
         cap_table_destroy(t->caps);     /* DDR-1181: drops a ref; threads share one */
-    /* DDR-1106: `!t->is_idle` is LOAD-BEARING, not defensive. Since DDR-1106 an
-     * idle tcb carries a real kstack_base, and NEITHER idle stack came from
-     * kmalloc -- the BSP's is boot.asm's .bss `kernel_stack` and each AP's is a
-     * pmm_alloc_pages(2) block -- so kfree()ing one would hand the slab
-     * allocator an address it never issued. No idle can reach here TODAY
-     * (enumerated: the reaper takes only THREAD_ZOMBIE, which an idle never
-     * becomes, and every sched_destroy caller passes a tcb it created itself or
-     * a zombie child found by pid), but that is a property of the callers, and
-     * this change would make it silently load-bearing. State it here instead. */
-    if (t->kstack_base && !t->is_idle)
-        kfree((void *)(uintptr_t)t->kstack_base);
-    kfree(t);
+    /* DDR-1200 D5, Amendment 2 point 1: every resource above is released at
+     * once, as before. Only the memory a lockless tick sweep may still be
+     * reading (the tcb; the kernel stack goes with it) waits a grace period. */
+    rcu_defer_free(t);
 }
 
 /* DDR-743: snapshot the index-th ring thread for SYS_GETPROCS. Walks the
@@ -1790,6 +1910,50 @@ static int runnable(const struct tcb *t) {
  * DDR-SMP-exit-stack-race, when sched_exit held the lock across its final
  * context_switch. Since rq-2, a collector is kept off a dying thread's stack
  * by on_cpu and switch_wait_offcpu, not by this lock. */
+#if RCU_TORTURE
+/* DDR-1200 §7 RF, the U9 window: hold an exiting RF victim on its CPU, as a
+ * ZOMBIE that is still current_thread here, until the reaper on another CPU
+ * has unlinked it and two ticks have landed on this CPU after that. Those are
+ * the ticks a sweep anchored on current_thread would start from an unlinked
+ * node (§5.3). The same idiom as DDR-1201's za_hold: `sti; nop; pause; cli`,
+ * with g_in_switch set so the tick does not re-enter the scheduler. */
+#define RCU_T_HOLD_TICKS 100u
+#define RCU_T_HOLD_SPINS 200000000u
+static void rcu_t_rf_hold(struct tcb *self, int cpu) {
+    struct percpu *pc = this_cpu();
+    if (!pc)
+        return;
+    /* Bound to this one tcb (CodeRabbit on #125): only the victim the test
+     * published is held, "unlinked" means this tcb was unlinked (an unlink
+     * that landed before the hold started still counts), and the
+     * acknowledgement names this tcb, so no other victim's hold can be
+     * counted for it. */
+    __atomic_store_n(&g_in_switch[cpu], 1, __ATOMIC_RELEASE);
+    uint64_t t0 = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED), tu = 0, now = t0;
+    int seen = 0;
+    uint32_t spins = 0;
+    for (;;) {
+        now = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+        if (!seen && __atomic_load_n(&g_rcu_rf_vunlinked, __ATOMIC_ACQUIRE) == self) {
+            seen = 1;
+            tu = now;
+        }
+        if (seen && now - tu >= 2)
+            break;
+        if (now - t0 >= RCU_T_HOLD_TICKS || ++spins >= RCU_T_HOLD_SPINS)
+            break;
+        __asm__ volatile("sti; nop; pause; cli" ::: "memory");
+    }
+    if (seen)
+        __atomic_add_fetch(&g_rcu_sw.rf_zhits, now - tu, __ATOMIC_RELAXED);
+    if (seen && now - tu >= 2) {
+        __atomic_add_fetch(&g_rcu_sw.rf_holds_ok, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_rcu_rf_acked, self, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&g_in_switch[cpu], 0, __ATOMIC_RELEASE);
+}
+#endif
+
 static void schedule_locked(uint64_t fl) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
@@ -1802,6 +1966,11 @@ static void schedule_locked(uint64_t fl) {
     if (prev == __atomic_load_n(&g_za_victim, __ATOMIC_ACQUIRE) &&
         prev->state == THREAD_ZOMBIE)
         za_hold(cpu);
+#endif
+#if RCU_TORTURE
+    if (prev == __atomic_load_n(&g_rcu_rf_victim, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&prev->state, __ATOMIC_ACQUIRE) == THREAD_ZOMBIE)
+        rcu_t_rf_hold(prev, cpu);
 #endif
 
     /* rq-1: O(1) pick — own FIFO first, then steal; no more ring scan. Safe
@@ -1841,7 +2010,7 @@ static void schedule_locked(uint64_t fl) {
 #if !OPEN2_FORCE_DD   /* DDR-1151: the mutant restores the pre-fix self-wait */
     if (next == prev) {
         if (prev->state == THREAD_READY) {
-            prev->state = THREAD_RUNNING;
+            __atomic_store_n(&prev->state, THREAD_RUNNING, __ATOMIC_RELEASE);
             local_irq_restore(fl);
             return;
         }
@@ -1872,7 +2041,7 @@ static void schedule_locked(uint64_t fl) {
     {
         int dd_entered_ready = (prev->state == THREAD_READY);
         if (prev->state == THREAD_RUNNING)
-            prev->state = THREAD_READY;
+            __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
         if (prev->state == THREAD_READY && !prev->is_idle) {
             int was_on = __atomic_load_n(&prev->rq_on, __ATOMIC_ACQUIRE);
             rq_push(cpu, prev);
@@ -1885,7 +2054,7 @@ static void schedule_locked(uint64_t fl) {
     }
 #else
     if (prev->state == THREAD_RUNNING) {
-        prev->state = THREAD_READY;
+        __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
         if (!prev->is_idle)
             rq_push(cpu, prev);    /* rq-1: a preempted-but-runnable prev re-queues */
     }
@@ -1931,7 +2100,7 @@ static void schedule_locked(uint64_t fl) {
     }
 #endif
     next->on_cpu = cpu;
-    next->state = THREAD_RUNNING;
+    __atomic_store_n(&next->state, THREAD_RUNNING, __ATOMIC_RELEASE);
     next->dispatches++;            /* DDR-735: switch-in count (under the claim) */
     if (next->is_user && pc && !pc->is_bsp)
         g_user_on_ap = 1;          /* cap-4 proof: a ring-3 thread claimed by an AP
@@ -2260,6 +2429,227 @@ static void schedule(void) {
 #endif
 #endif
 
+/* DDR-1200 §5.2 (C1.4 P5b): the act step for one candidate the sweep saw
+ * BLOCKED with deadline d_seen <= g_ticks. Only under the waiter's own wait
+ * lock, taken with trylock (the tick may have interrupted its holder on this
+ * CPU), and only if it is still the same wait: same lock, still BLOCKED, the
+ * same deadline. Every waker of a timed wait sets *done and calls
+ * sched_unblock under that lock, so while it is held neither a waker nor the
+ * waiter can move on. A stale reading therefore changes nothing. */
+static int sched_timed_act(struct tcb *t, uint64_t d_seen) {
+    spinlock_t *lk = __atomic_load_n(&t->block_lk, __ATOMIC_ACQUIRE);
+    if (!lk)
+        return 0;                          /* already woken: it cleared block_lk */
+    if (!spin_trylock(lk))
+        return 0;                          /* busy: retried next tick, every CPU */
+    int acted = 0;
+    if (__atomic_load_n(&t->block_lk, __ATOMIC_RELAXED) == lk &&
+        __atomic_load_n(&t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED &&
+        __atomic_load_n(&t->block_deadline, __ATOMIC_RELAXED) == d_seen &&
+        g_ticks >= d_seen) {
+        __atomic_store_n(&t->wake_timed_out, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&t->block_deadline, 0, __ATOMIC_RELAXED);
+#if RCU_TORTURE
+        uint32_t c = rcu_t_cpu();
+        g_rcu_in_act[c] = 1;
+#endif
+        sched_unblock(t);
+#if RCU_TORTURE
+        g_rcu_in_act[c] = 0;
+#endif
+        acted = 1;
+    }
+    spin_unlock(lk);
+    return acted;
+}
+
+#if RCU_TORTURE
+/* RF: pause on a churn victim, then check that it is still the same live node.
+ * Returns 1 if it changed or was poisoned under the sweep (it was freed). */
+static int rcu_t_rf_check(struct tcb *t) {
+    if (__atomic_load_n(&t->name, __ATOMIC_RELAXED) != g_rcu_rf_name)
+        return 0;
+    uint32_t tid0 = __atomic_load_n(&t->tid, __ATOMIC_RELAXED);
+    uint64_t end = rcu_t_tsc() + g_rcu_rf_pause_tsc;
+    while (rcu_t_tsc() < end)
+        __asm__ volatile("pause" ::: "memory");
+    uint32_t tid1 = __atomic_load_n(&t->tid, __ATOMIC_RELAXED);
+    uint32_t st = __atomic_load_n(&t->state, __ATOMIC_RELAXED);
+    if (tid1 == tid0 && st != 0xDDDDDDDDu)
+        return 0;
+    __atomic_add_fetch(&g_rcu_sw.bad_node, 1, __ATOMIC_RELAXED);
+    return 1;
+}
+#endif
+
+/* DDR-1200 §5 (C1.4 P5b): expire timed waits from the timer tick, with no
+ * g_sched_lock. The tick runs with IF clear, so the walk is one read section;
+ * every tcb that was on the ring is freed only after a grace period (D5), so a
+ * node the walk stands on stays valid. The walk starts at idle0->next and ends
+ * at idle0: idle0 is static and never unlinked (DDR-1201), while
+ * current_thread can be a ZOMBIE already unlinked (§5.3). It reads only state,
+ * block_deadline and next; a candidate is acted on as the walk reaches it, with
+ * no per-sweep cap (§5 step 3). DDR-1201's membership pass is gone (Amendment
+ * 2 point 5): the walk no longer starts at current_thread. */
+static void sched_timed_sweep(void) {
+    uint64_t _rf = rcu_read_lock();
+#if RCU_TORTURE
+    uint64_t _c0 = rcu_t_tsc();
+    uint64_t _acts = 0, _len = 0;
+#endif
+    struct tcb *_t = rcu_dereference(idle0.next);
+#if ZANCHOR_TEST
+    /* DDR-1201 sec.5: this tick landed on the victim while it is current
+     * here and already off the ring (g_za_unlinked is stored under
+     * g_sched_lock by the unlink; read here with acquire, no lock). */
+    unsigned _zn = 0;
+    if (current_thread == __atomic_load_n(&g_za_victim, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&g_za_unlinked, __ATOMIC_ACQUIRE))
+        __atomic_add_fetch(&g_za_hits, 1u, __ATOMIC_RELAXED);
+#endif
+#if OPEN2_HUNT
+    /* DDR-1096 HUNT HARNESS -- debug-only, never in the shipped kernel.
+     *
+     * (Written before DDR-1200 P5b, when this walk held g_sched_lock; the
+     * text below describes the walk of that time.)
+     *
+     * This walk is one of THREE ring readers that hold no cross-CPU lock
+     * (irq_save() masks IF locally and excludes nothing on another CPU),
+     * while sched_destroy() and reaper_thread() splice nodes out of the
+     * same ring. DDR-1001 named exactly this shape at sys_wait4 and fixed
+     * it by moving that walk under g_sched_lock; this site never got the
+     * same treatment, and it is reached from the timer ISR with IF clear,
+     * where nothing can preempt an escaped walk.
+     *
+     * The harness does TWO things and NEITHER changes product logic:
+     *   (a) a bounded pause per node, widening the window in which another
+     *       CPU can unlink+free the node this walk is standing on;
+     *   (b) a bound + poison test, so an escaped walk NAMES itself instead
+     *       of wedging the CPU silently for the rest of the boot.
+     *   (c) DDR-1097: a tid re-check across the pause, because (b) is blind
+     *       to the path this harness exists to hunt -- see below.
+     * (b) and (c) are instruments, not fixes: they report and break. */
+    unsigned _hn = 0;
+    /* Bounded like ap_freeze_probe's DUMP_SHOTS: an escaped walk recurs on
+     * every tick on every CPU, and the UART is ~87 us/byte -- unbounded
+     * printing would stall the boot it is measuring (DDR-941). */
+    static unsigned _hshots;
+    /* DDR-1097 sec.4: printing is capped at 8, counting is not. A count with
+     * no denominator is not a measurement (NON-NEGOTIABLE 17), and past the
+     * 8th line this total is a LOWER BOUND -- labelled as one, not hidden. */
+    static unsigned _hrecyc;
+#endif
+    while (_t != &idle0) {
+#if ZANCHOR_TEST
+        /* An instrument, not a fix: a sweep that has not come back to
+         * its start after ZANCHOR_RING_MAX nodes is counted and left.
+         * 0 disables the bound, to show the unbounded loop itself. */
+        if (ZANCHOR_RING_MAX && ++_zn > ZANCHOR_RING_MAX) {
+            __atomic_add_fetch(&g_za_escaped, 1u, __ATOMIC_RELAXED);
+            break;
+        }
+#endif
+#if OPEN2_HUNT
+        /* KHEAP_DEBUG memsets freed objects to POISON_FREE (0xDD), so a
+         * node freed under us reads 0xDDDD... in every field. Test BEFORE
+         * dereferencing ->next, which is the load that would fault. */
+        if (((uintptr_t)_t & 0xFFFFull) == 0xDDDDull
+            || _t->state == 0xDDDDDDDDu
+            || ++_hn > OPEN2_RING_MAX) {
+            if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
+                break;
+            uint64_t _lf = console_line_lock();
+            kputs("[ringwalk] ESCAPED site=sched_tick n=");
+            kputdec(_hn);
+            kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
+            kputs(" state=");  kputhex((uint64_t)_t->state);
+            kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
+            kputs("\r\n");
+            console_line_unlock(_lf);
+            break;
+        }
+#endif
+#if RCU_TORTURE
+        _len++;
+        if (__atomic_load_n(&g_rcu_rf_on, __ATOMIC_RELAXED) && rcu_t_rf_check(_t))
+            break;                         /* RF: the node is gone; stop here */
+#endif
+        /* §5.1 point 2: state with acquire first; the deadline only after
+         * seeing BLOCKED, so it is this wait's deadline, never an older one. */
+        if (__atomic_load_n(&_t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED) {
+            uint64_t _d = __atomic_load_n(&_t->block_deadline, __ATOMIC_RELAXED);
+            if (_d != 0 && g_ticks >= _d) {
+                int _a = sched_timed_act(_t, _d);
+#if RCU_TORTURE
+                _acts += (uint64_t)_a;
+#else
+                (void)_a;
+#endif
+            }
+        }
+        _t = rcu_dereference(_t->next);
+#if OPEN2_HUNT
+        /* DDR-1097 -- THE ARM THE POISON TEST CANNOT BE.
+         *
+         * Across this pause the walk HOLDS a pointer it has not yet
+         * dereferenced, which is exactly the window the hypothesis is
+         * about. If another CPU unlinks and frees this node and kmalloc
+         * hands the object straight back to sched_create_state, then the
+         * address is a LIVE heap object and ->state is a LEGAL value, so
+         * both poison arms above are false BY CONSTRUCTION and the walk
+         * follows a valid ->next to the wrong ring position -- a loop,
+         * not a fault, which is what OPEN-2's signature looks like.
+         *
+         * tid is the identity token, and pid would NOT have worked:
+         * every kernel thread keeps pid == 0 (sched.c:1102) and the ring
+         * is mostly kernel threads. tid has EXACTLY ONE writer
+         * (sched.c:1053, t->tid = next_tid++) from a monotonic static,
+         * so it is assigned once and unique for the life of the boot:
+         * two values from one address mean the object was reissued.
+         * A freed-and-still-poisoned node reads 0xDDDDDDDD and fires
+         * here too -- both values print so the reader need not infer
+         * which case it was.
+         *
+         * DELIBERATELY NOT also latching ->next: the ring legitimately
+         * relinks under an unlocked reader on every create/destroy, and
+         * a relink that leaves this node IN the ring is harmless, so
+         * that arm would fire on ordinary churn and drown this one.
+         *
+         * A hit is NOT a wedge and NOT OPEN-2 reproducing -- it is
+         * evidence the precondition occurred (DDR-1097 sec.4). */
+        uint32_t _tid0 = _t->tid;
+        for (volatile unsigned _d = 0; _d < OPEN2_HUNT; _d++)
+            __asm__ __volatile__("pause");
+        uint32_t _tid1 = _t->tid;
+        if (OPEN2_RECYCLE_HIT(_tid0, _tid1)) {
+            unsigned _tot = __atomic_add_fetch(&_hrecyc, 1u, __ATOMIC_RELAXED);
+            if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
+                break;
+            uint64_t _lf = console_line_lock();
+            kputs("[ringwalk] RECYCLED site=sched_tick n=");
+            kputdec(_hn);
+            kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
+            kputs(" tid0=");   kputhex((uint64_t)_tid0);
+            kputs(" tid1=");   kputhex((uint64_t)_tid1);
+            kputs(" state=");  kputhex((uint64_t)_t->state);
+            kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
+            kputs(" total=");  kputdec(_tot);
+            kputs("\r\n");
+            console_line_unlock(_lf);
+            break;
+        }
+#endif
+    }
+    rcu_read_unlock(_rf);
+#if RCU_TORTURE
+    __atomic_add_fetch(&g_rcu_sw.sweeps, 1, __ATOMIC_RELAXED);
+    rcu_t_max(&g_rcu_sw.acts_max, _acts);
+    rcu_t_max(&g_rcu_sw.ring_len_max, _len);
+    __atomic_store_n(&g_rcu_sw.ring_len_last, _len, __ATOMIC_RELAXED);
+    rcu_t_max(&g_rcu_sw.sweep_max_tsc, rcu_t_tsc() - _c0);
+#endif
+}
+
 void sched_tick(void) {
     struct percpu *pc = this_cpu();
     if (pc)
@@ -2272,167 +2662,16 @@ void sched_tick(void) {
         return;                    /* scheduler not up yet */
     current_thread->run_ticks++;
 
-    /* DDR-955: expire blocked threads whose deadline has passed */
-    {
-        struct tcb *_wake[32];
-        int _nwake = 0;
-        uint64_t _fl2 = irq_save();
-        /* DDR-1201 (#115): the sweep ends when it comes back to the node it
-         * started on, so that node must be ON the ring. current_thread is not
-         * always: a ZOMBIE is still current here while its last switch waits in
-         * switch_wait_offcpu_sched (IF set, so this tick can land), and a
-         * collector on another CPU (reaper_thread, or wait4's sched_destroy)
-         * may already have unlinked it. A walk from an unlinked node follows
-         * its stale ->next into the ring and never meets it again: an endless
-         * loop in the timer ISR, IF clear, holding g_sched_lock.
-         *
-         * idle0 is never unlinked (it is static, never a ZOMBIE, and no caller
-         * passes it to sched_destroy), so one pass from idle0 under the lock
-         * says whether current_thread is on the ring. If it is, the sweep
-         * starts there exactly as before: which waiters it takes, and in what
-         * order, is unchanged. If it is not, the sweep starts at idle0. */
-        struct tcb *_a = &idle0;
-        for (struct tcb *_p = idle0.next; _p != &idle0; _p = _p->next) {
-            if (_p == current_thread) {
-                _a = _p;
-                break;
-            }
-        }
-        struct tcb *_t = _a;
-#if ZANCHOR_TEST
-        /* DDR-1201 sec.5: this tick landed on the victim while it is current
-         * here and already off the ring (both read under g_sched_lock). */
-        unsigned _zn = 0;
-        if (current_thread == __atomic_load_n(&g_za_victim, __ATOMIC_ACQUIRE) &&
-            __atomic_load_n(&g_za_unlinked, __ATOMIC_ACQUIRE))
-            __atomic_add_fetch(&g_za_hits, 1u, __ATOMIC_RELAXED);
+    /* DDR-1200 §5 (C1.4 P5b): expire timed waits, with no g_sched_lock. */
+#if RCU_TORTURE
+    uint32_t _rc = rcu_t_cpu();
+    g_rcu_in_tick[_rc] = 1;                /* RD: count g_sched_lock taken in here */
 #endif
-#if OPEN2_HUNT
-        /* DDR-1096 HUNT HARNESS -- debug-only, never in the shipped kernel.
-         *
-         * This walk is one of THREE ring readers that hold no cross-CPU lock
-         * (irq_save() masks IF locally and excludes nothing on another CPU),
-         * while sched_destroy() and reaper_thread() splice nodes out of the
-         * same ring. DDR-1001 named exactly this shape at sys_wait4 and fixed
-         * it by moving that walk under g_sched_lock; this site never got the
-         * same treatment, and it is reached from the timer ISR with IF clear,
-         * where nothing can preempt an escaped walk.
-         *
-         * The harness does TWO things and NEITHER changes product logic:
-         *   (a) a bounded pause per node, widening the window in which another
-         *       CPU can unlink+free the node this walk is standing on;
-         *   (b) a bound + poison test, so an escaped walk NAMES itself instead
-         *       of wedging the CPU silently for the rest of the boot.
-         *   (c) DDR-1097: a tid re-check across the pause, because (b) is blind
-         *       to the path this harness exists to hunt -- see below.
-         * (b) and (c) are instruments, not fixes: they report and break. */
-        unsigned _hn = 0;
-        /* Bounded like ap_freeze_probe's DUMP_SHOTS: an escaped walk recurs on
-         * every tick on every CPU, and the UART is ~87 us/byte -- unbounded
-         * printing would stall the boot it is measuring (DDR-941). */
-        static unsigned _hshots;
-        /* DDR-1097 sec.4: printing is capped at 8, counting is not. A count with
-         * no denominator is not a measurement (NON-NEGOTIABLE 17), and past the
-         * 8th line this total is a LOWER BOUND -- labelled as one, not hidden. */
-        static unsigned _hrecyc;
+    sched_timed_sweep();
+#if RCU_TORTURE
+    g_rcu_in_tick[_rc] = 0;
 #endif
-        if (_t) {
-            do {
-#if ZANCHOR_TEST
-                /* An instrument, not a fix: a sweep that has not come back to
-                 * its start after ZANCHOR_RING_MAX nodes is counted and left.
-                 * 0 disables the bound, to show the unbounded loop itself. */
-                if (ZANCHOR_RING_MAX && ++_zn > ZANCHOR_RING_MAX) {
-                    __atomic_add_fetch(&g_za_escaped, 1u, __ATOMIC_RELAXED);
-                    break;
-                }
-#endif
-#if OPEN2_HUNT
-                /* KHEAP_DEBUG memsets freed objects to POISON_FREE (0xDD), so a
-                 * node freed under us reads 0xDDDD... in every field. Test BEFORE
-                 * dereferencing ->next, which is the load that would fault. */
-                if (((uintptr_t)_t & 0xFFFFull) == 0xDDDDull
-                    || _t->state == 0xDDDDDDDDu
-                    || ++_hn > OPEN2_RING_MAX) {
-                    if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
-                        break;
-                    uint64_t _lf = console_line_lock();
-                    kputs("[ringwalk] ESCAPED site=sched_tick n=");
-                    kputdec(_hn);
-                    kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
-                    kputs(" state=");  kputhex((uint64_t)_t->state);
-                    kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
-                    kputs("\r\n");
-                    console_line_unlock(_lf);
-                    break;
-                }
-#endif
-                if (_t->state == THREAD_BLOCKED
-                    && _t->block_deadline != 0
-                    && g_ticks >= _t->block_deadline
-                    && _nwake < 32) {
-                    _t->wake_timed_out = 1;
-                    _t->block_deadline = 0;
-                    _wake[_nwake++] = _t;
-                }
-                _t = _t->next;
-#if OPEN2_HUNT
-                /* DDR-1097 -- THE ARM THE POISON TEST CANNOT BE.
-                 *
-                 * Across this pause the walk HOLDS a pointer it has not yet
-                 * dereferenced, which is exactly the window the hypothesis is
-                 * about. If another CPU unlinks and frees this node and kmalloc
-                 * hands the object straight back to sched_create_state, then the
-                 * address is a LIVE heap object and ->state is a LEGAL value, so
-                 * both poison arms above are false BY CONSTRUCTION and the walk
-                 * follows a valid ->next to the wrong ring position -- a loop,
-                 * not a fault, which is what OPEN-2's signature looks like.
-                 *
-                 * tid is the identity token, and pid would NOT have worked:
-                 * every kernel thread keeps pid == 0 (sched.c:1102) and the ring
-                 * is mostly kernel threads. tid has EXACTLY ONE writer
-                 * (sched.c:1053, t->tid = next_tid++) from a monotonic static,
-                 * so it is assigned once and unique for the life of the boot:
-                 * two values from one address mean the object was reissued.
-                 * A freed-and-still-poisoned node reads 0xDDDDDDDD and fires
-                 * here too -- both values print so the reader need not infer
-                 * which case it was.
-                 *
-                 * DELIBERATELY NOT also latching ->next: the ring legitimately
-                 * relinks under an unlocked reader on every create/destroy, and
-                 * a relink that leaves this node IN the ring is harmless, so
-                 * that arm would fire on ordinary churn and drown this one.
-                 *
-                 * A hit is NOT a wedge and NOT OPEN-2 reproducing -- it is
-                 * evidence the precondition occurred (DDR-1097 sec.4). */
-                uint32_t _tid0 = _t->tid;
-                for (volatile unsigned _d = 0; _d < OPEN2_HUNT; _d++)
-                    __asm__ __volatile__("pause");
-                uint32_t _tid1 = _t->tid;
-                if (OPEN2_RECYCLE_HIT(_tid0, _tid1)) {
-                    unsigned _tot = __atomic_add_fetch(&_hrecyc, 1u, __ATOMIC_RELAXED);
-                    if (__atomic_fetch_add(&_hshots, 1u, __ATOMIC_RELAXED) >= 8u)
-                        break;
-                    uint64_t _lf = console_line_lock();
-                    kputs("[ringwalk] RECYCLED site=sched_tick n=");
-                    kputdec(_hn);
-                    kputs(" node=");   kputhex((uint64_t)(uintptr_t)_t);
-                    kputs(" tid0=");   kputhex((uint64_t)_tid0);
-                    kputs(" tid1=");   kputhex((uint64_t)_tid1);
-                    kputs(" state=");  kputhex((uint64_t)_t->state);
-                    kputs(" cur=");    kputhex((uint64_t)(uintptr_t)current_thread);
-                    kputs(" total=");  kputdec(_tot);
-                    kputs("\r\n");
-                    console_line_unlock(_lf);
-                    break;
-                }
-#endif
-            } while (_t != _a);
-        }
-        irq_restore(_fl2);
-        for (int _i = 0; _i < _nwake; _i++)
-            sched_unblock(_wake[_i]);
-    }   /* DDR-735: sampled CPU time (this CPU owns it) */
+    /* DDR-735: sampled CPU time (this CPU owns it) */
     sched_dbg_charge(current_thread, 1);
     {
         uint64_t d = (g_dbg_floor > g_vr_last_tick) ? (g_dbg_floor - g_vr_last_tick) : 0;
@@ -2636,7 +2875,7 @@ void sched_block(void) {
         return;
     sched_charge_elapsed(current_thread);
     current_thread->dbg_yields++;
-    current_thread->state = THREAD_BLOCKED;
+    __atomic_store_n(&current_thread->state, THREAD_BLOCKED, __ATOMIC_RELEASE);
     schedule();                    /* switch away; returns when unblocked + run */
 }
 
@@ -2652,7 +2891,7 @@ void sched_block_on(spinlock_t *lk) {
         spin_unlock(lk);
         return;
     }
-    current_thread->state = THREAD_BLOCKED;
+    __atomic_store_n(&current_thread->state, THREAD_BLOCKED, __ATOMIC_RELEASE);
     spin_unlock(lk);
 #if OPEN2_FORCE_DD
     /* DDR-1151 MUTANT: widen the block-then-wake gap so a waker on another
@@ -2668,17 +2907,40 @@ void sched_block_on(spinlock_t *lk) {
 /* DDR-955: sched_block_on with a deadline.
  * IDENTICAL locking contract: called WITH lk held, returns WITH lk held.
  * Returns 0 on normal wake, -ETIMEDOUT if the timer expired first. */
+/* DDR-1200 Amendment 2 point 4: a lock passed here has static storage, so the
+ * tick sweep can load it from block_lk at any time and take it (§5.2 point 2).
+ * .data and .bss are [__rodata_end, __bss_end) (kernel/kernel.ld). A report,
+ * not a refusal: the wait itself goes ahead unchanged. */
+extern char __rodata_end[], __bss_end[];
+static void sched_check_static_lock(const spinlock_t *lk) {
+    uintptr_t a = (uintptr_t)lk;
+    if (a < (uintptr_t)__rodata_end || a >= (uintptr_t)__bss_end)
+        rcu_fail_once(8u, "timed wait on a non-static lock");
+}
+
+/* DDR-1200 §5.1-§5.2 (C1.4 P5b): the wait is published for the lockless tick
+ * sweep. block_lk, the deadline and wake_timed_out are stored first, then
+ * BLOCKED with release, all under lk: a sweep that sees BLOCKED with acquire
+ * also sees this wait's deadline and lock. The sweep times the wait out only
+ * under lk and only if it is still this wait (sched_timed_act). */
 int sched_block_timeout(spinlock_t *lk, volatile int *done,
                         uint64_t timeout_ticks)
 {
-    if (!current_thread) {
+    struct tcb *self = current_thread;
+    if (!self) {
         spin_unlock(lk);
         return -ETIMEDOUT;
     }
     if (*done) return 0;
-    current_thread->wake_timed_out = 0;
-    current_thread->block_deadline = g_ticks + timeout_ticks;
-    current_thread->state = THREAD_BLOCKED;
+    /* Amendment 2 point 3: a zero timeout has already expired. Deadlines of
+     * one thread then strictly increase, which §5.2 point 4 relies on. */
+    if (timeout_ticks == 0)
+        return -ETIMEDOUT;
+    sched_check_static_lock(lk);
+    __atomic_store_n(&self->wake_timed_out, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&self->block_deadline, g_ticks + timeout_ticks, __ATOMIC_RELAXED);
+    __atomic_store_n(&self->block_lk, lk, __ATOMIC_RELAXED);
+    __atomic_store_n(&self->state, THREAD_BLOCKED, __ATOMIC_RELEASE);
     spin_unlock(lk);
 #if OPEN2_FORCE_DD
     /* DDR-1151 MUTANT: widen the block-then-wake gap so a waker on another
@@ -2689,8 +2951,12 @@ int sched_block_timeout(spinlock_t *lk, volatile int *done,
 #endif
     schedule();
     spin_lock(lk);
-    current_thread->block_deadline = 0;
-    return current_thread->wake_timed_out ? -ETIMEDOUT : 0;
+    __atomic_store_n(&self->block_lk, (spinlock_t *)0, __ATOMIC_RELAXED);
+    __atomic_store_n(&self->block_deadline, 0, __ATOMIC_RELAXED);
+    /* §5.2 point 5: a wake that set *done wins over a timeout that raced it. */
+    if (*done)
+        return 0;
+    return __atomic_load_n(&self->wake_timed_out, __ATOMIC_RELAXED) ? -ETIMEDOUT : 0;
 }
 
 void sched_unblock(struct tcb *t) {
@@ -2908,7 +3174,7 @@ static void sched_exit_common(int status, int group) {
             sig_raise(par, SIGCHLD, (int32_t)leader->pid, CLD_EXITED,
                       mm ? mm->group_status : status);
     }
-    current_thread->state = THREAD_ZOMBIE;      /* NOT pickable; on_cpu stays set */
+    __atomic_store_n(&current_thread->state, THREAD_ZOMBIE, __ATOMIC_RELEASE);   /* NOT pickable; on_cpu stays set */
     /* DDR-1181 §4.7 R11: the process is reapable only from here, under the lock
      * the waiters scan under: after every per-process cleanup above and after
      * the leader lookup, so a reap cannot overtake either. */
@@ -3095,31 +3361,39 @@ static int pid_alive(uint32_t pid) {
 /* Low-priority kernel thread: reap orphaned zombies (exited user procs whose
  * parent is gone and which no wait4 is collecting), bounding the zombie leak. A
  * child a wait4 has claimed (reap_claimed) or with a living parent is left for
- * its parent's wait4. Reaps at most one per pass under interrupts-off, then
- * yields. */
+ * its parent's wait4. Each victim is found and unlinked in its own pass under
+ * interrupts-off, as before.
+ *
+ * DDR-1200 D5 (Amendment 3): a pass takes up to REAP_BATCH victims, then
+ * waits ONE grace period for all of them (sched_reap_deferred), then yields.
+ * With REAP_BATCH 1 every zombie waits a grace period of its own. */
+#define REAP_BATCH 64
 static void reaper_thread(void *arg) {
     (void)arg;
     for (;;) {
-        uint64_t fl = irq_save();
-        struct tcb *victim = 0;
-        struct tcb *t = current_thread->next;
-        while (t != current_thread) {
-            if (t->state == THREAD_ZOMBIE && !t->reap_claimed && !pid_alive(t->parent_pid)) {
-                victim = t;
-                break;
+        for (int n = 0; n < REAP_BATCH; n++) {
+            uint64_t fl = irq_save();
+            struct tcb *victim = 0;
+            struct tcb *t = current_thread->next;
+            while (t != current_thread) {
+                if (t->state == THREAD_ZOMBIE && !t->reap_claimed && !pid_alive(t->parent_pid)) {
+                    victim = t;
+                    break;
+                }
+                t = t->next;
             }
-            t = t->next;
+            struct mm *vmm = 0;
+            if (victim) {
+                vmm = victim->mm;              /* DDR-1181: the AS goes with the mm */
+                sched_ring_unlink(victim);     /* claim + unlink atomically under the lock */
+            }
+            irq_restore(fl);
+            if (!victim)
+                break;
+            sched_free_tcb(victim);            /* free outside the lock (cap-2a D2) */
+            mm_put(vmm);                       /* last ref destroys the page tables */
         }
-        struct mm *vmm = 0;
-        if (victim) {
-            vmm = victim->mm;              /* DDR-1181: the AS goes with the mm */
-            sched_ring_unlink(victim);     /* claim + unlink atomically under the lock */
-        }
-        irq_restore(fl);
-        if (victim) {                      /* free outside the lock (cap-2a D2) */
-            sched_free_tcb(victim);
-            mm_put(vmm);                   /* last ref destroys the page tables */
-        }
+        sched_reap_deferred();                 /* DDR-1200 D5: one grace period, then free */
         yield();
     }
 }
