@@ -141,3 +141,29 @@ the arm is written.
   hardware**; TCG time is not wall time, so the arms assert orderings and wide
   bounds only.
 - This record does not close OPEN-1/2/12/13 or U1-U3.
+
+## Amendment 1 (2026-11-15): arm A's mutant had nothing to remove
+
+**Finding (before any P1 code, by reading `dev/phase1` at `2f54a7e`).**
+- Arm A's mutant C1 is "read the TSC without the per-CPU offset". The tree has no per-CPU TSC offset: no `IA32_TSC_ADJUST` write, no offset field in `struct percpu`, and no skew measurement at AP bring-up.
+- Under QEMU TCG every vCPU's `rdtsc` comes from one virtual clock, so the TSCs are already in step.
+- C1 therefore names a change with nothing to change. Arm A, guarded only by C1, could never be shown red: a gate that proves nothing (CLAUDE.md rule 3).
+
+**Decisions.**
+
+- **A1-1. No per-CPU offset in P1.** P1 reads `rdtsc` directly.
+  - At AP bring-up, each AP measures its skew against the BSP once. The BSP stores its TSC to a shared word; the AP reads that word, then its own TSC. This is repeated 8 times and the minimum is kept.
+  - The result is printed as `[time] tsc skew cpu=<n> ns=<v>`.
+  - It is a measurement, not a correction. A per-CPU offset is added only if a run shows skew above 1 µs, with its own amendment.
+  - Arm A's cross-CPU directions stay as written. They catch any future offset bug.
+- **A1-2. Arm A's mutant is replaced.** The new C1: the vDSO writer advances `ns_base` by a fixed 10 ms per PIT tick, instead of recomputing it from the TSC at each update. `tsc_base` is still refreshed at each update.
+  - This mixes two time sources. A reader between ticks interpolates with the TSC. When a tick arrives late (more than 10 ms of TSC time since the last update, which under TCG is routine), the reader has already seen more than `ns_base + 10 ms`. After the update it reads about `ns_base + 10 ms`, so the clock steps backwards.
+  - The correct writer sets `ns_base` from the TSC: `ns_base += (tsc_now - tsc_base) * mult >> shift`, then `tsc_base = tsc_now`. The clock is then monotonic by construction.
+  - C1 fails arm A's same-CPU check whenever any tick in the 10 000-read window is late. That is probabilistic, so P1 records how many backward steps each C1 run saw. If a CI run shows C1 green, C1 is recorded as not gated and arm A is redesigned. It is not merged on a guess.
+- **A1-3. The seqlock read is stated not gated.** A mutant that drops the reader's `seq` retry (call it C1b) would need a reader to land inside the writer's few-instruction window. P1 does not claim to gate it. It is listed so the gap is visible.
+- **A1-4. Syscall numbers.** 120 is `SYS_CLOCK_GETTIME (clockid, struct timespec *)` and 121 is `SYS_NANOSLEEP (const struct timespec *, struct timespec *)`. Both are free on `dev/phase1` at `2f54a7e`. The vDSO path is the fast path; the syscall is the fallback and the reference.
+- **A1-5. Priority inheritance and tickless idle.** Two notes carried from the review of the withdrawn DDR-1204 (#127):
+  - P3's kmutex inheritance must move a boosted `SCHED_OTHER` owner onto the RT queue at the inherited priority, and back when the boost ends. Otherwise the owner can wait behind a lower RT thread and never release the lock.
+  - P6's tickless idle must program a wake for the K2 throttle's budget replenishment, so a throttled RT thread on an idle CPU runs again.
+
+Everything in this amendment is design; nothing is built. QEMU only, not verified on real hardware.
