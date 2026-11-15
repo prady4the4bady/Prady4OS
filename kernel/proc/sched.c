@@ -2498,6 +2498,7 @@ static void sched_timed_sweep(void) {
     uint64_t _acts = 0, _len = 0;
 #endif
     struct tcb *_t = rcu_dereference(idle0.next);
+    uint32_t _u8 = 0;                      /* MUTANT U8: per-sweep cap of 32 */
 #if ZANCHOR_TEST
     /* DDR-1201 sec.5: this tick landed on the victim while it is current
      * here and already off the ring (g_za_unlinked is stored under
@@ -2578,8 +2579,9 @@ static void sched_timed_sweep(void) {
          * seeing BLOCKED, so it is this wait's deadline, never an older one. */
         if (__atomic_load_n(&_t->state, __ATOMIC_ACQUIRE) == THREAD_BLOCKED) {
             uint64_t _d = __atomic_load_n(&_t->block_deadline, __ATOMIC_RELAXED);
-            if (_d != 0 && g_ticks >= _d) {
+            if (_d != 0 && g_ticks >= _d && _u8 < 32) {
                 int _a = sched_timed_act(_t, _d);
+                _u8 += (uint32_t)_a;
 #if RCU_TORTURE
                 _acts += (uint64_t)_a;
 #else
