@@ -90,8 +90,8 @@ void vdso_time_update(void) {
     uint64_t delta = now - vdso_data->tsc_base;
     vdso_data->seq++;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    vdso_data->ns_base  = vdso_data->ns_base +
-        (uint64_t)(((unsigned __int128)delta * vdso_data->mult) >> vdso_data->shift);
+    (void)delta;
+    vdso_data->ns_base  = vdso_data->ns_base + 10000000ull;   /* MUTANT C1 */
     vdso_data->tsc_base = now;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     vdso_data->seq++;
