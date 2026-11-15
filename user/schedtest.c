@@ -30,6 +30,7 @@
 #define EINTR          4
 #define SIGKILL        9
 #define SIGUSR1        10
+#define SIGTERM        15
 #define SA_SIGINFO     0x00000004ul
 #define CLK_REALTIME   0
 #define CLK_MONOTONIC  1
@@ -306,9 +307,10 @@ static long b2_one(struct b2_state *b, long sig) {
     struct ts d = { 0, (long)(200 * MS) };
     nsi(SYS_NANOSLEEP, (long)&d, 0, 0);
     uint64_t t0 = mono();
-    nsi(SYS_KILL, kid, sig, 0);
+    long kill_rc = nsi(SYS_KILL, kid, sig, 0);
     long st = 0;
-    nsi(SYS_WAIT4, kid, (long)&st, 0);
+    long reaped = nsi(SYS_WAIT4, kid, (long)&st, 0);
+    if (kill_rc != 0 || reaped != kid) return -1;   /* nothing was signalled */
     return (long)((mono() - t0) / MS);
 }
 
@@ -325,6 +327,11 @@ static void arm_b2(void) {
     say("[sched] B2 usr1_ms=%d eintr=%d rem_ok=%d kill_ms=%d\n",
         usr_ms, eintr, rem_ok, kill_ms);
     say("PRADYOS_SCHED_B2 eintr_ok=%d killed_ok=%d\n", eintr_ok, killed_ok);
+    /* B3 (DDR-1188 A2-3): SIGTERM with no handler ends the sleep, and so the
+     * process, through default termination. */
+    long term_ms = b2_one(b, SIGTERM);
+    say("[sched] B3 term_ms=%d\n", term_ms);
+    say("PRADYOS_SCHED_B3 term_ok=%d\n", (long)(term_ms >= 0 && term_ms < 2000));
 }
 
 /* ---- arm B ---- */

@@ -206,5 +206,13 @@ Two findings on the P1 code (#130, head `b3a319d`), checked against the code and
   - Without the fence, `rdtsc` may execute before the `seq` and base loads that precede it. The sample would then not belong to the base it is combined with.
   - P1's clamp of a negative delta to 0 already kept the result at or above `ns_base`. The fence makes the reading's order explicit instead of relying on that clamp.
   - This is not gated separately (as with C1b, A1-3): a mutant would need a reordering that TCG does not produce.
+- **A2-3. Default-terminate signals end the sleep too** (CodeRabbit on #130, second review).
+  - An unmasked `SIGTERM` or `SIGPIPE` with no handler is woken by A2-1's kick. But `signal_interruptible` (which requires a handler) and `signal_kill_pending` (`SIGKILL` only) both miss it, so the sleeper blocked again, and default termination waited out the whole sleep.
+  - **The fix:** a new predicate, `signal_fatal_pending(t)`. It covers an unmasked pending `SIGTERM` or `SIGPIPE` with no handler, the set `signal_deliver` ends a thread on (DDR-805). The sleep checks it alongside the other two and returns `-EINTR`, and `signal_deliver` then ends the thread on the way out.
+  - **Arm B3:** a third forked 5 s sleeper, with no handler, gets `SIGTERM` 200 ms after it is ready. It must be reaped within 2 s. Sentinel: `PRADYOS_SCHED_B3 term_ok=1`.
+    - **Mutant C2c:** drop `signal_fatal_pending` from the check. The sleeper then runs about 5 s, so arm B3 is red.
+    - **Vacuity:** on `22c3f09` the arm is red.
+  - B2 and B3 also treat a failed `kill` or a `wait4` that does not reap the child as a failure (CodeRabbit). Otherwise a child that had already exited would read as a fast kill.
+  - **Not changed here:** `FUTEX_WAIT` (`kernel/proc/futex.c`) has the same gap for default-terminate signals. It predates this PR and is recorded as a follow-up, so the futex path is not widened without its own gate.
 
 QEMU only, not verified on real hardware.
