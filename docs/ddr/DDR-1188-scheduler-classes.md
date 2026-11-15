@@ -152,10 +152,19 @@ the arm is written.
 **Decisions.**
 
 - **A1-1. No per-CPU offset in P1.** P1 reads `rdtsc` directly.
-  - At AP bring-up, each AP measures its skew against the BSP once. The BSP stores its TSC to a shared word; the AP reads that word, then its own TSC. This is repeated 8 times and the minimum is kept.
-  - The result is printed as `[time] tsc skew cpu=<n> ns=<v>`.
-  - It is a measurement, not a correction. A per-CPU offset is added only if a run shows skew above 1 µs, with its own amendment.
-  - Arm A's cross-CPU directions stay as written. They catch any future offset bug.
+  - At AP bring-up, each AP's skew against the BSP is measured once, by a round trip (CodeRabbit on #129: a one-way transfer folds the latency into the skew).
+    - The BSP reads its TSC (`t0`) and publishes a ping.
+    - The AP answers with its own TSC (`ta`).
+    - The BSP reads its TSC again when the answer arrives (`t1`).
+    - This is repeated 8 times, and the sample with the smallest round trip `t1 - t0` is kept.
+    - Skew is `ta - (t0 + t1) / 2`, signed, with a bound of ±`(t1 - t0) / 2`.
+  - The result is printed as `[time] tsc skew cpu=<n> cyc=<skew> rt=<round trip>`, in TSC cycles, because the TSC is not yet calibrated when the APs come up.
+  - It is a measurement, not a correction, and it does not decide anything by itself.
+- **A1-1b. The skew P1 accepts is the skew arm A tolerates.** P1 sets no threshold of its own (an earlier draft said 1 µs; CodeRabbit on #129 showed that a skew below 1 µs can still make arm A's cross-CPU read go backwards).
+  - Arm A's cross-CPU directions are the acceptance test.
+  - If arm A fails on a machine and that run's measured skew explains the backward step, the fix is a per-CPU offset, under its own amendment. The offset would be applied through `IA32_TSC_ADJUST`, or through a per-CPU offset read with `RDTSCP`'s `TSC_AUX`.
+  - Until that fix lands, P1 is recorded as **not verified** on that machine.
+  - Under QEMU TCG the vCPU TSCs come from one clock, so this case is not expected in CI. Every CI run prints its measured skew, so the claim is checked on each run, not assumed.
 - **A1-2. Arm A's mutant is replaced.** The new C1: the vDSO writer advances `ns_base` by a fixed 10 ms per PIT tick, instead of recomputing it from the TSC at each update. `tsc_base` is still refreshed at each update.
   - This mixes two time sources. A reader between ticks interpolates with the TSC. When a tick arrives late (more than 10 ms of TSC time since the last update, which under TCG is routine), the reader has already seen more than `ns_base + 10 ms`. After the update it reads about `ns_base + 10 ms`, so the clock steps backwards.
   - The correct writer sets `ns_base` from the TSC: `ns_base += (tsc_now - tsc_base) * mult >> shift`, then `tsc_base = tsc_now`. The clock is then monotonic by construction.
