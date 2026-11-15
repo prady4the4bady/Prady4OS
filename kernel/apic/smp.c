@@ -208,6 +208,86 @@ unsigned cpu_enable_mce(void) {
     return rep;
 }
 
+/* DDR-1188 Amendment 1 A1-1: TSC skew, measured once per AP by a round trip,
+ * not corrected (A1-1b: arm A is the acceptance test). The AP reads its TSC
+ * (ta0) and posts a request; the BSP, waiting for this AP to come online,
+ * answers with its own TSC (tb); the AP reads its TSC again (ta1) when the
+ * answer arrives. Skew = (ta0 + ta1) / 2 - tb, with a bound of +-(ta1 - ta0) / 2.
+ * 8 round trips; the one with the smallest round trip is kept. Cycles, not ns:
+ * the TSC is not calibrated yet when the APs come up. */
+static volatile uint64_t g_skew_req, g_skew_ack, g_skew_tb;
+/* Ordered TSC reads (RDTSC is not serializing; Intel SDM): an LFENCE before
+ * waits for earlier loads, an LFENCE after keeps later instructions from
+ * starting first. The memory clobber stops the compiler moving the handshake's
+ * loads and stores across the read. */
+static inline uint64_t smp_rdtsc_then_fence(void) {          /* ta0 */
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc; lfence" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+static inline uint64_t smp_fence_then_rdtsc(void) {          /* ta1 */
+    uint32_t lo, hi;
+    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+static inline uint64_t smp_fenced_rdtsc(void) {              /* tb */
+    uint32_t lo, hi;
+    __asm__ volatile("lfence; rdtsc; lfence" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+/* BSP side, called from its wait-for-online loop: answer a pending request. */
+static inline void smp_skew_answer(void) {
+    uint64_t r = __atomic_load_n(&g_skew_req, __ATOMIC_ACQUIRE);
+    if (r != __atomic_load_n(&g_skew_ack, __ATOMIC_RELAXED)) {
+        __atomic_store_n(&g_skew_tb, smp_fenced_rdtsc(), __ATOMIC_RELAXED);
+        __atomic_store_n(&g_skew_ack, r, __ATOMIC_RELEASE);
+    }
+}
+static void smp_tsc_skew_report(uint32_t idx) {
+    int64_t best_skew = 0;
+    uint64_t best_rt = ~0ull;
+    int got = 0;
+    for (int i = 0; i < 8; i++) {
+        uint64_t k = __atomic_load_n(&g_skew_req, __ATOMIC_RELAXED) + 1;
+        uint64_t ta0 = smp_rdtsc_then_fence();
+        __atomic_store_n(&g_skew_req, k, __ATOMIC_RELEASE);
+        uint32_t spins = 0;
+        while (__atomic_load_n(&g_skew_ack, __ATOMIC_ACQUIRE) != k && spins < 10000000u) {
+            __asm__ volatile("pause");
+            spins++;
+        }
+        uint64_t ta1 = smp_fence_then_rdtsc();
+        if (__atomic_load_n(&g_skew_ack, __ATOMIC_ACQUIRE) != k)
+            break;                              /* the BSP is not answering */
+        uint64_t tb = __atomic_load_n(&g_skew_tb, __ATOMIC_RELAXED);
+        uint64_t rt = ta1 - ta0;
+        if (rt < best_rt) {
+            best_rt = rt;
+            best_skew = (int64_t)(ta0 + rt / 2 - tb);
+        }
+        got++;
+    }
+    kline k; kline_init(&k);
+    kline_s(&k, "[time] tsc skew cpu=");
+    kline_d(&k, idx);
+    if (!got) {
+        kline_s(&k, " unmeasured\r\n");
+        kline_emit(&k);
+        return;
+    }
+    kline_s(&k, " cyc=");
+    if (best_skew < 0) {
+        kline_s(&k, "-");
+        kline_d(&k, (uint64_t)(-best_skew));
+    } else {
+        kline_d(&k, (uint64_t)best_skew);
+    }
+    kline_s(&k, " rt=");
+    kline_d(&k, best_rt);
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
+}
+
 void smp_ap_entry(uint32_t idx);
 void smp_ap_entry(uint32_t idx) {
     /* DDR-SMP-3c-cap-1 D3: leave the 3-entry trampoline GDT for the shared
@@ -259,6 +339,7 @@ void smp_ap_entry(uint32_t idx) {
       kline_d(&k, idx);
       kline_s(&k, tr == (uint16_t)(0x28 + idx * 0x10) ? " tss OK\r\n" : " tss FAIL\r\n");
       kline_emit(&k); }
+    smp_tsc_skew_report(idx);                        /* DDR-1188 A1-1 */
     __atomic_add_fetch(&g_online, 1, __ATOMIC_SEQ_CST);
 
     /* ADR-031 cap-2b: leave the park loop and JOIN THE SCHEDULER. Load this AP's
@@ -400,8 +481,10 @@ void smp_start_aps(void) {
             delay_200us();
         }
         uint64_t deadline = g_ticks + 100;            /* <= 1 s to come online */
-        while (g_online == before && g_ticks < deadline)
+        while (g_online == before && g_ticks < deadline) {
+            smp_skew_answer();                  /* DDR-1188 A1-1 */
             __asm__ volatile("pause");
+        }
         if (g_online == before) {
             kputs("[smp] cpu timed out id=");
             kputdec(id);

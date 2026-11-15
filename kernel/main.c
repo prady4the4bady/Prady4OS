@@ -471,6 +471,7 @@ extern const unsigned char sigsemtest_elf_end[];
 extern const unsigned char shmtest_elf[];             /* DDR-1178: MAP_SHARED anon */
 extern const unsigned char shmtest_elf_end[];
 extern const unsigned char threadtest_elf[], threadtest_elf_end[];   /* DDR-1181 */
+extern const unsigned char schedtest_elf[], schedtest_elf_end[];     /* DDR-1188 P1 */
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -3277,6 +3278,21 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] thread probe FAILED to load\r\n");
                     }
                 }
+                /* DDR-1188 (C1.5 P1): smoke-schedclass. FAT-rooted, not in
+                 * smnt_pid: it touches no files. Opt-in: it pins spinning
+                 * threads to CPU 0 and CPU 1 for several seconds. */
+                if (probe_enabled("schedclass")) {
+                    struct tcb *sc = 0;
+                    uint64_t sclen = (uint64_t)(uintptr_t)schedtest_elf_end -
+                                     (uint64_t)(uintptr_t)schedtest_elf;
+                    if (elf_load((void *)(uintptr_t)schedtest_elf, sclen,
+                                 "SCHEDTEST", &sc) == ELF_OK && sc) {
+                        sched_unblock(sc);
+                        kputs("[user] schedclass probe spawned\r\n");
+                    } else {
+                        kputs("[user] schedclass probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("mprotect")) {
                     struct tcb *mp = 0;
                     uint64_t mplen = (uint64_t)(uintptr_t)mprotecttest_elf_end -
@@ -4165,6 +4181,7 @@ static void fs_test_thread(void *arg) {
 
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
+    vdso_time_init(tsc_hz);                   /* DDR-1188 K7: CLOCK_MONOTONIC on the TSC */
     kputs("NEXUS: TSC ~");
     kputdec(tsc_hz / 1000000);
     kputs(" MHz\r\n");
