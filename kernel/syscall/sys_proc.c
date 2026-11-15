@@ -295,7 +295,7 @@ static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long 
     long ret;
     uint64_t rem = 0;
     uint64_t fl = spin_lock_irqsave(&g_nsleep_lk);
-    __atomic_store_n(&t->fx_lock, &g_nsleep_lk, __ATOMIC_SEQ_CST);
+    /* MUTANT C2b: fx_lock not set; a signal cannot wake the sleep */
     for (;;) {
         uint64_t now = ktime_mono_ns();
         if (now >= deadline) { ret = 0; break; }        /* done, as on Linux */
