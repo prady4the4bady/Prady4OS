@@ -2497,7 +2497,8 @@ static void sched_timed_sweep(void) {
     uint64_t _c0 = rcu_t_tsc();
     uint64_t _acts = 0, _len = 0;
 #endif
-    struct tcb *_t = rcu_dereference(idle0.next);
+    struct tcb *_u9 = current_thread;      /* MUTANT U9: anchored on current_thread */
+    struct tcb *_t = rcu_dereference(_u9->next);
 #if ZANCHOR_TEST
     /* DDR-1201 sec.5: this tick landed on the victim while it is current
      * here and already off the ring (g_za_unlinked is stored under
@@ -2539,7 +2540,7 @@ static void sched_timed_sweep(void) {
      * 8th line this total is a LOWER BOUND -- labelled as one, not hidden. */
     static unsigned _hrecyc;
 #endif
-    while (_t != &idle0) {
+    while (_t != _u9) {
 #if ZANCHOR_TEST
         /* An instrument, not a fix: a sweep that has not come back to
          * its start after ZANCHOR_RING_MAX nodes is counted and left.
