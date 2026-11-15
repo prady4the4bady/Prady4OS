@@ -35,6 +35,7 @@
 #include "uaccess.h"
 #include "kheap.h"
 #include "errno.h"
+#include "cpu_mitigations.h"   /* cpu_wrmsr, MSR_IA32_FS_BASE (DDR-1205) */
 #include <stddef.h>
 
 #define PATH_MAX 256
@@ -153,6 +154,8 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     t->cr3        = new_as;
     t->mm->cr3    = new_as;   /* DDR-1181: cached copy and owner written together */
     signal_exec_reset(t);   /* DDR-1174: old handler VAs mean nothing in the new image */
+    t->fs_base = 0;         /* DDR-1205: nor does the old image's thread pointer; */
+    cpu_wrmsr(MSR_IA32_FS_BASE, 0);   /* IF is clear, so no switch reloads it first */
     t->user_rip   = entry;
     t->user_stack = new_rsp;
     shm_release_vmas(t->mm);   /* DDR-1178 A2.2: the old image's attachments end */

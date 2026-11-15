@@ -4418,7 +4418,7 @@ smoke-poll: $(IMG) fat-image sfs-image
 smoke-execve-argv: $(IMG) fat-image sfs-image
 	@rm -f build/argv.log
 	@SERIAL_LOG=build/argv.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=argv \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_ARGV_ALIGN=ok\nPRADYOS_ARGC=3\nPRADYOS_ARGV=argtest\nPRADYOS_ARGV=alpha\nPRADYOS_ARGV=beta\nPRADYOS_ENVP=PRADYOSVAR=set\nPRADYOS_ARGV_OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ARGV_ALIGN=ok\nPRADYOS_ARGC=3\nPRADYOS_ARGV=argtest\nPRADYOS_ARGV=alpha\nPRADYOS_ARGV=beta\nPRADYOS_ENVP=PRADYOSVAR=set\nPRADYOS_EXEC_FS reset=1\nPRADYOS_ARGV_OK')" \
 	FORBIDDEN_SENTINEL="ARGVTEST FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[execve-argv] PASS — $$(grep -a PRADYOS_ARGC build/argv.log | head -1)"
