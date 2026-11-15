@@ -153,11 +153,16 @@ the arm is written.
 
 - **A1-1. No per-CPU offset in P1.** P1 reads `rdtsc` directly.
   - At AP bring-up, each AP's skew against the BSP is measured once, by a round trip (CodeRabbit on #129: a one-way transfer folds the latency into the skew).
-    - The BSP reads its TSC (`t0`) and publishes a ping.
-    - The AP answers with its own TSC (`ta`).
-    - The BSP reads its TSC again when the answer arrives (`t1`).
-    - This is repeated 8 times, and the sample with the smallest round trip `t1 - t0` is kept.
-    - Skew is `ta - (t0 + t1) / 2`, signed, with a bound of ±`(t1 - t0) / 2`.
+    - The AP drives it, because the AP is the CPU being measured and the BSP is busy waiting for it to come online. The AP reads its TSC (`ta0`) and posts a request.
+    - The BSP's wait loop sees the request and answers with its own TSC (`tb`).
+    - The AP reads its TSC again (`ta1`) when the answer arrives.
+    - This is repeated 8 times, and the sample with the smallest round trip `ta1 - ta0` is kept.
+    - Skew (AP minus BSP) is `(ta0 + ta1) / 2 - tb`, signed, with a bound of ±`(ta1 - ta0) / 2`.
+    - Ordering (CodeRabbit on #129). `RDTSC` is not serializing (Intel SDM: an `LFENCE` before it waits for earlier loads; an `LFENCE` after it keeps later instructions from starting first). The reads are ordered as follows:
+      - `ta0` is `rdtsc; lfence`, before the request store;
+      - `tb` is `lfence; rdtsc; lfence`, after the load that sees the request and before the answer store;
+      - `ta1` is `lfence; rdtsc`, after the load that sees the answer.
+      - Each asm carries a `memory` clobber, so the compiler cannot move the handshake's loads and stores across it.
   - The result is printed as `[time] tsc skew cpu=<n> cyc=<skew> rt=<round trip>`, in TSC cycles, because the TSC is not yet calibrated when the APs come up.
   - It is a measurement, not a correction, and it does not decide anything by itself.
 - **A1-1b. The skew P1 accepts is the skew arm A tolerates.** P1 sets no threshold of its own (an earlier draft said 1 µs; CodeRabbit on #129 showed that a skew below 1 µs can still make arm A's cross-CPU read go backwards).
