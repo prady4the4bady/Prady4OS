@@ -276,6 +276,13 @@ struct tcb {
     /* DDR-1186 (C1.4 P1d): the one CPU this thread may run on, -1 = any.
      * Set only by the thread itself (SYS_SCHED_CPU); never inherited. */
     int32_t    pin_cpu;
+    /* DDR-1200 §5.2 (C1.4 P5b): the wait lock of this thread's current timed
+     * wait (sched_block_timeout), 0 otherwise. The tick sweep acts on a timed
+     * wait only under this lock. Static storage only (Amendment 2 point 4). */
+    spinlock_t *block_lk;
+    /* DDR-1200 D5: link on the list of tcbs waiting for a grace period before
+     * their memory is freed. Not the ring link: a sweep may still follow ->next. */
+    struct tcb *rcu_next;
 };
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
