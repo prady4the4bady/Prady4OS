@@ -23,9 +23,14 @@
 
 #define PROT_READ      0x1
 #define PROT_WRITE     0x2
+#define MAP_SHARED     0x01
 #define MAP_PRIVATE    0x02
 #define MAP_ANONYMOUS  0x20
 #define EINVAL         22
+#define EINTR          4
+#define SIGKILL        9
+#define SIGUSR1        10
+#define SA_SIGINFO     0x00000004ul
 #define CLK_REALTIME   0
 #define CLK_MONOTONIC  1
 
@@ -69,9 +74,9 @@ static inline long nsi6(long n, long a1, long a2, long a3,
     return r;
 }
 
-static inline uint64_t rdtsc(void) {
+static inline uint64_t rdtsc(void) {             /* DDR-1188 A2-2: ordered */
     uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
     return ((uint64_t)hi << 32) | lo;
 }
 
@@ -260,6 +265,68 @@ static void arm_a(void) {
         a->back[0] + a->back[1], a->xback, sys_ok, pin_ok, rt_ok);
 }
 
+/* ---- arm B2 (DDR-1188 A2-1): a signal ends a blocked nanosleep ---- */
+
+struct k_sigaction { unsigned long handler, flags, mask; };
+
+__attribute__((noreturn, force_align_arg_pointer))
+static void on_usr1(long sig, void *si) {
+    (void)sig; (void)si;
+    nsi(SYS_SIGRETURN, 0, 0, 0);
+    for (;;) { }
+}
+
+struct b2_state { volatile long ready, eintr, rem_ok; };
+
+/* Fork a sleeper that marks ready and sleeps 5 s; signal it 200 ms after it
+ * is ready; return the ms from the signal to its reaping (-1: no ready). */
+static long b2_one(struct b2_state *b, long sig) {
+    b->ready = 0; b->eintr = 0; b->rem_ok = 0;
+    long kid = nsi(SYS_FORK, 0, 0, 0);
+    if (kid < 0) fail("B2 fork");
+    if (kid == 0) {
+        if (sig == SIGUSR1) {
+            struct k_sigaction a = { (unsigned long)on_usr1, SA_SIGINFO, 0 };
+            if (nsi(SYS_SIGACTION2, SIGUSR1, (long)&a, 0) != 0) fail("B2 sigaction");
+        }
+        struct ts req = { 5, 0 }, rem = { -1, -1 };
+        b->ready = 1;
+        long rc = nsi(SYS_NANOSLEEP, (long)&req, (long)&rem, 0);
+        b->eintr = rc == -EINTR;
+        b->rem_ok = rem.sec >= 0 && rem.nsec >= 0 && rem.nsec < (long)NS_PER_SEC &&
+                    (rem.sec > 0 || rem.nsec > 0) && rem.sec < 5;
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    uint64_t end = mono() + 10 * NS_PER_SEC;
+    while (!b->ready) {
+        if (mono() > end) return -1;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+    struct ts d = { 0, (long)(200 * MS) };
+    nsi(SYS_NANOSLEEP, (long)&d, 0, 0);
+    uint64_t t0 = mono();
+    nsi(SYS_KILL, kid, sig, 0);
+    long st = 0;
+    nsi(SYS_WAIT4, kid, (long)&st, 0);
+    return (long)((mono() - t0) / MS);
+}
+
+static void arm_b2(void) {
+    long pg = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (pg < 0) fail("mmap");
+    struct b2_state *b = (struct b2_state *)pg;
+    long usr_ms = b2_one(b, SIGUSR1);
+    long eintr = b->eintr, rem_ok = b->rem_ok;
+    long eintr_ok = usr_ms >= 0 && usr_ms < 2000 && eintr && rem_ok;
+    long kill_ms = b2_one(b, SIGKILL);
+    long killed_ok = kill_ms >= 0 && kill_ms < 2000;
+    say("[sched] B2 usr1_ms=%d eintr=%d rem_ok=%d kill_ms=%d\n",
+        usr_ms, eintr, rem_ok, kill_ms);
+    say("PRADYOS_SCHED_B2 eintr_ok=%d killed_ok=%d\n", eintr_ok, killed_ok);
+}
+
 /* ---- arm B ---- */
 
 static void arm_b(void) {
@@ -284,6 +351,7 @@ static void arm_b(void) {
 }
 
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
+    arm_b2();     /* first: it forks, so before arm A creates threads */
     arm_a();
     arm_b();
     say("PRADYOS_SCHED_DONE\n");

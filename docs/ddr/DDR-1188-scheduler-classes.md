@@ -181,3 +181,30 @@ the arm is written.
   - P6's tickless idle must program a wake for the K2 throttle's budget replenishment, so a throttled RT thread on an idle CPU runs again.
 
 Everything in this amendment is design; nothing is built. QEMU only, not verified on real hardware.
+
+## Amendment 2 (CodeRabbit on #130, before merge)
+
+Two findings on the P1 code (#130, head `b3a319d`), checked against the code and accepted.
+
+- **A2-1. A blocked `nanosleep` must wake on a signal.**
+  - **The defect.** `sig_raise` wakes a blocked thread only through `futex_kick`, which acts on `t->fx_lock`. P1's sleep set `block_lk` but never `fx_lock`, so a handled signal or `SIGKILL` that arrives during the sleep is not seen until the block ends. A `nanosleep(1 h)` made its process unkillable for an hour. The `-EINTR` path ran only for a signal already pending between blocks.
+  - **The fix.**
+    - The sleeper takes its static lock (`g_nsleep_lk`) once, sets `t->fx_lock` to it, and loops under it: deadline check, then signal check, then `sched_block_timeout`.
+    - `futex_kick` takes the same lock before `sched_unblock`. A signal raised after the check therefore waits until the wait is published, then wakes it. No wake is lost.
+    - `fx_lock` is cleared before the lock is dropped.
+    - **Reusing `fx_lock`.** It is the one "wake me on a signal" hook `sig_raise` already calls. A thread is never in a futex wait and a sleep at the same time.
+  - **Return value.** A sleep whose deadline has passed returns 0 even if a signal is also pending, as on Linux: the signal is then delivered on return to ring 3. `-EINTR` writes the remaining time to `rem`.
+  - **Arm B2.** Two forked sleepers each call `nanosleep(5 s)` and set a ready flag in a shared page first. The parent waits for the flag, then 200 ms more.
+    - It sends the first sleeper `SIGUSR1`, which has a handler. That sleeper must return `-EINTR` with 0 < `rem` < 5 s.
+    - It sends the second sleeper `SIGKILL`.
+    - The parent times each `wait4` from the moment the signal was sent. Both must take less than 2 s.
+    - Sentinel: `PRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1`.
+    - **Vacuity:** on `b3a319d` both sleepers run the full 5 s, so the arm is red.
+    - **Mutant C2b:** never set `fx_lock`. Both waits run out, so arm B2 is red.
+- **A2-2. Ordered TSC sample in the reader.**
+  - `ktime_mono_ns()` and the probe's vDSO reader sample the TSC with `lfence; rdtsc`, the pattern A1-1 uses.
+  - Without the fence, `rdtsc` may execute before the `seq` and base loads that precede it. The sample would then not belong to the base it is combined with.
+  - P1's clamp of a negative delta to 0 already kept the result at or above `ns_base`. The fence makes the reading's order explicit instead of relying on that clamp.
+  - This is not gated separately (as with C1b, A1-3): a mutant would need a reordering that TCG does not produce.
+
+QEMU only, not verified on real hardware.

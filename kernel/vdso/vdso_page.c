@@ -112,7 +112,9 @@ uint64_t ktime_mono_ns(void) {
         } else {
             uint64_t base = vdso_data->ns_base, tb = vdso_data->tsc_base;
             uint32_t sh = vdso_data->shift;
-            uint64_t now = vt_rdtsc();
+            uint32_t lo, hi;                        /* DDR-1188 A2-2: ordered after */
+            __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+            uint64_t now = ((uint64_t)hi << 32) | lo; /* the seq and base loads */
             uint64_t d = now > tb ? now - tb : 0;   /* a CPU behind tsc_base: hold */
             v = base + (uint64_t)(((unsigned __int128)d * mult) >> sh);
         }

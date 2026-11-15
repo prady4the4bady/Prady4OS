@@ -4497,7 +4497,7 @@ smoke-thread: $(IMG) fat-image sfs-image
 smoke-schedclass: $(IMG) fat-image sfs-image
 	@rm -f build/schedclass.log
 	@SERIAL_LOG=build/schedclass.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=schedclass \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'SCHED FAIL\nschedclass probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[time\] tsc skew\|\[sched\]\|PRADYOS_SCHED\|SCHED FAIL" build/schedclass.log || true

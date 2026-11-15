@@ -274,7 +274,7 @@ static spinlock_t g_nsleep_lk = SPINLOCK_INIT;
 /* Sleeps until CLOCK_MONOTONIC reaches start + req, never less: each block is
  * rem / 10 ms + 1 ticks, and the loop re-reads the clock until the deadline
  * has passed. A signal ends the sleep with -EINTR and the remaining time in
- * *urem (checked between blocks, so at most one block late). */
+ * *urem (DDR-1188 A2-1: the signal wakes the block). */
 static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long a6) {
     (void)a3; (void)a4; (void)a5; (void)a6;
     struct k_timespec req;
@@ -287,26 +287,32 @@ static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long 
     uint64_t want = (uint64_t)req.tv_sec * NS_PER_SEC + (uint64_t)req.tv_nsec;
     uint64_t deadline = ktime_mono_ns() + want;
     struct tcb *t = current_thread;
+    /* DDR-1188 A2-1: sig_raise wakes a blocked thread through futex_kick,
+     * which takes t->fx_lock and unblocks t. Registering this sleep's lock
+     * there makes a signal end the block. The signal check and the block
+     * both run under the lock, so a signal raised after the check waits for
+     * the wait to be published and then wakes it: none is lost. */
+    long ret;
+    uint64_t rem = 0;
+    uint64_t fl = spin_lock_irqsave(&g_nsleep_lk);
+    __atomic_store_n(&t->fx_lock, &g_nsleep_lk, __ATOMIC_SEQ_CST);
     for (;;) {
         uint64_t now = ktime_mono_ns();
-        if (now >= deadline)
-            return 0;
-        uint64_t rem = deadline - now;
-        if (signal_interruptible(t) || signal_kill_pending(t)) {
-            if (urem) {
-                struct k_timespec r = { (int64_t)(rem / NS_PER_SEC),
-                                        (int64_t)(rem % NS_PER_SEC) };
-                if (copyout((void __user *)(uintptr_t)urem, &r, sizeof r) < 0)
-                    return -EFAULT;
-            }
-            return -EINTR;
-        }
+        if (now >= deadline) { ret = 0; break; }        /* done, as on Linux */
+        rem = deadline - now;
+        if (signal_interruptible(t) || signal_kill_pending(t)) { ret = -EINTR; break; }
         uint64_t ticks = rem / NS_PER_TICK + 1; /* never shorter than rem */
         volatile int done = 0;
-        uint64_t fl = spin_lock_irqsave(&g_nsleep_lk);
         sched_block_timeout(&g_nsleep_lk, &done, ticks);
-        spin_unlock_irqrestore(&g_nsleep_lk, fl);
     }
+    __atomic_store_n(&t->fx_lock, (spinlock_t *)0, __ATOMIC_SEQ_CST);
+    spin_unlock_irqrestore(&g_nsleep_lk, fl);
+    if (ret == -EINTR && urem) {
+        struct k_timespec r = { (int64_t)(rem / NS_PER_SEC), (int64_t)(rem % NS_PER_SEC) };
+        if (copyout((void __user *)(uintptr_t)urem, &r, sizeof r) < 0)
+            return -EFAULT;
+    }
+    return ret;
 }
 
 void sys_proc_register(void) {
