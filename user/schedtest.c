@@ -149,13 +149,16 @@ static long spawn(void (*fn)(long), long arg) {
 
 /* ---- arm A ---- */
 
-static struct {
+/* Shared by the two threads through a mapped page: the probe has no writable
+ * segment (probe-rodata-check), so no mutable globals. A thread's argument is
+ * the page address with its index (0 or 1) in bit 0. */
+struct a_state {
     volatile long reads[2], back[2], pinned[2], done[2];
     volatile long ready;                 /* threads that finished phase 1   */
     volatile uint64_t seq;               /* ping-pong: odd = 0->1, even = 1->0 */
     volatile uint64_t val;               /* the published reading           */
     volatile long xback, xrounds, xtimeout;
-} A;
+};
 
 /* Pin to cpu and wait (bounded) until running there. */
 static int pin(long cpu) {
@@ -169,18 +172,20 @@ static int pin(long cpu) {
     return 0;
 }
 
-/* Spin until A.seq == want; 0 after 5 s of CLOCK_MONOTONIC. */
-static int await_seq(uint64_t want) {
+/* Spin until a->seq == want; 0 after 5 s of CLOCK_MONOTONIC. */
+static int await_seq(struct a_state *a, uint64_t want) {
     uint64_t end = mono() + 5 * NS_PER_SEC;
-    while (__atomic_load_n(&A.seq, __ATOMIC_ACQUIRE) != want) {
+    while (__atomic_load_n(&a->seq, __ATOMIC_ACQUIRE) != want) {
         if (mono() > end) return 0;
         __asm__ volatile("pause");
     }
     return 1;
 }
 
-__attribute__((noreturn, force_align_arg_pointer)) static void a_thread(long me) {
-    A.pinned[me] = pin(me);
+__attribute__((noreturn, force_align_arg_pointer)) static void a_thread(long arg) {
+    long me = arg & 1;
+    struct a_state *a = (struct a_state *)(arg & ~1L);
+    a->pinned[me] = pin(me);
     /* Phase 1: same-CPU monotonicity. */
     uint64_t start = mono(), prev = start;
     long reads = 0, back = 0;
@@ -191,11 +196,11 @@ __attribute__((noreturn, force_align_arg_pointer)) static void a_thread(long me)
         reads++;
         if (reads >= A_READS_MIN && t - start >= A_NS_MIN) break;
     }
-    A.reads[me] = reads;
-    A.back[me] = back;
-    __atomic_add_fetch(&A.ready, 1, __ATOMIC_SEQ_CST);
+    a->reads[me] = reads;
+    a->back[me] = back;
+    __atomic_add_fetch(&a->ready, 1, __ATOMIC_SEQ_CST);
     uint64_t bar = mono() + 10 * NS_PER_SEC;           /* both reach phase 2 */
-    while (__atomic_load_n(&A.ready, __ATOMIC_SEQ_CST) < 2 && mono() < bar)
+    while (__atomic_load_n(&a->ready, __ATOMIC_SEQ_CST) < 2 && mono() < bar)
         __asm__ volatile("pause");
     /* Phase 2: cross-CPU ping-pong. Round r (1..2*X_ROUNDS): odd r is
      * 0 -> 1, even r is 1 -> 0. The sender publishes val, then seq = r; the
@@ -203,27 +208,31 @@ __attribute__((noreturn, force_align_arg_pointer)) static void a_thread(long me)
     for (uint64_t r = 1; r <= 2 * X_ROUNDS; r++) {
         long sender = (r & 1) ? 0 : 1;
         if (me == sender) {
-            if (!await_seq(r - 1)) { A.xtimeout = 1; break; }
-            A.val = mono();
-            __atomic_store_n(&A.seq, r, __ATOMIC_RELEASE);
+            if (!await_seq(a, r - 1)) { a->xtimeout = 1; break; }
+            a->val = mono();
+            __atomic_store_n(&a->seq, r, __ATOMIC_RELEASE);
         } else {
-            if (!await_seq(r)) { A.xtimeout = 1; break; }
-            uint64_t got = A.val;
+            if (!await_seq(a, r)) { a->xtimeout = 1; break; }
+            uint64_t got = a->val;
             uint64_t mine = mono();
-            if (mine < got) __atomic_add_fetch(&A.xback, 1, __ATOMIC_SEQ_CST);
-            __atomic_add_fetch(&A.xrounds, 1, __ATOMIC_SEQ_CST);
+            if (mine < got) __atomic_add_fetch(&a->xback, 1, __ATOMIC_SEQ_CST);
+            __atomic_add_fetch(&a->xrounds, 1, __ATOMIC_SEQ_CST);
         }
     }
     nsi(SYS_SCHED_CPU, 2, 0, 0);
-    A.done[me] = 1;
+    a->done[me] = 1;
     texit();
 }
 
 static void arm_a(void) {
-    spawn(a_thread, 0);
-    spawn(a_thread, 1);
+    long pg = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (pg < 0) fail("mmap");
+    struct a_state *a = (struct a_state *)pg;   /* zero-filled */
+    spawn(a_thread, pg);
+    spawn(a_thread, pg | 1);
     uint64_t end = mono() + 60 * NS_PER_SEC;
-    while (!(A.done[0] && A.done[1])) {
+    while (!(a->done[0] && a->done[1])) {
         if (mono() > end) fail("A threads did not finish");
         nsi(SYS_YIELD, 0, 0, 0);
     }
@@ -242,13 +251,13 @@ static void arm_a(void) {
     struct ts rt;
     long rt_ok = nsi(SYS_CLOCK_GETTIME, CLK_REALTIME, (long)&rt, 0) == 0 &&
                  rt.sec > 1700000000L;
-    long pin_ok = A.pinned[0] && A.pinned[1];
-    long xrounds = A.xtimeout ? 0 : A.xrounds;
+    long pin_ok = a->pinned[0] && a->pinned[1];
+    long xrounds = a->xtimeout ? 0 : a->xrounds;
     say("[sched] A reads0=%d reads1=%d back0=%d back1=%d xrounds=%d xback=%d rt_sec=%d\n",
-        A.reads[0], A.reads[1], A.back[0], A.back[1], xrounds, A.xback, rt.sec);
+        a->reads[0], a->reads[1], a->back[0], a->back[1], xrounds, a->xback, rt.sec);
     if (xrounds != 2 * X_ROUNDS) fail("A cross-CPU rounds incomplete");
     say("PRADYOS_SCHED_A back=%d xback=%d sys_ok=%d pin_ok=%d rt_ok=%d\n",
-        A.back[0] + A.back[1], A.xback, sys_ok, pin_ok, rt_ok);
+        a->back[0] + a->back[1], a->xback, sys_ok, pin_ok, rt_ok);
 }
 
 /* ---- arm B ---- */
