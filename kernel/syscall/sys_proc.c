@@ -301,7 +301,8 @@ static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long 
         if (now >= deadline) { ret = 0; break; }        /* done, as on Linux */
         rem = deadline - now;
         if (signal_interruptible(t) || signal_kill_pending(t)) { ret = -EINTR; break; }
-        uint64_t ticks = rem / NS_PER_TICK + 1; /* never shorter than rem */
+        uint64_t ticks = rem / NS_PER_TICK;     /* MUTANT C2 */
+        if (!ticks) { ret = 0; break; }
         volatile int done = 0;
         sched_block_timeout(&g_nsleep_lk, &done, ticks);
     }
