@@ -216,3 +216,76 @@ Two findings on the P1 code (#130, head `b3a319d`), checked against the code and
   - **Not changed here:** `FUTEX_WAIT` (`kernel/proc/futex.c`) has the same gap for default-terminate signals. It predates this PR and is recorded as a follow-up, so the futex path is not widened without its own gate.
 
 QEMU only, not verified on real hardware.
+
+## Amendment 3 (2026-11-16): P2 design, one-shot timers on the LAPIC count
+
+Design only. No P2 code exists yet. It fills in what §2 leaves open for P2: who arms a one-shot, how one LAPIC timer serves both the tick and a one-shot, and how arms C and M can be red. Read from `dev/phase1` at `b2181de`.
+
+**What exists.**
+- Each CPU has one LAPIC timer. It runs in periodic mode at 100 Hz (`lapic_timer_100hz`, `lapic_timer_ap_arm`), divide 16, `g_timer_count` counts per 10 ms.
+- Its interrupt (vector 48) runs `timer_tick` on the BSP and `sched_tick` on an AP (`idt.c`).
+- A timed wait ends in `sched_timed_sweep`, on a tick, when `g_ticks` reaches its deadline.
+- `nanosleep` (P1) blocks for `rem / 10 ms + 1` ticks. So a 2 ms sleep ends on the first tick at or after 2 ms: between 2 ms and 12 ms after it began.
+
+**T1. The only user in P2 is `nanosleep`.** No new syscall. A sleeper whose deadline is not on a tick gets a one-shot at its deadline. The tick timeout stays as the backstop, unchanged. If no one-shot can be armed (T4, T5), the sleep behaves as it does today.
+
+**T2. One timer, two jobs: leave periodic mode only while a one-shot is pending.** This is the safe option, and it is a deviation from §2 (below).
+- A CPU with no pending one-shot keeps today's periodic mode, untouched. The tick path that OPEN-2 timing lives on does not change for it.
+- **Arming** (on the sleeper's CPU, interrupts off). Read the current count: `rem`, the counts left to the next tick. Convert the time to the deadline into counts: `h`.
+  - If `h + guard >= rem`, do nothing to the LAPIC. The deadline is checked on the tick.
+  - Else switch the LVT to one-shot, write `h` as the initial count, and keep `rem - h` as `tail`.
+- **A one-shot interrupt (early phase).** Wake every sleeper on this CPU whose deadline has passed, by the clock. If another deadline lies before the tick, arm it and subtract it from `tail`. Otherwise write `tail` as a one-shot (tail phase). No tick work runs: `g_ticks`, `pc->ticks`, `run_ticks` and the timed sweep do not see this interrupt.
+- **The tail interrupt is the tick.** It runs today's tick work, then puts the LVT back to periodic with `g_timer_count`.
+- **Every mode switch is followed by a write of the initial count.** A mode change may disarm the timer (next section), so `rem` is read before the LVT is written, and no path leaves the LVT changed without a new count.
+- A deadline that the timer reached early by rounding is not woken. It is armed again for the remainder (at least T5's 50 µs).
+
+**Deviation from §2: no TSC-deadline mode in P2.** §2 says "TSC-deadline mode where CPUID has it, else one-shot count". P2 builds the count path only.
+- CI's QEMU CPU model (`qemu64`; `boot_test.sh` passes `-cpu` only when `QEMU_CPU` is set) does not report TSC-deadline. Code for it could not run in any gate.
+- A write to the LVT that changes the timer mode disarms the timer (Intel SDM vol. 3A, "APIC Timer"; section number not checked against the current edition). TSC-deadline also takes its deadline from an MSR, not the count registers. So it needs its own arming and tail logic, not a variant of T2's.
+- It stays a named gap: **not built, not verified.**
+
+**T3. Where the pending one-shots live.** Each CPU has a small table (8 slots) of `{thread, deadline}` and a lock, `hr_lk`, taken with interrupts off.
+- A full table means no one-shot for that sleep (tick backstop).
+- **Lock order: `hr_lk`, then the sleep lock.** `nanosleep` arms before it takes its sleep lock and cancels after it drops it. The interrupt holds `hr_lk` and wakes through `futex_kick`, which takes the sleep lock. `nanosleep` never takes `hr_lk` while it holds the sleep lock.
+- **A slot never outlives its sleep.** `nanosleep` cancels its slot on every way out, including `-EINTR`. A slot that is present under `hr_lk` therefore names a thread that is still inside `sys_nanosleep`, so its tcb is live.
+- **No lost wake.** The interrupt wakes a slot only when the clock is at or past its deadline. The sleeper checks the same clock under the sleep lock before it blocks, and `futex_kick` takes that lock. So the sleeper has either seen the deadline pass, or is blocked when the kick arrives.
+- A sleeper may resume on another CPU. It cancels by the CPU index it stored when it armed.
+
+**T4. Budget** (§5, "timer interrupts are a security boundary"). A thread gets at most 1 000 one-shots in any window of 1 s of `CLOCK_MONOTONIC`. Past that, its sleeps get no one-shot and end on a tick. `RES_SCHED` does not exist before P3, so in P2 the budget applies to every thread.
+- Two new `struct tcb` fields (window start, count), with explicit initialisers in `sched_create_state` (CLAUDE.md rule 11).
+
+**T5. Spacing.** A one-shot is never armed closer than 50 µs after the previous timer interrupt on that CPU, and never with a count of 0.
+
+**What the tick loses.** Each switch out of and back into periodic mode restarts the count, so that CPU's next tick is late by the time the two writes take. With T4 that is bounded by 1 000 switches per thread per second. `CLOCK_MONOTONIC` is on the TSC (P1) and is not affected. `g_ticks` on the BSP can run slow by that amount under load. This is **stated, not measured.**
+
+**No wake-up preemption.** A woken sleeper is made ready. It runs when its CPU next schedules: at once if the CPU is idle, else at the end of the running thread's quantum. P2 does not change that (arm D is P3's). So an early wake is only visible on a CPU that is not busy.
+
+### Arm C, restated so that it can be red
+
+§4's arm C says "a 2 ms one-shot timer fires before the next periodic tick (count of early wakes > 0 over 50 tries)". By elapsed time alone it is vacuous: with ticks only, a 2 ms sleep already ends in under 10 ms about 8 times in 10 (above).
+
+- **The arm.** A thread pinned to a CPU with no other load runs 50 tries of `nanosleep(2 ms)`. Around each try it reads the vDSO's `wall_time_ns`, which the BSP advances once per tick, in the same handler that advances `g_ticks`.
+- **A try is early when** `wall_time_ns` did not change across the sleep **and** the sleep lasted at least 2 ms by `CLOCK_MONOTONIC`.
+- **Pass:** at least 20 of 50 tries are early. Sentinel: `PRADYOS_SCHED_C early_ok=1`, with the count printed beside it.
+- **Why ticks alone cannot produce an early try.** A tick-timed wait ends only after `g_ticks` advanced, and `timer_tick` advances `wall_time_ns` three lines later. A sweep on another CPU could land between those two stores. That is a window of a few instructions, which is why the bar is 20 and not "more than 0".
+- **Why 20 and not more.** A try that happens to span a tick is not early even with one-shots. A 2 ms sleep spans a tick about 2 times in 10, and TCG adds latency.
+- **Vacuity is checked on the baseline before the arm is written:** the arm's count on the tree without T2 must be far below 20. The number goes in the PR.
+- **Mutant C3** ("arm the periodic tick only"): the arming step never switches the LVT. Expected: red on arm C only.
+
+### Arm M
+
+- **The arm.** One thread calls `nanosleep(50 µs)` in a loop for 1 s of `CLOCK_MONOTONIC` and counts the calls that returned.
+- **Pass:** the count is at most 1 100. With T4, at most 1 000 calls get a one-shot; each of the rest ends on a tick, and there are 100 ticks in the second. Sentinel: `PRADYOS_SCHED_M capped_ok=1`, with the count.
+- **Vacuity.** The arm is only meaningful if the unbudgeted rate is above 1 100 per second under TCG. That is measured with C13 before the arm is accepted. If TCG cannot reach it, the arm is redesigned, not weakened.
+- **A lower bound too:** the count must be at least 500. Otherwise a kernel that arms no one-shot at all (about 100 per second) would pass arm M.
+- **Mutant C13** ("no per-thread budget"): the budget check is removed. Expected: red on arm M only.
+
+### Not gated in P2
+
+- T5's 50 µs spacing. No arm separates it from T4. A mutant that drops it would be recorded as a survivor.
+- The table-full path (more than 8 pending sleeps on one CPU).
+- A sleeper that resumes on another CPU and cancels there.
+- The size of the tick delay described above.
+- TSC-deadline mode (not built).
+
+QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
