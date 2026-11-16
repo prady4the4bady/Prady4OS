@@ -141,8 +141,7 @@ static long fx_wait(struct tcb *t, uint64_t uaddr, uint32_t val, int priv,
     long ret;
     for (;;) {
         if (w.woken) { ret = 0; break; }
-        if (signal_interruptible(t) || signal_kill_pending(t) ||
-            signal_fatal_pending(t)) { ret = -EINTR; break; }   /* DDR-1206 */
+        if (signal_interruptible(t) || signal_kill_pending(t)) { ret = -EINTR; break; }   /* MUTANT F2-10 */
         if (timed) {
             uint64_t now = g_ticks;
             if (now >= deadline) { ret = -ETIMEDOUT; break; }
