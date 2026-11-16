@@ -74,7 +74,13 @@ Status: IN PROGRESS. Needs: C1.1, C1.2, C1.3. Merged: #76 `3358b35` (P1c, DDR-11
 Exit gate: threads and lock gates (names TBD) incl. race stress, plus the three DDR-1177 items above.
 
 ### C1.5 Scheduler classes
-Status: TODO. Needs: C1.4.
+Status: IN PROGRESS (P1 of 6 merged; DDR-1188 §3). Needs: C1.4.
+- [x] **P1, the time ABI** (DDR-1188 P1, Amendments 1–2): #130 `ec6187d`. `CLOCK_MONOTONIC` and `CLOCK_REALTIME` on the TSC through the vDSO (K7), `SYS_CLOCK_GETTIME` (120), `SYS_NANOSLEEP` (121), the per-AP TSC skew measurement, and gate `smoke-schedclass` arms A, B, B2 and B3.
+  - Green on the final head `5317bf5` (run [43775518109](https://github.com/prady4the4bady/Prady4OS/actions/runs/43775518109)).
+  - Mutants, each built on `5317bf5` and red: C1 on arm A (`back=110`, run 43790409362); C2 on arm B (`slept_ok=1`, run 43790413646); C2b on arm B2 and also B3 (`usr1_ms=5008 eintr=0`, run 43775724179); C2c on arm B3 only (`term_ms=5009`, run 43775726375).
+  - Not gated: C1b (the reader's seqlock retry, A1-3) and A2-2 (the `lfence` before the reader's TSC sample).
+  - P1 does not tick any of the three items below: it is only the clock part of the third. P2 (one-shot timers) to P6 (tickless) remain.
+  - QEMU (TCG, 4 vCPU) only, not verified on real hardware.
 - [ ] real-time classes (FIFO, RR, deadline), with `kmutex` priority inheritance (DDR-1193 D1)
 - [ ] pressure stall information (CPU, memory, I/O)
 - [ ] CPU frequency and tickless timers, high-resolution clocks
