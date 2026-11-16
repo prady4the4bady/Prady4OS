@@ -1216,6 +1216,9 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->is_thread       = 0;
     t->clear_tid       = 0;
     t->fx_lock         = 0;   /* DDR-1181 A1.3: not in a futex wait */
+    t->hr_win          = 0;   /* DDR-1188 A3: no one-shot budget used; kmalloc does not zero */
+    t->hr_n            = 0;
+    t->hr_cpu          = 0;
     t->block_lk        = 0;   /* DDR-1200 §5.2: not in a timed wait; kmalloc does not zero */
     t->rcu_next        = 0;   /* DDR-1200 D5: not waiting for a grace period */
     t->pin_cpu         = -1;  /* DDR-1186: unpinned; kmalloc does not zero */

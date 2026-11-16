@@ -294,6 +294,10 @@ static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long 
      * the wait to be published and then wakes it: none is lost. */
     long ret;
     uint64_t rem = 0;
+    /* DDR-1188 A3 (P2): ask for a one-shot at the deadline, so the sleep can
+     * end between ticks. Armed before the sleep lock and cancelled after it
+     * (T3 lock order). When it is refused, the tick below ends the sleep. */
+    int hr = hrt_arm(t, deadline);
     uint64_t fl = spin_lock_irqsave(&g_nsleep_lk);
     __atomic_store_n(&t->fx_lock, &g_nsleep_lk, __ATOMIC_SEQ_CST);
     for (;;) {
@@ -308,6 +312,8 @@ static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long 
     }
     __atomic_store_n(&t->fx_lock, (spinlock_t *)0, __ATOMIC_SEQ_CST);
     spin_unlock_irqrestore(&g_nsleep_lk, fl);
+    if (hr)
+        hrt_cancel(t);                  /* a slot never outlives its sleep (T3) */
     if (ret == -EINTR && urem) {
         struct k_timespec r = { (int64_t)(rem / NS_PER_SEC), (int64_t)(rem % NS_PER_SEC) };
         if (copyout((void __user *)(uintptr_t)urem, &r, sizeof r) < 0)

@@ -251,7 +251,9 @@ Design only. No P2 code exists yet. It fills in what §2 leaves open for P2: who
 - **No lost wake.** The interrupt wakes a slot only when the clock is at or past its deadline. The sleeper checks the same clock under the sleep lock before it blocks, and `futex_kick` takes that lock. So the sleeper has either seen the deadline pass, or is blocked when the kick arrives.
 - A sleeper may resume on another CPU. It cancels by the CPU index it stored when it armed.
 
-**T4. Budget** (§5, "timer interrupts are a security boundary"). A thread gets at most 1 000 one-shots in any window of 1 s of `CLOCK_MONOTONIC`. Past that, its sleeps get no one-shot and end on a tick. `RES_SCHED` does not exist before P3, so in P2 the budget applies to every thread.
+**T4. Budget** (§5, "timer interrupts are a security boundary"). A thread gets at most 1 000 one-shots per budget window. Past that, its sleeps get no one-shot and end on a tick. `RES_SCHED` does not exist before P3, so in P2 the budget applies to every thread.
+- **The window is fixed, not sliding.** It is 1 s of `CLOCK_MONOTONIC` and opens at the thread's first one-shot after the previous window ended. So a 1 s span that straddles two windows can hold up to 2 000 one-shots. A sliding bound would need a per-thread history; this is the cheap form, and its limit is stated.
+- A long sleep counts as one one-shot, taken when the sleep begins.
 - Two new `struct tcb` fields (window start, count), with explicit initialisers in `sched_create_state` (CLAUDE.md rule 11).
 
 **T5. Spacing.** A one-shot is never armed closer than 50 µs after the previous timer interrupt on that CPU, and never with a count of 0.
@@ -266,7 +268,7 @@ Design only. No P2 code exists yet. It fills in what §2 leaves open for P2: who
 
 - **The arm.** A thread pinned to a CPU with no other load runs 50 tries of `nanosleep(2 ms)`. Around each try it reads the vDSO's `wall_time_ns`, which the BSP advances once per tick, in the same handler that advances `g_ticks`.
 - **A try is early when** `wall_time_ns` did not change across the sleep **and** the sleep lasted at least 2 ms by `CLOCK_MONOTONIC`.
-- **Pass:** at least 20 of 50 tries are early. Sentinel: `PRADYOS_SCHED_C early_ok=1`, with the count printed beside it.
+- **Pass:** at least 20 of 50 tries are early, and the pin succeeded. Sentinel: `PRADYOS_SCHED_C early_ok=1 pin_ok=1`, with the count on a `[sched] C` line.
 - **Why ticks alone cannot produce an early try.** A tick-timed wait ends only after `g_ticks` advanced, and `timer_tick` advances `wall_time_ns` three lines later. A sweep on another CPU could land between those two stores. That is a window of a few instructions, which is why the bar is 20 and not "more than 0".
 - **Why 20 and not more.** A try that happens to span a tick is not early even with one-shots. A 2 ms sleep spans a tick about 2 times in 10, and TCG adds latency.
 - **Vacuity is checked on the baseline before the arm is written:** the arm's count on the tree without T2 must be far below 20. The number goes in the PR.
@@ -274,8 +276,8 @@ Design only. No P2 code exists yet. It fills in what §2 leaves open for P2: who
 
 ### Arm M
 
-- **The arm.** One thread calls `nanosleep(50 µs)` in a loop for 1 s of `CLOCK_MONOTONIC` and counts the calls that returned.
-- **Pass:** the count is at most 1 100. With T4, at most 1 000 calls get a one-shot; each of the rest ends on a tick, and there are 100 ticks in the second. Sentinel: `PRADYOS_SCHED_M capped_ok=1`, with the count.
+- **The arm.** One thread first sleeps 1.05 s. That sleep takes one one-shot when it begins, so more than a window passes with no new one. The thread then calls `nanosleep(50 µs)` in a loop for 1 s of `CLOCK_MONOTONIC` and counts the calls that returned. The loop's first sleep opens a new window, and the whole second lies inside it.
+- **Pass:** the count is at most 1 100. With T4, at most 1 000 calls get a one-shot; each of the rest ends on a tick. The 1 000 one-shot sleeps take at least 50 ms together, so at most 96 ticks are left in the second. Sentinel: `PRADYOS_SCHED_M capped_ok=1`, with the count on a `[sched] M` line.
 - **Vacuity.** The arm is only meaningful if the unbudgeted rate is above 1 100 per second under TCG. That is measured with C13 before the arm is accepted. If TCG cannot reach it, the arm is redesigned, not weakened.
 - **A lower bound too:** the count must be at least 500. Otherwise a kernel that arms no one-shot at all (about 100 per second) would pass arm M.
 - **Mutant C13** ("no per-thread budget"): the budget check is removed. Expected: red on arm M only.

@@ -374,10 +374,65 @@ static void arm_b(void) {
     say("PRADYOS_SCHED_B slept_ok=%d einval=%d\n", ok, einval);
 }
 
+/* ---- arm C (DDR-1188 Amendment 3): a one-shot ends a sleep between ticks ----
+ * The vDSO's wall_time_ns advances once per tick, in the handler that advances
+ * g_ticks. A tick-timed sleep ends only after g_ticks moved, so a 2 ms sleep
+ * across which wall_time_ns did not move was ended by a one-shot. */
+#define C_TRIES  50
+#define C_NS     (2 * MS)
+#define C_MIN    20
+#define C_CPU    2
+
+static void arm_c(void) {
+    const struct vdso *v = (const struct vdso *)VDSO_USER_VA;
+    long early = 0, slept = 0;
+    long pinned = pin(C_CPU);
+    for (int i = 0; i < C_TRIES; i++) {
+        struct ts req = { 0, (long)C_NS };
+        uint64_t w0 = v->wall_time_ns;
+        uint64_t t0 = mono();
+        long rc = nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
+        uint64_t d = mono() - t0;
+        uint64_t w1 = v->wall_time_ns;
+        if (rc == 0 && d >= C_NS) {
+            slept++;
+            if (w1 == w0) early++;
+        }
+    }
+    nsi(SYS_SCHED_CPU, 2, 0, 0);                    /* unpin */
+    say("[sched] C early=%d of %d slept=%d\n", early, (long)C_TRIES, slept);
+    say("PRADYOS_SCHED_C early_ok=%d pin_ok=%d\n", (long)(early >= C_MIN), pinned);
+}
+
+/* ---- arm M (DDR-1188 Amendment 3, T4): the one-shot budget ----
+ * At most 1000 sleeps in a budget window end on a one-shot; the rest end on a
+ * tick, and a second has 100 ticks. The first sleep is longer than a window
+ * and takes one one-shot at its start, so the loop's first sleep opens a new
+ * window and the whole second lies inside it. The lower bound keeps a kernel
+ * with no one-shots at all (about 100 sleeps) from passing. */
+#define M_NS     (50 * 1000ull)
+#define M_MAX    1100
+#define M_MIN    500
+
+static void arm_m(void) {
+    struct ts idle = { 1, (long)(50 * MS) };
+    nsi(SYS_NANOSLEEP, (long)&idle, 0, 0);
+    long n = 0;
+    uint64_t t0 = mono();
+    while (mono() - t0 < NS_PER_SEC) {
+        struct ts req = { 0, (long)M_NS };
+        if (nsi(SYS_NANOSLEEP, (long)&req, 0, 0) == 0) n++;
+    }
+    say("[sched] M sleeps=%d\n", n);
+    say("PRADYOS_SCHED_M capped_ok=%d\n", (long)(n >= M_MIN && n <= M_MAX));
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_b2();     /* first: it forks, so before arm A creates threads */
     arm_a();
     arm_b();
+    arm_c();
+    arm_m();
     say("PRADYOS_SCHED_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
