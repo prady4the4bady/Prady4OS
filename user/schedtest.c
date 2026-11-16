@@ -279,9 +279,26 @@ static void on_usr1(long sig, void *si) {
 
 struct b2_state { volatile long ready, eintr, rem_ok; };
 
-/* Fork a sleeper that marks ready and sleeps 5 s; signal it 200 ms after it
- * is ready; return the ms from the signal to its reaping (-1: no ready). */
-static long b2_one(struct b2_state *b, long sig) {
+/* 1 once the scheduler reports pid BLOCKED (THREAD_BLOCKED = 3), 0 after 5 s. */
+static int blocked(long pid) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    uint64_t end = mono() + 5 * NS_PER_SEC;
+    for (;;) {
+        for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++)
+            if ((long)pi.pid == pid && pi.state == 3)
+                return 1;
+        if (mono() > end) return 0;
+        nsi(SYS_YIELD, 0, 0, 0);
+    }
+}
+
+/* Fork a sleeper that marks ready and sleeps 5 s. Signal it once the scheduler
+ * reports it BLOCKED, so the signal arrives during the block and not before
+ * it (CodeRabbit on #130). Return the ms from the signal to its reaping, or
+ * -1 if it never blocked, the kill failed, or wait4 did not reap it with
+ * exit status want_st. */
+static long b2_one(struct b2_state *b, long sig, int want_st) {
     b->ready = 0; b->eintr = 0; b->rem_ok = 0;
     long kid = nsi(SYS_FORK, 0, 0, 0);
     if (kid < 0) fail("B2 fork");
@@ -304,13 +321,13 @@ static long b2_one(struct b2_state *b, long sig) {
         if (mono() > end) return -1;
         nsi(SYS_YIELD, 0, 0, 0);
     }
-    struct ts d = { 0, (long)(200 * MS) };
-    nsi(SYS_NANOSLEEP, (long)&d, 0, 0);
+    int was_blocked = blocked(kid);
     uint64_t t0 = mono();
     long kill_rc = nsi(SYS_KILL, kid, sig, 0);
-    long st = 0;
+    int st = 0x7fffffff;                 /* SYS_WAIT4 writes an int */
     long reaped = nsi(SYS_WAIT4, kid, (long)&st, 0);
-    if (kill_rc != 0 || reaped != kid) return -1;   /* nothing was signalled */
+    if (!was_blocked || kill_rc != 0 || reaped != kid || st != want_st)
+        return -1;
     return (long)((mono() - t0) / MS);
 }
 
@@ -319,17 +336,17 @@ static void arm_b2(void) {
                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (pg < 0) fail("mmap");
     struct b2_state *b = (struct b2_state *)pg;
-    long usr_ms = b2_one(b, SIGUSR1);
+    long usr_ms = b2_one(b, SIGUSR1, 0);       /* the sleeper exits 0 itself */
     long eintr = b->eintr, rem_ok = b->rem_ok;
     long eintr_ok = usr_ms >= 0 && usr_ms < 2000 && eintr && rem_ok;
-    long kill_ms = b2_one(b, SIGKILL);
+    long kill_ms = b2_one(b, SIGKILL, -1);     /* ended by the kernel: -1 */
     long killed_ok = kill_ms >= 0 && kill_ms < 2000;
     say("[sched] B2 usr1_ms=%d eintr=%d rem_ok=%d kill_ms=%d\n",
         usr_ms, eintr, rem_ok, kill_ms);
     say("PRADYOS_SCHED_B2 eintr_ok=%d killed_ok=%d\n", eintr_ok, killed_ok);
     /* B3 (DDR-1188 A2-3): SIGTERM with no handler ends the sleep, and so the
      * process, through default termination. */
-    long term_ms = b2_one(b, SIGTERM);
+    long term_ms = b2_one(b, SIGTERM, -1);
     say("[sched] B3 term_ms=%d\n", term_ms);
     say("PRADYOS_SCHED_B3 term_ok=%d\n", (long)(term_ms >= 0 && term_ms < 2000));
 }

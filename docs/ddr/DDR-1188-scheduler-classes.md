@@ -194,7 +194,7 @@ Two findings on the P1 code (#130, head `b3a319d`), checked against the code and
     - `fx_lock` is cleared before the lock is dropped.
     - **Reusing `fx_lock`.** It is the one "wake me on a signal" hook `sig_raise` already calls. A thread is never in a futex wait and a sleep at the same time.
   - **Return value.** A sleep whose deadline has passed returns 0 even if a signal is also pending, as on Linux: the signal is then delivered on return to ring 3. `-EINTR` writes the remaining time to `rem`.
-  - **Arm B2.** Two forked sleepers each call `nanosleep(5 s)` and set a ready flag in a shared page first. The parent waits for the flag, then 200 ms more.
+  - **Arm B2.** Two forked sleepers each call `nanosleep(5 s)` and set a ready flag in a shared page first. The parent waits for the flag, then waits until `SYS_GETPROCS` reports the sleeper `THREAD_BLOCKED`, so the signal arrives during the block and not before it (CodeRabbit on #130). A sleeper that never blocks fails the arm.
     - It sends the first sleeper `SIGUSR1`, which has a handler. That sleeper must return `-EINTR` with 0 < `rem` < 5 s.
     - It sends the second sleeper `SIGKILL`.
     - The parent times each `wait4` from the moment the signal was sent. Both must take less than 2 s.
@@ -212,7 +212,7 @@ Two findings on the P1 code (#130, head `b3a319d`), checked against the code and
   - **Arm B3:** a third forked 5 s sleeper, with no handler, gets `SIGTERM` 200 ms after it is ready. It must be reaped within 2 s. Sentinel: `PRADYOS_SCHED_B3 term_ok=1`.
     - **Mutant C2c:** drop `signal_fatal_pending` from the check. The sleeper then runs about 5 s, so arm B3 is red.
     - **Vacuity:** on `22c3f09` the arm is red.
-  - B2 and B3 also treat a failed `kill` or a `wait4` that does not reap the child as a failure (CodeRabbit). Otherwise a child that had already exited would read as a fast kill.
+  - B2 and B3 also treat as a failure a `kill` that fails, a `wait4` that does not reap the child, and an exit status other than the expected one (CodeRabbit). The expected status is 0 for the handled-signal sleeper, which exits by itself, and -1 for the two the kernel ends. Otherwise a child that had already exited would read as a fast kill.
   - **Not changed here:** `FUTEX_WAIT` (`kernel/proc/futex.c`) has the same gap for default-terminate signals. It predates this PR, so the futex path is not widened without its own gate. DDR-1206 fixes it, with arm FK in `smoke-thread`.
 
 QEMU only, not verified on real hardware.
