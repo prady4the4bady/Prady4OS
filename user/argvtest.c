@@ -20,6 +20,7 @@
 #define SYS_EXIT    4
 #define SYS_WRITE   6
 #define SYS_EXECVE 14
+#define SYS_SET_TLS 27
 
 static inline long nsi(long n, long a1, long a2, long a3) {
     long r;
@@ -47,6 +48,12 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     argv[0] = a0; argv[1] = a1; argv[2] = a2; argv[3] = 0;
     envp[0] = e0; envp[1] = 0;
 
+    /* DDR-1205: give this thread a thread pointer of its own (an address in
+     * this image's text) so ARGTEST can check that execve did not keep it. */
+    if (nsi(SYS_SET_TLS, (long)(void *)&wr, 0, 0) != 0) {
+        wr("ARGVTEST FAIL: set_tls\n");
+        nsi(SYS_EXIT, 1, 0, 0);
+    }
     long rc = nsi(SYS_EXECVE, (long)"/ARGTEST.ELF", (long)argv, (long)envp);
 
     /* execve does not return on success, so reaching here is the failure. */
