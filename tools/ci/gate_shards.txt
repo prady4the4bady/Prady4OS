@@ -239,3 +239,4 @@
 6	smoke-tlbshoot	240	strict
 0	smoke-shm	180	strict
 2	smoke-thread	240	strict
+2	smoke-schedclass	240	strict

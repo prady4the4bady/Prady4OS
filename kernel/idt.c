@@ -373,6 +373,7 @@ static void timer_tick(struct regs *r) {
         vdso_data->seq++;              /* odd = write in progress */
         vdso_data->wall_time_ns += 10000000ull;   /* 10 ms per tick @100 Hz */
         vdso_data->seq++;              /* even = write complete  */
+        vdso_time_update();            /* DDR-1188 K7: TSC clock rebase */
     }
     sched_tick();
     /* DDR-1167 §4: BSP-only by construction (timer_tick runs on the BSP), the

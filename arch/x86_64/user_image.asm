@@ -571,6 +571,11 @@ global threadtest_elf_end
 threadtest_elf:
     incbin "build/threadtest.elf"
 threadtest_elf_end:
+global schedtest_elf
+global schedtest_elf_end
+schedtest_elf:
+    incbin "build/schedtest.elf"
+schedtest_elf_end:
 
 global disktest_elf
 global disktest_elf_end
