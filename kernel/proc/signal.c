@@ -65,6 +65,15 @@ int signal_interruptible(const struct tcb *t) {
     return 0;
 }
 
+int signal_fatal_pending(const struct tcb *t) {
+    uint64_t d = deliverable(t);
+    for (int sig = 1; sig < NSIG; sig++)        /* the set signal_deliver ends on */
+        if ((d & (1ull << sig)) && !t->sig_handlers[sig] &&
+            (sig == SIGTERM || sig == SIGPIPE))
+            return 1;
+    return 0;
+}
+
 void signal_exec_reset(struct tcb *t) {
     for (int i = 0; i < NSIG; i++) {
         t->sig_handlers[i] = 0;   /* the old image's handler VAs mean nothing now */

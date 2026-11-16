@@ -181,3 +181,38 @@ the arm is written.
   - P6's tickless idle must program a wake for the K2 throttle's budget replenishment, so a throttled RT thread on an idle CPU runs again.
 
 Everything in this amendment is design; nothing is built. QEMU only, not verified on real hardware.
+
+## Amendment 2 (CodeRabbit on #130, before merge)
+
+Two findings on the P1 code (#130, head `b3a319d`), checked against the code and accepted.
+
+- **A2-1. A blocked `nanosleep` must wake on a signal.**
+  - **The defect.** `sig_raise` wakes a blocked thread only through `futex_kick`, which acts on `t->fx_lock`. P1's sleep set `block_lk` but never `fx_lock`, so a handled signal or `SIGKILL` that arrives during the sleep is not seen until the block ends. A `nanosleep(1 h)` made its process unkillable for an hour. The `-EINTR` path ran only for a signal already pending between blocks.
+  - **The fix.**
+    - The sleeper takes its static lock (`g_nsleep_lk`) once, sets `t->fx_lock` to it, and loops under it: deadline check, then signal check, then `sched_block_timeout`.
+    - `futex_kick` takes the same lock before `sched_unblock`. A signal raised after the check therefore waits until the wait is published, then wakes it. No wake is lost.
+    - `fx_lock` is cleared before the lock is dropped.
+    - **Reusing `fx_lock`.** It is the one "wake me on a signal" hook `sig_raise` already calls. A thread is never in a futex wait and a sleep at the same time.
+  - **Return value.** A sleep whose deadline has passed returns 0 even if a signal is also pending, as on Linux: the signal is then delivered on return to ring 3. `-EINTR` writes the remaining time to `rem`.
+  - **Arm B2.** Two forked sleepers each call `nanosleep(5 s)` and set a ready flag in a shared page first. The parent waits for the flag, then waits until `SYS_GETPROCS` reports the sleeper `THREAD_BLOCKED`, so the signal arrives during the block and not before it (CodeRabbit on #130). A sleeper that never blocks fails the arm.
+    - It sends the first sleeper `SIGUSR1`, which has a handler. That sleeper must return `-EINTR` with 0 < `rem` < 5 s.
+    - It sends the second sleeper `SIGKILL`.
+    - The parent times each `wait4` from the moment the signal was sent. Both must take less than 2 s.
+    - Sentinel: `PRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1`.
+    - **Vacuity:** on `b3a319d` both sleepers run the full 5 s, so the arm is red.
+    - **Mutant C2b:** never set `fx_lock`. Both waits run out, so arm B2 is red.
+- **A2-2. Ordered TSC sample in the reader.**
+  - `ktime_mono_ns()` and the probe's vDSO reader sample the TSC with `lfence; rdtsc`, the pattern A1-1 uses.
+  - Without the fence, `rdtsc` may execute before the `seq` and base loads that precede it. The sample would then not belong to the base it is combined with.
+  - P1's clamp of a negative delta to 0 already kept the result at or above `ns_base`. The fence makes the reading's order explicit instead of relying on that clamp.
+  - This is not gated separately (as with C1b, A1-3): a mutant would need a reordering that TCG does not produce.
+- **A2-3. Default-terminate signals end the sleep too** (CodeRabbit on #130, second review).
+  - An unmasked `SIGTERM` or `SIGPIPE` with no handler is woken by A2-1's kick. But `signal_interruptible` (which requires a handler) and `signal_kill_pending` (`SIGKILL` only) both miss it, so the sleeper blocked again, and default termination waited out the whole sleep.
+  - **The fix:** a new predicate, `signal_fatal_pending(t)`. It covers an unmasked pending `SIGTERM` or `SIGPIPE` with no handler, the set `signal_deliver` ends a thread on (DDR-805). The sleep checks it alongside the other two and returns `-EINTR`, and `signal_deliver` then ends the thread on the way out.
+  - **Arm B3:** a third forked 5 s sleeper, with no handler, gets `SIGTERM` 200 ms after it is ready. It must be reaped within 2 s. Sentinel: `PRADYOS_SCHED_B3 term_ok=1`.
+    - **Mutant C2c:** drop `signal_fatal_pending` from the check. The sleeper then runs about 5 s, so arm B3 is red.
+    - **Vacuity:** on `22c3f09` the arm is red.
+  - B2 and B3 also treat as a failure a `kill` that fails, a `wait4` that does not reap the child, and an exit status other than the expected one (CodeRabbit). The expected status is 0 for the handled-signal sleeper, which exits by itself, and -1 for the two the kernel ends. Otherwise a child that had already exited would read as a fast kill.
+  - **Not changed here:** `FUTEX_WAIT` (`kernel/proc/futex.c`) has the same gap for default-terminate signals. It predates this PR and is recorded as a follow-up, so the futex path is not widened without its own gate.
+
+QEMU only, not verified on real hardware.

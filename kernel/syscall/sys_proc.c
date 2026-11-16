@@ -20,6 +20,9 @@
 #include "irq.h"               /* g_ticks (DDR-748)                               */
 #include "pmm.h"               /* pmm_free_page_count (DDR-748)                    */
 #include "string.h"            /* memset for SYS_SYSINFO (cpu_cpuid via cpu_mitigations.h above) */
+#include "vdso_page.h"         /* ktime_mono_ns / ktime_real_ns (DDR-1188 K7) */
+#include "signal.h"            /* signal_interruptible (nanosleep EINTR)       */
+#include "spinlock.h"
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -240,6 +243,79 @@ static long sys_setname(long uname, long a2, long a3, long a4, long a5, long a6)
     return 0;
 }
 
+/* ---- DDR-1188 P1 (C1.5): the time ABI --------------------------------- */
+
+struct k_timespec { int64_t tv_sec; int64_t tv_nsec; };
+#define NS_PER_SEC   1000000000ull
+#define NS_PER_TICK  10000000ull       /* PIT at 100 Hz */
+#define CLK_REALTIME  0
+#define CLK_MONOTONIC 1
+
+static long sys_clock_gettime(long clk, long uts, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    uint64_t ns;
+    if (clk == CLK_MONOTONIC)
+        ns = ktime_mono_ns();
+    else if (clk == CLK_REALTIME)
+        ns = ktime_real_ns();
+    else
+        return -EINVAL;
+    struct k_timespec ts = { (int64_t)(ns / NS_PER_SEC), (int64_t)(ns % NS_PER_SEC) };
+    if (copyout((void __user *)(uintptr_t)uts, &ts, sizeof ts) < 0)
+        return -EFAULT;
+    return 0;
+}
+
+/* Nobody wakes a sleeper early: the wait is a timed block on a word no one
+ * sets. Static storage (DDR-1200 Amendment 2 point 4: the tick sweep may take
+ * a timed wait's lock at any time). */
+static spinlock_t g_nsleep_lk = SPINLOCK_INIT;
+
+/* Sleeps until CLOCK_MONOTONIC reaches start + req, never less: each block is
+ * rem / 10 ms + 1 ticks, and the loop re-reads the clock until the deadline
+ * has passed. A signal ends the sleep with -EINTR and the remaining time in
+ * *urem (DDR-1188 A2-1: the signal wakes the block). */
+static long sys_nanosleep(long ureq, long urem, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    struct k_timespec req;
+    if (copyin(&req, (const void __user *)(uintptr_t)ureq, sizeof req) < 0)
+        return -EFAULT;
+    if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= (int64_t)NS_PER_SEC)
+        return -EINVAL;
+    if ((uint64_t)req.tv_sec > (UINT64_MAX / NS_PER_SEC) / 2)
+        return -EINVAL;                 /* a deadline that would overflow */
+    uint64_t want = (uint64_t)req.tv_sec * NS_PER_SEC + (uint64_t)req.tv_nsec;
+    uint64_t deadline = ktime_mono_ns() + want;
+    struct tcb *t = current_thread;
+    /* DDR-1188 A2-1: sig_raise wakes a blocked thread through futex_kick,
+     * which takes t->fx_lock and unblocks t. Registering this sleep's lock
+     * there makes a signal end the block. The signal check and the block
+     * both run under the lock, so a signal raised after the check waits for
+     * the wait to be published and then wakes it: none is lost. */
+    long ret;
+    uint64_t rem = 0;
+    uint64_t fl = spin_lock_irqsave(&g_nsleep_lk);
+    __atomic_store_n(&t->fx_lock, &g_nsleep_lk, __ATOMIC_SEQ_CST);
+    for (;;) {
+        uint64_t now = ktime_mono_ns();
+        if (now >= deadline) { ret = 0; break; }        /* done, as on Linux */
+        rem = deadline - now;
+        if (signal_interruptible(t) || signal_kill_pending(t) ||
+            signal_fatal_pending(t)) { ret = -EINTR; break; }   /* A2-3 */
+        uint64_t ticks = rem / NS_PER_TICK + 1; /* never shorter than rem */
+        volatile int done = 0;
+        sched_block_timeout(&g_nsleep_lk, &done, ticks);
+    }
+    __atomic_store_n(&t->fx_lock, (spinlock_t *)0, __ATOMIC_SEQ_CST);
+    spin_unlock_irqrestore(&g_nsleep_lk, fl);
+    if (ret == -EINTR && urem) {
+        struct k_timespec r = { (int64_t)(rem / NS_PER_SEC), (int64_t)(rem % NS_PER_SEC) };
+        if (copyout((void __user *)(uintptr_t)urem, &r, sizeof r) < 0)
+            return -EFAULT;
+    }
+    return ret;
+}
+
 void sys_proc_register(void) {
     syscall_register(SYS_LSEEK,   sys_lseek);
     syscall_register(SYS_GETCWD,  sys_getcwd);
@@ -252,4 +328,6 @@ void sys_proc_register(void) {
     syscall_register(SYS_TIME,     sys_time);     /* DDR-749 */
     syscall_register(SYS_MEMINFO,  sys_meminfo);  /* DDR-752 */
     syscall_register(SYS_SETNAME,  sys_setname);  /* DDR-756 */
+    syscall_register(SYS_CLOCK_GETTIME, sys_clock_gettime); /* DDR-1188 A1-4 */
+    syscall_register(SYS_NANOSLEEP,     sys_nanosleep);     /* DDR-1188 A1-4 */
 }
