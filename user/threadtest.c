@@ -49,6 +49,7 @@ void pthr_arms(void);    /* user/pthrtest.c (DDR-1197 Amendment 1) */
 #define WNOHANG        1
 #define SIGKILL        9
 #define SIGUSR1        10
+#define SIGTERM        15
 #define EFAULT         14
 #define FUTEX_WAIT     0
 #define FUTEX_WAKE     1
@@ -177,6 +178,7 @@ struct shared {
     volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
     volatile unsigned c_ctid;  /* arm C */
     volatile uint32_t fw, fdw, few, ffw, fhw, fbw, fcw, ictid;   /* futex words */
+    volatile uint32_t fkw;     /* DDR-1206: arm FK */
     volatile long fq;          /* FD: threads about to wait               */
     volatile long frc, brc, crc, cms, erc, hrc;   /* futex return values  */
     volatile long ready, hdone;
@@ -1105,6 +1107,41 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (fx(&s->fw, 5, 0, 0) == -38) rej++;
     if (fx(&s->fw, FUTEX_WAIT, 0, &bad) == -22) rej++;
     say("PRADYOS_FUTEX_J rejects=%d\n", (long)(rej));
+
+    /* FK (DDR-1206): SIGTERM with no handler ends an untimed FUTEX_WAIT. The
+     * waiter must be seen BLOCKED with its WAIT not returned (frc_f == 99)
+     * before the signal, and must be reaped with status -1 (ended by the
+     * kernel) without its WAIT ever returning to ring 3. */
+    s->fkw = 0; s->ready = 0; s->frc_f = 99;
+    long kp = nsi(SYS_FORK, 0, 0, 0);
+    if (kp < 0) fail("fork");
+    if (kp == 0) {
+        s->ready = 1;
+        s->frc_f = fx(&s->fkw, FUTEX_WAIT, 0, 0);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    long kasleep = await(&s->ready, 2000) && sy_blocked(kp, 2000) && s->frc_f == 99;
+    long kkill = nsi(SYS_KILL, kp, SIGTERM, 0);
+    long kterm = 0;
+    {
+        int st = 0x7fffffff;
+        uint64_t end = now() + 2000 * MS;
+        while (now() < end) {
+            if (nsi(SYS_WAIT4, kp, (long)&st, WNOHANG) == kp) {
+                kterm = kasleep && kkill == 0 && st == -1 && s->frc_f == 99;
+                break;
+            }
+            nsi(SYS_YIELD, 0, 0, 0);
+        }
+        if (st == 0x7fffffff) {          /* never reaped: end it so later arms run */
+            nsi(SYS_KILL, kp, SIGKILL, 0);
+            end = now() + 5000 * MS;
+            while (now() < end && nsi(SYS_WAIT4, kp, (long)&st, WNOHANG) != kp)
+                nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    say("PRADYOS_FUTEX_K term_waiter=%d\n", (long)(kterm));
 
     /* ---- DDR-1193 (C1.4 P3a): psync arms ---- */
     {

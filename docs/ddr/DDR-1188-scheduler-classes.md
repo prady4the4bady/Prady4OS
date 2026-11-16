@@ -213,6 +213,6 @@ Two findings on the P1 code (#130, head `b3a319d`), checked against the code and
     - **Mutant C2c:** drop `signal_fatal_pending` from the check. The sleeper then runs about 5 s, so arm B3 is red.
     - **Vacuity:** on `22c3f09` the arm is red.
   - B2 and B3 also treat a failed `kill` or a `wait4` that does not reap the child as a failure (CodeRabbit). Otherwise a child that had already exited would read as a fast kill.
-  - **Not changed here:** `FUTEX_WAIT` (`kernel/proc/futex.c`) has the same gap for default-terminate signals. It predates this PR and is recorded as a follow-up, so the futex path is not widened without its own gate.
+  - **Not changed here:** `FUTEX_WAIT` (`kernel/proc/futex.c`) has the same gap for default-terminate signals. It predates this PR, so the futex path is not widened without its own gate. DDR-1206 fixes it, with arm FK in `smoke-thread`.
 
 QEMU only, not verified on real hardware.
