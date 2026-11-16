@@ -30,6 +30,7 @@
 #include "vmm.h"
 #include "tlb.h"
 #include "console.h"      /* kline: one write per line (DDR-1055) */
+#include "sched.h"        /* current_thread: who releases (DDR-1178 A4.10) */
 
 struct shm_obj {
     uint32_t used;                     /* 0 free, 1 live, 2 reclaiming, 3 dead (A2.4) */
@@ -429,6 +430,7 @@ int shm_vma_writeback(uint64_t cr3, const struct vm_area *v, uint64_t from,
     }
 
     int err = 0;
+    uint64_t wrote = 0;
     for (uint64_t i = 0; i < npages; i++) {
         if (!(dirty[i / 64] & (1ull << (i % 64))))
             continue;
@@ -453,7 +455,21 @@ int shm_vma_writeback(uint64_t cr3, const struct vm_area *v, uint64_t from,
                 kline_s(&k, "\r\n");
                 kline_emit(&k);
             }
+        } else {
+            wrote++;
         }
+    }
+    /* DDR-1178 A4.10: a release done by a thread with no address space is a
+     * kernel thread's (the reaper's). A wait4 caller always has an mm, so this
+     * line names the one path where no process context exists. */
+    if (mode == SHM_WB_RELEASE && wrote && !current_thread->mm) {
+        kline k; kline_init(&k);
+        kline_s(&k, "[shm] release wb by=");
+        kline_s(&k, current_thread->name ? current_thread->name : "?");
+        kline_s(&k, " pages=");
+        kline_d(&k, wrote);
+        kline_s(&k, "\r\n");
+        kline_emit(&k);
     }
     return err;
 }
