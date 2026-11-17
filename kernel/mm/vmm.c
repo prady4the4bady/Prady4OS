@@ -242,9 +242,8 @@ static int user_guard_refuses(uint64_t pml4_phys, uint64_t virt) {
     if (!g_kernel_pml4)
         return 0;                                    /* D3: no master yet */
     unsigned slot = idx(virt, 4);
-    if (pml4_phys != g_kernel_pml4 &&
-        !(table_at(g_kernel_pml4)[slot] & PTE_PRESENT))
-        return 0;
+    if (pml4_phys != g_kernel_pml4)
+        return 0;                                    /* MUTANT M1 */
     __atomic_add_fetch(&g_vmm_user_guard_hits, 1, __ATOMIC_RELAXED);
     kline k; kline_init(&k);
     if (__atomic_load_n(&g_vmm_user_guard_expect, __ATOMIC_ACQUIRE)) {
