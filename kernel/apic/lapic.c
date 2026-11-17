@@ -297,8 +297,7 @@ int hrt_arm(struct tcb *t, uint64_t deadline_ns) {
         t->hr_win = now;
         t->hr_n   = 0;
     }
-    if (t->hr_n >= HR_BUDGET)
-        return 0;                                   /* budget spent: tick only */
+    /* MUTANT C13: no budget check */
     struct hr_cpu *h = &g_hr[pc->cpu_idx];
     uint64_t fl = spin_lock_irqsave(&h->lk);
     int i;
