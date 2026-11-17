@@ -2,30 +2,36 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-11-15)
+## State (2026-11-17)
 
-- **dev/phase1 tip:** `31edffa` (#125, C1.4 P5b: the lockless timer-tick sweep on RCU and the deferred tcb free, DDR-1200 Amendments 2–3). Before it: #126 `debb6a4` (DDR-1203, `map_core` guard design, docs only), #124 `adc4e5c`, #123 `3f9be84` (P5a), #122 `950fc44`, #118 `baac4dd`, #120 `9dba21f`.
-- **Kernel:** `kernel.bin` 1,638,794 B against the 1,703,936 B gate, 65,142 B headroom (measured at `baac4dd`). P5b changes the default build; measured at `31edffa`: 1,638,794 B, sha256 prefix `23ff2ca01b49b863` (the headroom figure in CLAUDE.md is still the `baac4dd` one and should be re-measured with the size gate). NSI: next free 120. DDR numbers: 1200–1203 in use; **1204 withdrawn** (#127 closed: a duplicate of DDR-1188, the merged C1.5 design); next free is 1205. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
+- **dev/phase1 tip:** `5086ec6` (#136, C1.5 P2: one-shot LAPIC timers, DDR-1188 Amendment 3; arms C and M). Before it: `0f16c16` (#133, DDR-1206 and Amendment 1: `FUTEX_WAIT` ends on a handlerless SIGTERM/SIGPIPE, but not inside an active handler; arms FK, FL). Before it: #134 `03a3326` (DDR-1178 §A4.10, arm FR, the reaper-path write-back gate; closed #108), #131 `b2181de` (DDR-1205, `execve` resets the FS base; closed #110), #130 `ec6187d` (C1.5 P1).
+- **Kernel:** `kernel.bin` 1,663,370 B against the 1,703,936 B gate, 40,566 B headroom (printed by CI on `a10315a`, run 44087243331). NSI: next free 122. DDR numbers: next free is 1207. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
 - **Work queue (#45 6761846242, the newest owner comment):**
-  1. ~~#115~~ #118. 2. ~~#112~~ #120. 3. ~~RCU code~~ P5a #123, P5b #125 (RCU ticked in the checklist).
-  4. **Next: C1.5 from DDR-1188** (already designed, merged in #95/#96/#99): P1 the time ABI (`clock_gettime`, `nanosleep` on the existing TSC calibration and vDSO), then P2–P6. Then C1.6 from DDR-1189, C1.7 from DDR-1179 (check the stale KASLR PRs #82, #84, #85 first), then deadlock detection (needs a DDR; none exists).
-  - Notes for DDR-1188 from the #127 review: P3's priority inheritance must move a boosted fair owner onto the RT queue and back; P6's tickless idle must wake on RT-throttle budget replenishment.
-  - **Merge terms:** the five conditions of 6594914166, with the evidence posted on #45 before the merge. dev/phase1 requires branches to be up to date (strict status checks): merging one PR puts the others behind, and a base merge changes the head, so gated mutants must be re-run on the new head. Merge one gated PR at a time. At most 3 CI runs at once. Post status on #45 at the end of each item, and a full remaining-items list on Nov 16.
-- **Small tasks for later (6761846242 item 5: only while CI runs):**
-  - **#110:** `execve` keeps the old FS base. Code reading done on #110: exec reuses the caller's tcb and never resets `fs_base` or the MSR. Next: the diagnostic probe (plan step 1). The kernel fix waits for the operator (6655226539).
-  - **#108:** the reaper-path gate for the write-back authorization fix (S4-8 survived).
-  - The surface logging DDR-1199 proposes, as its own PR.
-  - The `map_core` guard: designed in DDR-1203 (#126); next is its code, gate `smoke-mapguard` and mutants M1–M3 (M4, M5 stated not gated).
-- **Issues filed this round:** #116 (exit walks), #117 (liveness-gate rebuild), #119 (`vmm_protect_range` address bound wraps). All open, not changed.
+  1. ~~#115~~ #118. 2. ~~#112~~ #120. 3. ~~RCU code~~ #123, #125.
+  4. **C1.5 from DDR-1188:** ~~P1~~ #130, ~~P2~~ #136. **P3 is next** (FIFO/RR, throttle, `RES_SCHED`, `kmutex` PI: DDR-1188 Amendment 4, written on local branch `c15-p3`; arms D, E, F, G, H, N, P; mutants C4–C8b, C14, C16). Then P4–P6. Then C1.6 from DDR-1189, C1.7 from DDR-1179 (check the stale KASLR PRs #82, #84, #85 first), then deadlock detection (needs a DDR; none exists).
+  - Notes for DDR-1188 (A1-5): P3's priority inheritance must move a boosted fair owner onto the RT queue and back; P6's tickless idle must wake on RT-throttle budget replenishment.
+  - **Merge terms:** the five conditions of 6594914166, with the evidence posted on #45 before the merge. dev/phase1 requires branches to be up to date (strict status checks): merging one PR puts the others behind, and a base merge changes the head, so gated mutants must be re-run on the new head. Merge one gated PR at a time. At most 3 CI runs at once. Post status on #45 at the end of each item.
+- **Open PRs:**
+  - **Branch `ddr1203-mapguard`** (`df3685f`, base `0f16c16` merged, no PR yet): the DDR-1203 `map_core` guard, gate `smoke-mapguard`, `GLOBAL_FORBIDDEN` count 78. G-B moved from slot 256 to slot 0 (Amendment 1: `vmm_unmap` frees emptied tables up to the top level). Local: M1 red on G-A/G-B, M2 on G-C, M3 on G-A/G-B/G-C.
+  - **#132** (this bookkeeping).
+- **Issues filed:** #135 (one local `PTHR_R` "R create" failure in 7 runs; mechanism not named; the probe prints no return code). Earlier, all open: #116, #117, #119.
+- **Follow-ups recorded, not started:** the four other waits that ignore a handlerless SIGTERM (DDR-1206 §4); `signal_deliver` acting on default-terminate signals while a handler is active (DDR-1206 A1).
+- **Lessons:**
+  - Push work as soon as it builds. A container replacement lost an uncommitted build once.
+  - Never `git checkout <file>` to drop a mutant from a tree with uncommitted work; revert the mutant with its own script.
+  - A probe's design assumption about kernel state (DDR-1203's slot 256) must be checked by running it before the gate is trusted.
+  - A probe arm that a mutant can damage must restore what it snapshots whatever the call returned, or one mutant's damage reaches the control arm.
+- **Small tasks still open (6761846242 item 5):** the surface logging DDR-1199 proposes, as its own PR.
 - **Known CI defects:**
   - shard 8 `smoke-rqstress` "CPU stops ticking" (DDR-987 §8), seen once on #80; not fixed.
-  - A runner DNS outage (`Temporary failure resolving 'azure.archive.ubuntu.com'` in `apt_prepare.sh`) blocked CI from about 13:50 to before 17:30 UTC on Nov 11. Outside the repo.
-  - A pull_request run that fails for that reason keeps `mergeable_state` `blocked` even after a green workflow_dispatch run on the same SHA. A fresh pull_request run clears it.
+  - A pull_request run that fails for a runner outage keeps `mergeable_state` `blocked` even after a green workflow_dispatch run on the same SHA. A fresh pull_request run clears it.
+  - The `github-advanced-security` check fails with "exceeded your monthly quota" (#134); not a required check.
 - **Open decision:** the futex `g_ticks` deadline, A/B in #45 6571670160.
 
 ## Next
 
-- C1.5 P1 per DDR-1188 §2–§4 (the time ABI, `smoke-schedclass` arms A and B, mutants C1 and C2).
+- Open and merge the DDR-1203 PR (merge the base first).
+- C1.5 P3 per DDR-1188 Amendment 4; it also carries the T5 correction CodeRabbit asked for on #136 (round the count up, reword T5).
 - Then continue from the next unticked item in `docs/V1_MASTER_CHECKLIST.md`. C11.1 stays last.
 
 ## Open blockers
