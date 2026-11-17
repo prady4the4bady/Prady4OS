@@ -477,6 +477,7 @@ GLOBAL_FORBIDDEN="$(printf '%s\n' \
     '[kline] TRUNC' \
     '[uline] TRUNC' \
     '[schedcheck]' \
+    '[vmm] FAIL: user leaf under a kernel-shared top-level entry' \
     '[percpu] gs FAIL' '[percpu] current FAIL')"
 [ -n "${SKIP_GLOBAL_FORBIDDEN:-}" ] && GLOBAL_FORBIDDEN=""
 

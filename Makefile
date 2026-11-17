@@ -4518,6 +4518,17 @@ smoke-tlbshoot: $(IMG) fat-image sfs-image
 	@grep -a "\[tlbshoot\]" build/tlbshoot.log || true
 	@echo "[tlbshoot] PASS"
 
+# DDR-1203: map_core refuses a user leaf under a kernel-shared top-level entry.
+# Kernel self-test (QEMU_PROBES=mapguard): arms G-A..G-C refused, G-D control.
+smoke-mapguard: $(IMG) fat-image sfs-image
+	@rm -f build/mapguard.log
+	@SERIAL_LOG=build/mapguard.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=mapguard \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MAPGUARD a=1 b=1 c=1 d=1 hits=3')" \
+	FORBIDDEN_SENTINEL="PRADYOS_MAPGUARD FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -a "\[vmm\] guard\|PRADYOS_MAPGUARD" build/mapguard.log || true
+	@echo "[mapguard] PASS"
+
 # DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. Arms A-F (DDR-1178 §4).
 smoke-shm: $(IMG) fat-image sfs-image
 	@rm -f build/shm.log

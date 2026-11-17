@@ -5029,6 +5029,8 @@ void kmain(struct boot_info *bi) {
     /* DDR-804: read the boot-time probe list before anything can consult it.
      * Two port reads, no wait, no allocation; fails closed when absent. */
     fwcfg_init();
+    if (probe_enabled("mapguard"))       /* DDR-1203: smoke-mapguard; after vmm_test filled slot 256 */
+        vmm_mapguard_probe();
     if (probe_enabled("kimg"))           /* DDR-1143 §10.4: before any FS work */
         kimg_probe();
 

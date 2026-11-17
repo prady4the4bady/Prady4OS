@@ -72,6 +72,8 @@ uint64_t vmm_new_address_space(void);
 
 /* Map a page into a SPECIFIC address space `pml4_phys` (need not be active). */
 int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
+/* DDR-1203 §4: the smoke-mapguard self-test (QEMU_PROBES=mapguard). */
+void vmm_mapguard_probe(void);
 
 /* ADR-038: user stack layout. Single definition — the ELF loader maps the top
  * page against these and the #PF growth path range-tests against them; two

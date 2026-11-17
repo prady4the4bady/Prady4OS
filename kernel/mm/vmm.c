@@ -230,10 +230,44 @@ static int table_empty(const uint64_t *t) {
  * Low 12 flag bits (RW/USER/PWT/PCD/...) and the NX bit (63) are both honored;
  * everything else is derived. Intermediate tables never carry NX, so an X leaf
  * under a user-walkable path can still execute. */
+/* DDR-1203: a user leaf may not go under a top-level entry the kernel master
+ * populates (those subtrees are shared by every address space), nor into the
+ * master itself (a new subtree there would be shared by every later process).
+ * Refused before any descend, so nothing is promoted or allocated. */
+static uint32_t g_vmm_user_guard_hits;      /* refusals, expected or not   */
+static int      g_vmm_user_guard_reported;  /* once-flag: unexpected only   */
+static int      g_vmm_user_guard_expect;    /* probe-only latch (§4)        */
+
+static int user_guard_refuses(uint64_t pml4_phys, uint64_t virt) {
+    if (!g_kernel_pml4)
+        return 0;                                    /* D3: no master yet */
+    unsigned slot = idx(virt, 4);
+    if (pml4_phys != g_kernel_pml4 &&
+        !(table_at(g_kernel_pml4)[slot] & PTE_PRESENT))
+        return 0;
+    __atomic_add_fetch(&g_vmm_user_guard_hits, 1, __ATOMIC_RELAXED);
+    kline k; kline_init(&k);
+    if (__atomic_load_n(&g_vmm_user_guard_expect, __ATOMIC_ACQUIRE)) {
+        kline_s(&k, "[vmm] guard refused (expected) va=");
+    } else {
+        if (__atomic_exchange_n(&g_vmm_user_guard_reported, 1, __ATOMIC_ACQ_REL))
+            return 1;                                /* D2: report once */
+        kline_s(&k, "[vmm] FAIL: user leaf under a kernel-shared top-level entry va=");
+    }
+    kline_x(&k, virt);
+    kline_s(&k, " slot=");
+    kline_d(&k, slot);
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
+    return 1;
+}
+
 static int map_core(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
     uint64_t *pml4 = table_at(pml4_phys);
     int user = (flags & VMM_USER) ? 1 : 0;
 
+    if (user && user_guard_refuses(pml4_phys, virt))
+        return -1;                                   /* DDR-1203 D1 */
     uint64_t pdpt = descend(pml4, idx(virt, 4), 1, user);
     if (!pdpt) return -1;
     uint64_t pd = descend(table_at(pdpt), idx(virt, 3), 1, user);
@@ -574,4 +608,102 @@ uint64_t vmm_resolve(uint64_t cr3, uint64_t virt) {
     e = table_at(e & PTE_ADDR)[idx(virt, 1)];
     if (!(e & PTE_PRESENT)) return 0;
     return e & PTE_ADDR;
+}
+
+/* ---- DDR-1203 §4: probe `mapguard` (smoke-mapguard) ------------------------
+ * Every arm works on a fresh address space or snapshots and restores what it
+ * could change, so an unguarded tree (a mutant) is red without breaking the
+ * rest of the boot more than it must. Three refusals are tripped on purpose,
+ * under the expect latch, so they print the expected line, not the forbidden
+ * one, and leave the once-flag clear. */
+#define MG_VA_SLOT511 0xFFFFFF8000000000ull   /* start of the kernel's slot 511 */
+/* Slot 0 (the low identity map) is always present in the master. 0x7F00000000
+ * is PDPT index 508, far above the identity-mapped range, so an unguarded map
+ * there would really succeed. Slot 256 (DDR-1203 §4) is not used: vmm_unmap
+ * frees emptied tables up to the top level, so vmm_test leaves it empty. */
+#define MG_VA_SLOT0   0x0000007F00000000ull
+#define MG_VA_SLOT1   0x0000008000200000ull   /* the user range                 */
+
+/* Map a user leaf at a kernel-shared slot of a fresh address space; 1 when
+ * refused with the master's top-level entry and the entry below it unchanged,
+ * and the address space's own top-level entry still equal to the master's. */
+static int mg_shared_slot(uint64_t as, uint64_t va) {
+    unsigned s4 = idx(va, 4), s3 = idx(va, 3);
+    uint64_t *kp = table_at(g_kernel_pml4);
+    uint64_t top = kp[s4];
+    if (!(top & PTE_PRESENT) || (top & PTE_PS))
+        return 0;                                    /* precondition: shared slot */
+    uint64_t *pdpt = table_at(top & PTE_ADDR);
+    uint64_t below = pdpt[s3];
+    void *f = ptnode_alloc();
+    if (!f)
+        return 0;
+    int rc = vmm_map_in(as, va, (uint64_t)(uintptr_t)f, VMM_USER | VMM_RW);
+    int clean = kp[s4] == top && pdpt[s3] == below && table_at(as)[s4] == top;
+    int ok = rc == -1 && clean && !(kp[s4] & VMM_USER);
+    if (clean && rc == -1) {
+        ptnode_free(f);                              /* nothing points at it */
+    } else {                                         /* undo; the frame leaks */
+        kp[s4] = top;
+        pdpt[s3] = below;
+        table_at(as)[s4] = top;
+        invlpg(va);
+    }
+    return ok;
+}
+
+void vmm_mapguard_probe(void) {
+    if (!g_kernel_pml4) {
+        kputs("PRADYOS_MAPGUARD FAIL: no master root\r\n");
+        return;
+    }
+    uint32_t h0 = __atomic_load_n(&g_vmm_user_guard_hits, __ATOMIC_RELAXED);
+    uint64_t as = vmm_new_address_space();
+    if (!as) {
+        kputs("PRADYOS_MAPGUARD FAIL: no address space\r\n");
+        return;
+    }
+    __atomic_store_n(&g_vmm_user_guard_expect, 1, __ATOMIC_RELEASE);
+    int a = mg_shared_slot(as, MG_VA_SLOT511);       /* G-A */
+    int b = mg_shared_slot(as, MG_VA_SLOT0);         /* G-B */
+    /* G-C: a user leaf into the master itself, in its empty user slot. */
+    uint64_t *kp = table_at(g_kernel_pml4);
+    unsigned s1 = idx(MG_VA_SLOT1, 4);
+    int c = 0;
+    if (!(kp[s1] & PTE_PRESENT)) {
+        void *f = ptnode_alloc();
+        if (f) {
+            int rc = vmm_map_in(g_kernel_pml4, MG_VA_SLOT1, (uint64_t)(uintptr_t)f,
+                                VMM_USER | VMM_RW);
+            int clean = !(kp[s1] & PTE_PRESENT);
+            c = rc == -1 && clean;
+            if (clean && rc == -1) {
+                ptnode_free(f);
+            } else {
+                kp[s1] = 0;                          /* undo: leaks the tables */
+                invlpg(MG_VA_SLOT1);
+            }
+        }
+    }
+    __atomic_store_n(&g_vmm_user_guard_expect, 0, __ATOMIC_RELEASE);
+    uint32_t hits = __atomic_load_n(&g_vmm_user_guard_hits, __ATOMIC_RELAXED) - h0;
+    /* G-D (control): a legal user map in the private slot still works. */
+    int d = 0;
+    void *fd = ptnode_alloc();
+    if (fd) {
+        int rc = vmm_map_in(as, MG_VA_SLOT1, (uint64_t)(uintptr_t)fd, VMM_USER | VMM_RW);
+        uint64_t *pte = rc == 0 ? leaf_pte(as, MG_VA_SLOT1) : 0;
+        d = pte && (*pte & PTE_PRESENT) && (*pte & PTE_ADDR) == (uint64_t)(uintptr_t)fd;
+        if (rc != 0)
+            ptnode_free(fd);                         /* else destroy frees it */
+    }
+    vmm_destroy_address_space(as);
+    kline k; kline_init(&k);
+    kline_s(&k, "PRADYOS_MAPGUARD a="); kline_d(&k, (uint64_t)a);
+    kline_s(&k, " b=");    kline_d(&k, (uint64_t)b);
+    kline_s(&k, " c=");    kline_d(&k, (uint64_t)c);
+    kline_s(&k, " d=");    kline_d(&k, (uint64_t)d);
+    kline_s(&k, " hits="); kline_d(&k, hits);
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
 }
