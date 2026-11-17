@@ -576,6 +576,11 @@ global schedtest_elf_end
 schedtest_elf:
     incbin "build/schedtest.elf"
 schedtest_elf_end:
+global schedagt_elf
+global schedagt_elf_end
+schedagt_elf:
+    incbin "build/schedagt.elf"     ; DDR-1188 A4: arm H's agent copy
+schedagt_elf_end:
 
 global disktest_elf
 global disktest_elf_end

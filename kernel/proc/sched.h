@@ -289,7 +289,49 @@ struct tcb {
     /* DDR-1200 D5: link on the list of tcbs waiting for a grace period before
      * their memory is freed. Not the ring link: a sweep may still follow ->next. */
     struct tcb *rcu_next;
+    /* DDR-1188 Amendment 4 (C1.5 P3): scheduling class. Appended last: no
+     * pinned offset moves. Every field has an initialiser in
+     * sched_create_state (kmalloc does not zero). */
+    uint32_t   sched_policy;   /* SCHED_OTHER / SCHED_FIFO / SCHED_RR (S3)       */
+    uint32_t   rt_prio;        /* 1-99 for FIFO and RR, 0 for OTHER              */
+    uint32_t   pi_prio;        /* S6: kmutex inheritance, 0 = not boosted        */
+    uint32_t   rr_left;        /* S5: RR ticks left in the slice                 */
+    uint32_t   rt_head;        /* S2: the next rq_push puts this thread first    */
+    uint32_t   kmx_held;       /* S6: kmutexes this thread holds                 */
+    cap_t      sched_cap;      /* S3: the RES_SCHED handle, CAP_NULL = none      */
 };
+
+/* DDR-1188 Amendment 4 (C1.5 P3). */
+#define SCHED_OTHER   0u
+#define SCHED_FIFO    1u
+#define SCHED_RR      2u
+#define SCHED_RT_MAX  99u
+#define RR_SLICE      10u      /* K3: 100 ms at the 100 Hz tick (S5)         */
+#define RT_WIN_TICKS  20u      /* S4: RT runs at most RT_WIN_TICKS - 1 of every RT_WIN_TICKS */
+#define SCHED_RES_ID  0x52545343ull   /* "RTSC": one res_id, like RES_EXEC */
+
+/* The effective priority: the higher of the thread's own RT priority and the
+ * one it inherited through a kmutex (S6). Above 0 means "RT" for the picker. */
+static inline uint32_t sched_eff_prio(const struct tcb *t) {
+    uint32_t a = __atomic_load_n(&t->rt_prio, __ATOMIC_RELAXED);
+    uint32_t b = __atomic_load_n(&t->pi_prio, __ATOMIC_RELAXED);
+    return a > b ? a : b;
+}
+/* Threads whose effective priority is above 0, system-wide (S1). 0 = the
+ * pick and the tick take today's path. */
+extern volatile uint32_t g_rt_threads;
+/* S3: the calling thread's own policy. 0, -EINVAL or -EPERM. */
+int  sched_setsched_self(uint32_t policy, uint32_t prio);
+/* S3: kernel-only grant of RES_SCHED with `rights`. -EPERM for an agent. */
+int  sched_grant(struct tcb *t, uint32_t rights);
+/* S3: sched_grant on the live process `pid`, found and granted under
+ * g_sched_lock (the DDR-1157 pattern). 0, -EPERM, -ESRCH or -EINVAL. */
+int  sched_grant_pid(uint32_t pid, uint32_t rights);
+/* Arm P: the schedclass probe is on (sys_thread.c; set by main.c). */
+extern volatile uint32_t g_sched_probe;
+/* S6: raise t's inherited priority to at least p / drop it to 0. */
+void sched_pi_raise(struct tcb *t, uint32_t p);
+void sched_pi_clear(struct tcb *t);
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
  * value copy (no pointers), so a caller can copyout it directly. */

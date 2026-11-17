@@ -152,6 +152,8 @@ USER_THR_ELF := build/threadtest.elf
 USER_PTHR_SRC := user/pthrtest.c       # DDR-1197: pthr.h arms, linked into threadtest.elf
 USER_SCHED_SRC := user/schedtest.c     # DDR-1188: scheduler classes, smoke-schedclass (C1.5)
 USER_SCHED_ELF := build/schedtest.elf
+USER_SCHEDAGT_SRC := user/schedagt.c   # DDR-1188 A4: arm H's agent copy (is_agent, no RES_SCHED)
+USER_SCHEDAGT_ELF := build/schedagt.elf
 USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
 USER_DISK_ELF  := build/disktest.elf
 USER_DOMCAP_SRC := user/domcaptest.c     # DDR-1149: domain capabilities at submission
@@ -657,6 +659,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_THR_ELF) build/threadtest.o build/pthrtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SCHED_SRC) -o build/schedtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHED_ELF) build/schedtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_SCHEDAGT_SRC) -o build/schedagt.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHEDAGT_ELF) build/schedagt.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DOMCAP_SRC) -o build/domcaptest.o
@@ -699,7 +703,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -4497,7 +4501,7 @@ smoke-thread: $(IMG) fat-image sfs-image
 smoke-schedclass: $(IMG) fat-image sfs-image
 	@rm -f build/schedclass.log
 	@SERIAL_LOG=build/schedclass.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=schedclass \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_H fork_eperm=1 agent_grant_eperm=1 own_ok=1\nPRADYOS_SCHED_HA eperm=1\nPRADYOS_SCHED_D preempt_ok=1\nPRADYOS_SCHED_N prio_ok=1\nPRADYOS_SCHED_E rr_ok=1\nPRADYOS_SCHED_F fifo_ok=1\nPRADYOS_SCHED_G throttle_ok=1\nPRADYOS_SCHED_P pi_ok=1 main_pin=1\nPRADYOS_SCHED_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'SCHED FAIL\nschedclass probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[time\] tsc skew\|\[sched\]\|PRADYOS_SCHED\|SCHED FAIL" build/schedclass.log || true

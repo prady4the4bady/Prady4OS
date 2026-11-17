@@ -66,6 +66,9 @@ typedef uint64_t cap_t;
  * capability (A2.1), so a segment is reachable only from a table holding it. */
 #define CAP_SHM_R         (1u << 24)
 #define CAP_SHM_W         (1u << 25)
+/* DDR-1188 Amendment 4 (C1.5 P3), K1: RES_SCHED rights. */
+#define CAP_SCHED_RT      (1u << 26)  /* use SCHED_FIFO / SCHED_RR          */
+#define CAP_SCHED_GRANT   (1u << 27)  /* grant CAP_SCHED_RT to a process    */
 
 /* Resource types a capability can refer to. */
 #define RES_NONE   0u
@@ -84,6 +87,8 @@ typedef uint64_t cap_t;
 #define RES_DOMAIN 5u
 /* DDR-1178 Amendment 2: res_id = the segment's object index (kernel/ipc/shm.c). */
 #define RES_SHM    6u
+/* DDR-1188 Amendment 4: real-time scheduling (K1). One res_id (SCHED_RES_ID). */
+#define RES_SCHED  7u
 #define DOMAIN_RES_OCR    0x4F435200ull   /* "OCR"  */
 #define DOMAIN_RES_SCENE  0x53434E00ull   /* "SCN"  */
 #define DOMAIN_RES_BROWSE 0x42525700ull   /* "BRW"  */

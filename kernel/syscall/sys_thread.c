@@ -18,6 +18,12 @@
 #include "vmm.h"
 #include "syscall.h"
 #include "errno.h"
+#include "kmutex.h"
+
+/* DDR-1188 A4 arm P: set by the launcher when QEMU_PROBES has schedclass;
+ * SYS_SCHED_CPU ops 3 and 4 answer -ENOSYS otherwise. */
+volatile uint32_t g_sched_probe;
+static struct kmutex g_pi_test_mx;      /* zeroed = unlocked */
 #include "percpu.h"   /* DDR-1186: cpu_idx, present */
 
 #define THREAD_MAX_PER_MM  64        /* bound on live threads in one process */
@@ -83,12 +89,56 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
     case 2:                                     /* UNPIN */
         current_thread->pin_cpu = -1;
         return 0;
+    case 3: {                                   /* DDR-1188 A4 arm P: hold the test kmutex */
+        if (!g_sched_probe)
+            return -ENOSYS;
+        if (a_cpu <= 0 || a_cpu > 1000)
+            return -EINVAL;
+        kmutex_lock(&g_pi_test_mx);
+        uint64_t start = current_thread->run_ticks;
+        /* Syscalls run with IF clear (SFMASK). Open short windows, the
+         * za_hold idiom (DDR-1201), so the tick charges and preempts us while
+         * we hold the lock: run_ticks counts only our own CPU time. */
+        while (__atomic_load_n(&current_thread->run_ticks, __ATOMIC_RELAXED) - start <
+               (uint64_t)a_cpu)
+            __asm__ volatile("sti; nop; pause; cli" ::: "memory");
+        kmutex_unlock(&g_pi_test_mx);
+        return 0;
+    }
+    case 4:                                     /* DDR-1188 A4 arm P: lock + unlock it */
+        if (!g_sched_probe)
+            return -ENOSYS;
+        kmutex_lock(&g_pi_test_mx);
+        kmutex_unlock(&g_pi_test_mx);
+        return 0;
     }
     return -EINVAL;
+}
+
+/* DDR-1188 Amendment 4 S3: the calling thread's own scheduling policy. */
+static long sys_sched_setsched(long a_tid, long a_pol, long a_prio, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (a_tid != 0 || a_pol < 0 || a_prio < 0)
+        return -EINVAL;
+    return sched_setsched_self((uint32_t)a_pol, (uint32_t)a_prio);
+}
+
+/* DDR-1188 Amendment 4 S3: grant CAP_SCHED_RT to process `pid`. The caller
+ * needs CAP_SCHED_GRANT; the right granted cannot include it (no grant-on). */
+static long sys_sched_grant(long a_pid, long a_rights, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    struct tcb *self = current_thread;
+    if (!cap_authorize(self->caps, self->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_GRANT))
+        return -EPERM;
+    if (a_rights != (long)CAP_SCHED_RT || a_pid <= 0)
+        return -EINVAL;
+    return sched_grant_pid((uint32_t)a_pid, CAP_SCHED_RT);
 }
 
 void sys_thread_register(void) {
     syscall_register(SYS_THREAD_CREATE, sys_thread_create);
     syscall_register(SYS_THREAD_EXIT,   sys_thread_exit);
     syscall_register(SYS_SCHED_CPU,     sys_sched_cpu);
+    syscall_register(SYS_SCHED_SETSCHED, sys_sched_setsched);   /* DDR-1188 A4 */
+    syscall_register(SYS_SCHED_GRANT,    sys_sched_grant);
 }

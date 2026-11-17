@@ -13,6 +13,9 @@
  *      three malformed timespecs return -EINVAL.
  *      Mutant C2: the sleep rounded down to whole ticks.
  *
+ * C1.5 P3 arms (DDR-1188 Amendment 4): D (C4), E (C5), F (C6), G (C7),
+ * H (C8, C8b; with user/schedagt.c), N (C14), P (C16, DDR-1193 D1).
+ *
  * `[sched]` lines are data; the PRADYOS_SCHED_* lines are the sentinels, each
  * emitted by one write (DDR-1182 §3.1). QEMU (TCG) only; not verified on real
  * hardware.
@@ -432,12 +435,396 @@ static void arm_m(void) {
     say("PRADYOS_SCHED_M capped_ok=%d\n", (long)(n >= M_MIN && n <= M_MAX));
 }
 
+/* ---- C1.5 P3 (DDR-1188 Amendment 4): FIFO, RR, throttle, RES_SCHED, PI ----
+ * Every RT thread is pinned. The main thread pins itself to CPU 0 first, so it
+ * never queues behind an RT spinner. Shared state lives in mapped pages (the
+ * probe has no writable segment). */
+#define POL_OTHER   0
+#define POL_FIFO    1
+#define POL_RR      2
+#define EPERM       1
+#define P3_CPU      2
+#define P3_WCPU     3
+#define FX_WAIT     0
+#define FX_WAKE     1
+
+static long setsched(long pol, long prio) {
+    return nsi(SYS_SCHED_SETSCHED, 0, pol, prio);
+}
+
+static void fx_wait(volatile long *w, long val) {
+    nsi6(SYS_FUTEX, (long)w, FX_WAIT, val, 0, 0, 0);
+}
+
+static void fx_wake(volatile long *w) {
+    nsi6(SYS_FUTEX, (long)w, FX_WAKE, 1, 0, 0, 0);
+}
+
+/* run_ticks of `pid` (DDR-754), -1 if it is not found. *hint caches its
+ * SYS_GETPROCS index, re-checked by pid on every call. */
+static long rticks(long pid, long *hint) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    if (*hint >= 0 && nsi(SYS_GETPROCS, *hint, (long)&pi, 0) == 1 && (long)pi.pid == pid)
+        return (long)pi.run_ticks;
+    for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++)
+        if ((long)pi.pid == pid) {
+            *hint = i;
+            return (long)pi.run_ticks;
+        }
+    return -1;
+}
+
+static void *page(void) {
+    long pg = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (pg < 0) fail("mmap");
+    return (void *)pg;
+}
+
+/* Spin until *p == want; 0 after `sec` s of CLOCK_MONOTONIC. */
+static int await_eq(volatile long *p, long want, long sec) {
+    uint64_t end = mono() + (uint64_t)sec * NS_PER_SEC;
+    while (__atomic_load_n(p, __ATOMIC_ACQUIRE) != want) {
+        if (mono() > end) return 0;
+        __asm__ volatile("pause");
+    }
+    return 1;
+}
+
+/* ---- arms D and N: wake latency, in the spinner's own ticks ----
+ * The spinner resumes when the woken thread blocks again, reads its own
+ * run_ticks (r0) and wakes it at once. The woken thread reads the spinner's
+ * run_ticks when it runs (r1). With P3 the next tick preempts: r1 - r0 = 1.
+ * Without, the spinner first spends the quantum it resumed with: 2. */
+#define DN_TRIES  50
+#define DN_LATE   5
+
+struct dn_state {
+    volatile long fw, armed, abort, done, spid, wpid;
+    volatile long r0, late, max, pinned, setok;
+    long spol, sprio, wprio;
+};
+
+__attribute__((noreturn, force_align_arg_pointer)) static void dn_woken(long arg) {
+    struct dn_state *s = (struct dn_state *)arg;
+    long hint = -1;
+    __atomic_add_fetch(&s->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&s->setok, setsched(POL_FIFO, s->wprio) == 0, __ATOMIC_ACQ_REL);
+    for (long i = 0; i < DN_TRIES && !s->abort; i++) {
+        __atomic_store_n(&s->armed, 2 * i + 1, __ATOMIC_RELEASE);
+        while (!__atomic_load_n(&s->fw, __ATOMIC_ACQUIRE) && !s->abort)
+            fx_wait(&s->fw, 0);
+        long d = rticks(s->spid, &hint) - s->r0;
+        if (d >= 2) s->late++;
+        if (d > s->max) s->max = d;
+        s->fw = 0;
+    }
+    setsched(POL_OTHER, 0);
+    __atomic_store_n(&s->done, 1, __ATOMIC_RELEASE);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void dn_spinner(long arg) {
+    struct dn_state *s = (struct dn_state *)arg;
+    long hint = -1;
+    __atomic_add_fetch(&s->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    if (s->spol != POL_OTHER)
+        __atomic_add_fetch(&s->setok, setsched(s->spol, s->sprio) == 0, __ATOMIC_ACQ_REL);
+    else
+        __atomic_add_fetch(&s->setok, 1, __ATOMIC_ACQ_REL);
+    while (!__atomic_load_n(&s->spid, __ATOMIC_ACQUIRE))   /* tid from spawn(); */
+        __asm__ volatile("pause");                         /* SYS_GETPID is the tgid */
+    for (long i = 0; i < DN_TRIES; i++) {
+        if (!await_eq(&s->armed, 2 * i + 1, 3)) {
+            s->abort = 1;                    /* never re-armed: the woken never ran */
+            fx_wake(&s->fw);
+            break;
+        }
+        s->r0 = rticks(s->spid, &hint);
+        __atomic_store_n(&s->fw, 1, __ATOMIC_RELEASE);
+        fx_wake(&s->fw);
+    }
+    setsched(POL_OTHER, 0);
+    texit();
+}
+
+/* Returns 1 when the arm passes. */
+static long arm_dn(const char *name, long spol, long sprio, long wprio) {
+    struct dn_state *s = page();
+    s->spol = spol; s->sprio = sprio; s->wprio = wprio; s->spid = 0;
+    s->wpid = spawn(dn_woken, (long)s);
+    if (!await_eq(&s->armed, 1, 5)) fail("DN arm");
+    __atomic_store_n(&s->spid, spawn(dn_spinner, (long)s), __ATOMIC_RELEASE);
+    uint64_t end = mono() + 30 * NS_PER_SEC;
+    while (!__atomic_load_n(&s->done, __ATOMIC_ACQUIRE) && mono() < end)
+        nsi(SYS_YIELD, 0, 0, 0);
+    long ok = s->done && !s->abort && s->late <= DN_LATE && s->pinned == 2 && s->setok == 2;
+    say("[sched] %s late=%d of %d max=%d abort=%d pinned=%d setok=%d\n", name,
+        s->late, (long)DN_TRIES, s->max, s->abort, s->pinned, s->setok);
+    return ok;
+}
+
+/* ---- arm E: two RR threads of one priority both make progress ----
+ * Each thread takes RR BEFORE it pins, so the second reaches CPU 2 as an RR
+ * thread and only rotation (not a throttle gap, which goes to SCHED_OTHER)
+ * lets it run there. Without that order arm E depended on the throttle, and
+ * mutant C7 went red here instead of on arm G. */
+struct e_state { volatile long ready, go, done, n[2], pinned, setok; volatile uint64_t end; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void e_thread(long arg) {
+    long me = arg & 1;
+    struct e_state *e = (struct e_state *)(arg & ~1L);
+    __atomic_add_fetch(&e->setok, setsched(POL_RR, 10) == 0, __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&e->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&e->ready, 1, __ATOMIC_ACQ_REL);
+    while (!__atomic_load_n(&e->go, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    long n = 0;
+    while (mono() < e->end)
+        n++;
+    e->n[me] = n;
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&e->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_e(void) {
+    struct e_state *e = page();
+    spawn(e_thread, (long)e | 0);
+    spawn(e_thread, (long)e | 1);
+    long ready = await_eq(&e->ready, 2, 10);   /* 0: one never got CPU 2 */
+    e->end = mono() + NS_PER_SEC;
+    __atomic_store_n(&e->go, 1, __ATOMIC_RELEASE);
+    await_eq(&e->done, 2, 20);
+    long ok = ready && e->done == 2 && e->n[0] > 0 && e->n[1] > 0 &&
+              e->pinned == 2 && e->setok == 2;
+    say("[sched] E n0=%d n1=%d done=%d ready=%d\n", e->n[0], e->n[1], e->done, ready);
+    return ok;
+}
+
+/* ---- arm F: equal FIFO threads do not rotate on quantum expiry ---- */
+#define F_TICKS 30
+
+struct f_state { volatile long fw, ready2, ran2, seen, done, pid1, pinned, setok, spun; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void f_second(long arg) {
+    struct f_state *f = (struct f_state *)arg;
+    __atomic_add_fetch(&f->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&f->setok, setsched(POL_FIFO, 10) == 0, __ATOMIC_ACQ_REL);
+    __atomic_store_n(&f->ready2, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&f->fw, __ATOMIC_ACQUIRE))
+        fx_wait(&f->fw, 0);
+    __atomic_store_n(&f->ran2, 1, __ATOMIC_RELEASE);
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&f->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void f_first(long arg) {
+    struct f_state *f = (struct f_state *)arg;
+    long hint = -1;
+    __atomic_add_fetch(&f->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&f->setok, setsched(POL_FIFO, 10) == 0, __ATOMIC_ACQ_REL);
+    while (!__atomic_load_n(&f->pid1, __ATOMIC_ACQUIRE))   /* tid from spawn() */
+        __asm__ volatile("pause");
+    long me = f->pid1;
+    await_eq(&f->ready2, 1, 10);
+    __atomic_store_n(&f->fw, 1, __ATOMIC_RELEASE);
+    fx_wake(&f->fw);                     /* the second is READY behind us now */
+    long t0 = rticks(me, &hint), t = t0;
+    while (t >= 0 && t - t0 < F_TICKS && !__atomic_load_n(&f->ran2, __ATOMIC_ACQUIRE))
+        t = rticks(me, &hint);
+    f->spun = t - t0;
+    f->seen = __atomic_load_n(&f->ran2, __ATOMIC_ACQUIRE);
+    setsched(POL_OTHER, 0);              /* "blocks": steps out of the class */
+    __atomic_add_fetch(&f->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_f(void) {
+    struct f_state *f = page();
+    spawn(f_second, (long)f);
+    if (!await_eq(&f->ready2, 1, 10)) fail("F ready");
+    __atomic_store_n(&f->pid1, spawn(f_first, (long)f), __ATOMIC_RELEASE);
+    await_eq(&f->done, 2, 20);
+    long ok = f->done == 2 && f->seen == 0 && f->ran2 && f->spun >= F_TICKS &&
+              f->pinned == 2 && f->setok == 2;
+    say("[sched] F seen=%d ran2=%d spun=%d done=%d\n", f->seen, f->ran2, f->spun, f->done);
+    return ok;
+}
+
+/* ---- arm G: the throttle leaves SCHED_OTHER at least 4 ticks a second ---- */
+#define G_WIN   5
+#define G_MIN   4
+
+struct g_state { volatile long stop, opid, ready, done, w[G_WIN], pinned, setok; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void g_other(long arg) {
+    struct g_state *g = (struct g_state *)arg;
+    __atomic_add_fetch(&g->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_store_n(&g->ready, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&g->stop, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    __atomic_add_fetch(&g->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void g_fifo(long arg) {
+    struct g_state *g = (struct g_state *)arg;
+    long hint = -1;
+    __atomic_add_fetch(&g->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&g->setok, setsched(POL_FIFO, 10) == 0, __ATOMIC_ACQ_REL);
+    long prev = rticks(g->opid, &hint);
+    for (int i = 0; i < G_WIN; i++) {
+        uint64_t end = mono() + NS_PER_SEC;
+        while (mono() < end)
+            __asm__ volatile("pause");
+        long now = rticks(g->opid, &hint);
+        g->w[i] = now - prev;
+        prev = now;
+    }
+    __atomic_store_n(&g->stop, 1, __ATOMIC_RELEASE);
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&g->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_g(void) {
+    struct g_state *g = page();
+    __atomic_store_n(&g->opid, spawn(g_other, (long)g), __ATOMIC_RELEASE);
+    if (!await_eq(&g->ready, 1, 10)) fail("G ready");
+    spawn(g_fifo, (long)g);
+    await_eq(&g->done, 2, 30);
+    long ok = g->done == 2 && g->pinned == 2 && g->setok == 1;
+    long mn = 1L << 30;
+    for (int i = 0; i < G_WIN; i++)
+        if (g->w[i] < mn) mn = g->w[i];
+    if (mn < G_MIN) ok = 0;
+    say("[sched] G w=%d,%d,%d,%d,%d min=%d\n", g->w[0], g->w[1], g->w[2], g->w[3], g->w[4], mn);
+    return ok;
+}
+
+/* ---- arm H: RES_SCHED (K1) ---- */
+static long find_pid(const char *name) {
+    struct { uint32_t pid, ppid, state, flags; char name[16];
+             uint64_t run_ticks, dispatches; } pi;
+    for (long i = 0; i < 4096 && nsi(SYS_GETPROCS, i, (long)&pi, 0) == 1; i++) {
+        int k = 0;
+        while (name[k] && pi.name[k] == name[k]) k++;
+        if (!name[k] && !pi.name[k])
+            return (long)pi.pid;
+    }
+    return -1;
+}
+
+static void arm_h(void) {
+    long kid = nsi(SYS_FORK, 0, 0, 0);
+    if (kid < 0) fail("H fork");
+    if (kid == 0) {
+        long rc = setsched(POL_FIFO, 10);
+        nsi(SYS_EXIT, rc == -EPERM ? 0 : 1, 0, 0);
+        for (;;) { }
+    }
+    int st = 0x7fffffff;
+    long reaped = nsi(SYS_WAIT4, kid, (long)&st, 0);
+    long fork_eperm = reaped == kid && st == 0;
+    long agt = -1;
+    uint64_t end = mono() + 10 * NS_PER_SEC;
+    while ((agt = find_pid("SCHEDAGT")) < 0 && mono() < end)
+        nsi(SYS_YIELD, 0, 0, 0);
+    long grc = agt > 0 ? nsi(SYS_SCHED_GRANT, agt, 1L << 26, 0) : 0;
+    long own = setsched(POL_FIFO, 10);   /* the probe itself holds RES_SCHED */
+    setsched(POL_OTHER, 0);
+    say("[sched] H fork_st=%d agent=%d grant_rc=%d own_rc=%d\n", (long)st, agt, grc, own);
+    say("PRADYOS_SCHED_H fork_eperm=%d agent_grant_eperm=%d own_ok=%d\n",
+        fork_eperm, (long)(grc == -EPERM), (long)(own == 0));
+}
+
+/* ---- arm P: kmutex priority inheritance (DDR-1193 D1) ----
+ * A SCHED_OTHER holder on CPU 2 takes the test kmutex for 30 of its own ticks;
+ * a FIFO-10 spinner then takes CPU 2; a FIFO-20 waiter on CPU 3 locks it. With
+ * inheritance the holder runs at 20 and the wait is about 0.3 s; without it the
+ * holder gets one throttle tick in 20, about 6 s. */
+#define P_HOLD   30
+#define P_MAX_MS 2000
+
+struct p_state {
+    volatile long held, spin_on, stop, done, wait_ms, hold_rc, wait_rc, pinned, setok;
+};
+
+__attribute__((noreturn, force_align_arg_pointer)) static void p_holder(long arg) {
+    struct p_state *p = (struct p_state *)arg;
+    __atomic_add_fetch(&p->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_store_n(&p->held, 1, __ATOMIC_RELEASE);
+    p->hold_rc = nsi(SYS_SCHED_CPU, 3, P_HOLD, 0);
+    __atomic_add_fetch(&p->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void p_spinner(long arg) {
+    struct p_state *p = (struct p_state *)arg;
+    __atomic_add_fetch(&p->pinned, pin(P3_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&p->setok, setsched(POL_FIFO, 10) == 0, __ATOMIC_ACQ_REL);
+    __atomic_store_n(&p->spin_on, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&p->stop, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&p->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void p_waiter(long arg) {
+    struct p_state *p = (struct p_state *)arg;
+    __atomic_add_fetch(&p->pinned, pin(P3_WCPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&p->setok, setsched(POL_FIFO, 20) == 0, __ATOMIC_ACQ_REL);
+    uint64_t t0 = mono();
+    p->wait_rc = nsi(SYS_SCHED_CPU, 4, 0, 0);
+    p->wait_ms = (long)((mono() - t0) / MS);
+    setsched(POL_OTHER, 0);
+    __atomic_store_n(&p->stop, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&p->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_p(void) {
+    struct p_state *p = page();
+    spawn(p_holder, (long)p);
+    if (!await_eq(&p->held, 1, 10)) fail("P held");
+    struct ts gap = { 0, (long)(30 * MS) };
+    nsi(SYS_NANOSLEEP, (long)&gap, 0, 0);           /* the holder is inside its hold */
+    spawn(p_spinner, (long)p);
+    if (!await_eq(&p->spin_on, 1, 10)) fail("P spin");
+    spawn(p_waiter, (long)p);
+    await_eq(&p->done, 3, 30);
+    long ok = p->done == 3 && p->hold_rc == 0 && p->wait_rc == 0 &&
+              p->wait_ms < P_MAX_MS && p->pinned == 3 && p->setok == 2;
+    say("[sched] P wait_ms=%d hold_rc=%d wait_rc=%d done=%d\n",
+        p->wait_ms, p->hold_rc, p->wait_rc, p->done);
+    return ok;
+}
+
+static void arms_p3(void) {
+    long main_pin = pin(0);
+    long d = arm_dn("D", POL_OTHER, 0, 10);
+    say("PRADYOS_SCHED_D preempt_ok=%d\n", d);
+    long n = arm_dn("N", POL_FIFO, 10, 20);
+    say("PRADYOS_SCHED_N prio_ok=%d\n", n);
+    say("PRADYOS_SCHED_E rr_ok=%d\n", arm_e());
+    say("PRADYOS_SCHED_F fifo_ok=%d\n", arm_f());
+    say("PRADYOS_SCHED_G throttle_ok=%d\n", arm_g());
+    say("PRADYOS_SCHED_P pi_ok=%d main_pin=%d\n", arm_p(), main_pin);
+    nsi(SYS_SCHED_CPU, 2, 0, 0);
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_b2();     /* first: it forks, so before arm A creates threads */
+    arm_h();      /* forks too; and SCHEDAGT is certainly still alive */
     arm_a();
     arm_b();
     arm_c();
     arm_m();
+    arms_p3();
     say("PRADYOS_SCHED_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }

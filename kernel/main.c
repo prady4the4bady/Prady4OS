@@ -472,6 +472,7 @@ extern const unsigned char shmtest_elf[];             /* DDR-1178: MAP_SHARED an
 extern const unsigned char shmtest_elf_end[];
 extern const unsigned char threadtest_elf[], threadtest_elf_end[];   /* DDR-1181 */
 extern const unsigned char schedtest_elf[], schedtest_elf_end[];     /* DDR-1188 P1 */
+extern const unsigned char schedagt_elf[], schedagt_elf_end[];       /* DDR-1188 A4 arm H */
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
 extern const unsigned char ledgertest_elf[], ledgertest_elf_end[]; /* DDR-1150 */
@@ -3287,8 +3288,25 @@ static void fs_test_thread(void *arg) {
                                      (uint64_t)(uintptr_t)schedtest_elf;
                     if (elf_load((void *)(uintptr_t)schedtest_elf, sclen,
                                  "SCHEDTEST", &sc) == ELF_OK && sc) {
+                        /* DDR-1188 A4 S3: this launcher plays init (K1). It
+                         * grants RES_SCHED, with the right to grant on, to
+                         * the probe only, and opens the arm-P test hooks. */
+                        g_sched_probe = 1;
+                        if (sched_grant(sc, CAP_SCHED_RT | CAP_SCHED_GRANT) != 0)
+                            kputs("[user] schedclass RES_SCHED grant FAILED\r\n");
                         sched_unblock(sc);
                         kputs("[user] schedclass probe spawned\r\n");
+                        /* Arm H: a second, agent copy with no RES_SCHED. */
+                        struct tcb *sa = 0;
+                        uint64_t salen = (uint64_t)(uintptr_t)schedagt_elf_end -
+                                         (uint64_t)(uintptr_t)schedagt_elf;
+                        if (elf_load((void *)(uintptr_t)schedagt_elf, salen,
+                                     "SCHEDAGT", &sa) == ELF_OK && sa) {
+                            sa->is_agent = 1;       /* authority BEFORE the first run */
+                            sched_unblock(sa);
+                        } else {
+                            kputs("[user] schedclass agent copy FAILED to load\r\n");
+                        }
                     } else {
                         kputs("[user] schedclass probe FAILED to load\r\n");
                     }

@@ -380,10 +380,15 @@ An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHE
   - A FIFO-20 waiter pinned to CPU 3 then locks it and times its wait with `CLOCK_MONOTONIC`.
   - With S6 the holder runs at 20 above the spinner and needs about 0.3 s. Mutant C16 (no boost) leaves it only throttle gaps, one tick in 20, so it needs at least 600 ticks, about 6 s.
   - **Pass:** the wait is under 2 s.
+  - Syscalls run with interrupts off (`SFMASK`), so op 3's hold loop would never see a tick. It spins in `sti; nop; pause; cli` windows, the `za_hold` idiom (DDR-1201), so the tick charges it, preempts it and boosts it while it holds the lock.
+
+**Thread ids in the arms.** `SYS_GETPID` returns the process id (`tgid`, DDR-1181 P1c), not a thread's own id. Every arm that reads a thread's `run_ticks` takes that thread's id from `SYS_THREAD_CREATE`'s return value, published by its creator. A first draft used `SYS_GETPID`, so arms D, N, F and G read the main thread's ticks, and all four passed on a meaningless number (arm G reported 100 ticks a second for a thread that shared its CPU with a FIFO spinner). That passing run is why each arm is checked against its mutant before it is trusted.
 
 **Vacuity.** Each arm's mutant is a P3 tree with one thing removed, built and run locally before the arm is trusted, then in CI. Arms D and N rest on the spinner starting each trial with a full quantum: that is checked against the mutant locally before the arm is written, as §4 requires.
 
 **Risks carried from §5.** P3 changes `rq_pop` and `sched_tick`, where OPEN-2 and OPEN-12/13 live. With no RT thread the new code runs nothing but the count check. Every P3 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
+
+**Correction to Amendment 3, T5 (CodeRabbit on #136, after merge review).** T5 says a one-shot is never armed closer than 50 µs "after the previous timer interrupt". What `hrt_arm` measures from periodic mode is the previous timer **expiry**, `tick_at - 10 ms`. If that tick's interrupt was delivered late by `d`, the next one-shot can expire `50 µs - d` after the handler ran. T5's purpose is the interrupt-rate bound (§5), and that holds: expiries on a CPU stay at least 50 µs apart, and deliveries cannot outnumber expiries. T5 should read "50 µs after the previous timer expiry". Not gated: no gate can delay an interrupt on purpose.
 
 **Not gated in P3 (stated):** cross-CPU priority; RT priority on steal; a policy change on another thread; transitive inheritance; priority-ordered `kmutex` hand-off; the head re-queue on preemption by a higher priority (only the throttle case is exercised, by arm F).
 
