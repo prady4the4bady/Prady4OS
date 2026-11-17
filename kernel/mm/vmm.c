@@ -266,10 +266,10 @@ static int map_core(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t f
     uint64_t *pml4 = table_at(pml4_phys);
     int user = (flags & VMM_USER) ? 1 : 0;
 
-    if (user && user_guard_refuses(pml4_phys, virt))
-        return -1;                                   /* DDR-1203 D1 */
     uint64_t pdpt = descend(pml4, idx(virt, 4), 1, user);
     if (!pdpt) return -1;
+    if (user && user_guard_refuses(pml4_phys, virt))
+        return -1;                                   /* MUTANT M3 */
     uint64_t pd = descend(table_at(pdpt), idx(virt, 3), 1, user);
     if (!pd) return -1;
     uint64_t pt = descend(table_at(pd), idx(virt, 2), 1, user);
