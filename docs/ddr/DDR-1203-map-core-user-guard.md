@@ -1,6 +1,6 @@
 # DDR-1203: `map_core` refuses a user leaf under a kernel-shared top-level entry
 
-Status: **design, before any code.** Proposed by DDR-1198 §3 ("a guard in `map_core` would close it for every caller at once ... proposed here, not done"). Listed by #45 6761846242 item 5 as a small task for while CI runs.
+Status: **implemented** (Amendment 1 below); the design text is kept as written. Proposed by DDR-1198 §3 ("a guard in `map_core` would close it for every caller at once ... proposed here, not done"). Listed by #45 6761846242 item 5 as a small task for while CI runs.
 Read from the code at `dev/phase1` `adc4e5c`. Nothing here has run. Nothing is verified on real hardware.
 
 ## 1. The defect class
@@ -69,3 +69,29 @@ The default build gains one compare and one branch in `map_core`, and the report
 - Design only; nothing is implemented or run.
 - QEMU only when built, not verified on real hardware.
 - It closes no open defect (OPEN-1/2/12/13, U1–U3). DDR-1196's fix stays the fix for the path that existed; this guards the class.
+
+## Amendment 1 (2026-11-17): implementation, and one correction found by running it
+
+**A1-1. G-B cannot use slot 256 (measured, then read).**
+- **Measured.** The first local boot printed `PRADYOS_MAPGUARD a=1 b=0 c=1 d=1 hits=2`. G-B's precondition failed: the master had no slot-256 entry when the probe ran.
+- **Read.** `vmm_unmap` reclaims emptied tables bottom-up, up to and including the top-level entry (`kernel/mm/vmm.c`, the `table_empty` chain). `vmm_test` maps and then unmaps its slot-256 page, so it leaves slot 256 empty. §4's "the self-test MMIO slot" assumed otherwise. `tlb_probe` maps slot 256 later, but only when its own probe runs.
+- **Decision.** G-B uses slot 0, the low identity map, which the master always has. The VA is `0x7F00000000`, PDPT index 508, far above the identity-mapped range. So on an unguarded tree the map really succeeds: it would promote the master's slot-0 entry and create tables below index 508.
+
+**A1-2. Where the probe runs.** `kernel/main.c`, right after `fwcfg_init()`, before any process exists. That is the first point at which `probe_enabled` can answer, and it is after `vmm_test`. It does not depend on the LAPIC or the APs.
+
+**A1-3. The probe undoes what an unguarded map changes.** Each arm snapshots the entries it could change and restores them if anything changed, whatever the map returned. Otherwise a mutant's damage spreads into later arms. A first draft restored only when the map returned 0. Under M3 the master's slot 1 stayed filled, and the control arm G-D was then refused. The frame of an undone map leaks. That happens only on a mutant.
+
+**A1-4. The report line.** `[vmm] FAIL: user leaf under a kernel-shared top-level entry va=<va> slot=<n>`, appended to `GLOBAL_FORBIDDEN` before its final line. The count is now 78 (CLAUDE.md rule 9 updated). An expected refusal prints `[vmm] guard refused (expected) va=<va> slot=<n>`.
+
+**A1-5. Local results (QEMU TCG, one boot each, not CI):**
+
+| tree | line |
+|---|---|
+| guarded | `a=1 b=1 c=1 d=1 hits=3` |
+| M1 (rule 1 removed) | `a=0 b=0 c=1 d=1 hits=1`: red on G-A, G-B |
+| M2 (rule 2 removed) | `a=1 b=1 c=0 d=1 hits=2`: red on G-C |
+| M3 (guard after the first `descend`) | `a=0 b=0 c=0 d=1 hits=3`: red on G-A, G-B and G-C. §5 said G-A only. Each arm's first `descend` changes the top level before the refusal: it promotes the address space's slot-511 and slot-0 entries, and allocates the master's slot 1. |
+
+M4 and M5 stay **not gated** (§5). CI runs of M1–M3 on the final head are the evidence. Until then these are local screening only.
+
+**A1-6. Size.** `kernel.bin` 1,659,274 B, one 4 KiB step over the base's 1,655,178 B. Measured locally, not CI-verified.

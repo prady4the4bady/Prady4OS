@@ -53,7 +53,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 9. **`GLOBAL_FORBIDDEN` (in `tools/qemu_runner/boot_test.sh`) is append-only.**
    - Insert new entries BEFORE the final list line.
    - Never put a comment inside its `printf`.
-   - Verify after any edit with `source <(sed -n '/^GLOBAL_FORBIDDEN=/,/current FAIL.)"$/p' tools/qemu_runner/boot_test.sh)`; the count must be **77**.
+   - Verify after any edit with `source <(sed -n '/^GLOBAL_FORBIDDEN=/,/current FAIL.)"$/p' tools/qemu_runner/boot_test.sh)`; the count must be **78** (DDR-1203 added the 78th).
 10. **DDR numbers.** Before allocating, confirm the number is unused in BOTH `docs/ddr/` and `docs/decisions/` (`ls docs/ddr docs/decisions | grep DDR-<N>`). Free range: **DDR-1178+**.
 11. **`kmalloc` does not zero.** Every new `struct tcb` field needs an explicit initialiser in `sched_create_state`.
 12. **One QEMU at a time.** Pre-flight check: `pgrep -f "[q]emu-system-x86_64"`.
@@ -67,7 +67,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
   - `build/kernel.bin` depends on the sources, not on the `.o` files or `KCFLAGS` (`Makefile:490`): a `-D` flag alone does not rebuild it, and removing `.o` files does not either. Touch a kernel source first, then verify by **hash**, never by size (CodeRabbit on #124).
   - `TIMEOUT_S=<n> make smoke-x` is ignored; use `make TIMEOUT_S=<n> smoke-x`.
   - `kputhex` already prints `0x`; `kprintf` does not exist.
-- **Size:** `kernel.bin` is **1,655,178 B** against the 1,703,936 B size gate — **48,758 B of headroom** (measured on the C1.5 P1 branch, with the time ABI and the embedded `schedtest.elf`). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
+- **Size:** `kernel.bin` is **1,659,274 B** against the 1,703,936 B size gate — **44,662 B of headroom** (measured locally on the DDR-1203 branch, with the `map_core` guard and its probe; not CI-verified). `ci-docstate-check` reads this line; keep size and headroom updated together. The gate is the BIOS stage-2 read window (52 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
 - **NSI:** max defined 121 on this branch (120 `SYS_CLOCK_GETTIME`, 121 `SYS_NANOSLEEP`, DDR-1188 P1 and Amendment 1); 119 is `SYS_MSYNC` (DDR-1178 A4), 112–115 are DDR-1178 A2 SysV (#78), 116 `SYS_SHM_OPEN` is DDR-1178 A3 (#80), 117 `SYS_FUTEX`, 118 `SYS_SCHED_CPU`, so next free is 122 (verify against `kernel/syscall/syscall.h`).
 - **Boot:** PT_HI is implemented twice, in `boot/stage2/stage2.asm` and `boot/uefi/loader.c`; change both together.
 - **`[apfreeze]`** has at least five producers. Resolve its RIP before naming a cause.
