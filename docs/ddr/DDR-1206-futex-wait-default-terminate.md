@@ -60,3 +60,32 @@ Read from the code at `915eb7c` (the #130 branch).
 
 - A program that relied on a handlerless `SIGTERM` being ignored while it waits now terminates. That is the POSIX default action, and it is what the same program already gets when it is not blocked.
 - Size: one call in the loop, and one probe arm.
+
+## Amendment 1 (CodeRabbit on #133, before merge): not while a handler is active
+
+**Finding (real; read from `77249de`).**
+- `signal_deliver` returns at once while a handler is active (`sig_active`). It acts on no signal then, not even a default-terminate one.
+- D1 said "the thread never sees the `-EINTR`: `signal_deliver` ends it on the way out". That is false inside a handler. A `FUTEX_WAIT` made there, with a handlerless `SIGTERM` pending, returned `-EINTR` at once with the signal still pending. A handler that retries on `-EINTR`, as `psync.h`'s lock does, would spin.
+- Before D1 the same wait blocked. So D1 added a busy loop in this one case. `nanosleep` had the same case since #130 (DDR-1188 A2-3), through the same predicate.
+
+**A1-1 (the safe option).** `signal_fatal_pending` returns 0 while `sig_active` is set.
+- The predicate now says what D1 claimed: it is true only when `signal_deliver` would end the thread on the way out.
+- Inside a handler, `FUTEX_WAIT` and `nanosleep` behave as they did before D1 and A2-3: the wait is not ended by the signal. When the handler returns, the signal ends the thread.
+- One change covers both callers.
+
+**Not done here: CodeRabbit's proposal.** It asks `signal_deliver` to act on default-terminate signals even while a handler is active. That is the POSIX behaviour, and it would also let `SIGTERM` end a thread that is stuck inside a handler. It changes signal delivery for every thread on every return to ring 3, so it gets its own DDR and gate. It is recorded as a follow-up.
+
+**Not changed, same shape, older.** `signal_interruptible` and `signal_kill_pending` also ignore `sig_active`. A wait inside a handler returns `-EINTR` for a *handled* signal that cannot be delivered until the handler returns (since #81). `SIGKILL` is acted on in `yield()` (DDR-1090), so that case ends. The handled-signal case is part of the same follow-up.
+
+**Arm FL** (`smoke-thread`, after FK).
+1. A forked child installs a `SIGUSR1` handler (mask 0) and then only yields. It never blocks outside the handler.
+2. The parent sends `SIGUSR1`. The handler makes a 1 s timed `FUTEX_WAIT` on a word of its own.
+3. The parent waits until `SYS_GETPROCS` reports the child `THREAD_BLOCKED`, then sends `SIGTERM`. It checks that under 900 ms passed since it sent `SIGUSR1`, so the `SIGTERM` landed inside the 1 s wait. A slower run is red, not a pass.
+4. The wait must end by its timeout. The handler then returns, and the pending `SIGTERM` ends the child: status -1.
+5. A wait that ends any other way makes the handler exit with status 40.
+- **Sentinel:** `PRADYOS_FUTEX_L handler_wait=1`.
+- **Vacuity:** on `77249de` the wait returns `-EINTR`, so the status is 40 and the arm is red. Checked locally with F2-11 before the arm was accepted.
+- **Mutant F2-11:** remove the `sig_active` test from `signal_fatal_pending`. Expected: red on FL only.
+- **Not gated:** the same case for `nanosleep`. FL uses `FUTEX_WAIT`. Both callers share the one predicate, so it is covered by reading, not by an arm.
+
+QEMU (TCG) only. Not verified on real hardware.

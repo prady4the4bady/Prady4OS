@@ -66,6 +66,12 @@ int signal_interruptible(const struct tcb *t) {
 }
 
 int signal_fatal_pending(const struct tcb *t) {
+    /* DDR-1206 Amendment 1: signal_deliver acts on nothing while a handler is
+     * active, so such a signal cannot end the thread yet. A wait that ended
+     * for it would return -EINTR to the handler with the signal still
+     * pending, and a retry would spin. */
+    if (t->sig_active)
+        return 0;
     uint64_t d = deliverable(t);
     for (int sig = 1; sig < NSIG; sig++)        /* the set signal_deliver ends on */
         if ((d & (1ull << sig)) && !t->sig_handlers[sig] &&
