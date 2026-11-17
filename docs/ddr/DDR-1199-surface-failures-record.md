@@ -56,6 +56,12 @@ The ids `a` and `b` are not printed, so the logs cannot confirm the mechanism. *
 2. **The kernel says who held the slot.** Under a diagnostic flag, `sys_surface_create` and `sys_surface_close` print `[surf] create id=<n> pid=<p>` and `[surf] close id=<n> pid=<p>`, off by default. With those lines, the next occurrence would show which process used the table between A's close and B's create.
 3. **If (1) and (2) confirm the race,** step 2's assertion is wrong under concurrency, not the kernel. The fix would make the test's check true by construction, for example by asserting the slot is reused when no other surface user exists, or by gating the probe to run alone. That is a gate change, so it needs its own DDR, vacuity check and mutant. It must not weaken the test.
 
+### Item 1 done (2026-11-17)
+
+- `user/surfdestroytest.c` step 2 now fails with `SURFDESTROY FAIL: reuse slot not reused a=<a> b=<b>`. The line is built on the stack, because the probe has no writable globals. The prefix is unchanged, so `smoke-surfdestroy`'s forbidden pattern and the global list still match it.
+- **Format checked locally, once:** with the condition forced true in a throw-away build, the gate printed `SURFDESTROY FAIL: reuse slot not reused a=3 b=3`. That build was not kept or pushed. The real build passes `smoke-surfdestroy`.
+- No gate changes, so there is no mutant. Items 2 and 3 are still not done.
+
 ## 5. Honesty labels
 
 - Read from CI logs and the code at `dev/phase1` `9105001`. Nothing here was run for this record.

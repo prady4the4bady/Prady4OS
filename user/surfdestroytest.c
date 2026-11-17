@@ -55,6 +55,20 @@ __attribute__((noreturn)) static void die(const char *why) {
     for (;;) { }
 }
 
+/* DDR-1199 §4 item 1: append " <tag>=<v>" (decimal, v >= 0 or "-n") to buf at
+ * p. The probe has no writable globals, so the line is built on the stack. */
+static char *put_kv(char *p, const char *tag, long v) {
+    *p++ = ' ';
+    while (*tag) *p++ = *tag++;
+    *p++ = '=';
+    if (v < 0) { *p++ = '-'; v = -v; }
+    char d[20];
+    int n = 0;
+    do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v && n < 20);
+    while (n) *p++ = d[--n];
+    return p;
+}
+
 /* Create-and-commit until the table is full; record ids. Returns the count. */
 static int fill(long *ids, int cap) {
     int n = 0;
@@ -82,7 +96,16 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (nsi(SYS_SURFACE_CLOSE, a, 0, 0) != 0) die("reuse close A");
     long b = nsi(SYS_SURFACE_CREATE, 32, 32, 0);
     if (b < 0) die("reuse create B");
-    if (b != a) die("reuse slot not reused");
+    if (b != a) {
+        /* DDR-1199 §4 item 1: the ids show which way they differ (b < a: a
+         * lower slot was freed meanwhile; b > a: slot a was taken meanwhile). */
+        char why[64] = "reuse slot not reused";
+        char *p = why + 21;
+        p = put_kv(p, "a", a);
+        p = put_kv(p, "b", b);
+        *p = 0;
+        die(why);
+    }
     nsi(SYS_SURFACE_CLOSE, b, 0, 0);
     wr("PRADYOS_SURFDESTROY_REUSE_OK\n");
 
