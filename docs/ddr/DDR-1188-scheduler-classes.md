@@ -264,23 +264,30 @@ Design only. No P2 code exists yet. It fills in what §2 leaves open for P2: who
 
 ### Arm C, restated so that it can be red
 
-§4's arm C says "a 2 ms one-shot timer fires before the next periodic tick (count of early wakes > 0 over 50 tries)". By elapsed time alone it is vacuous: with ticks only, a 2 ms sleep already ends in under 10 ms about 8 times in 10 (above).
+§4's arm C says "a 2 ms one-shot timer fires before the next periodic tick (count of early wakes > 0 over 50 tries)". By elapsed time alone it is vacuous: with ticks only, a 2 ms sleep already ends in under 10 ms about 8 times in 10 if the sleeps are spaced at random.
 
-- **The arm.** A thread pinned to a CPU with no other load runs 50 tries of `nanosleep(2 ms)`. Around each try it reads the vDSO's `wall_time_ns`, which the BSP advances once per tick, in the same handler that advances `g_ticks`.
-- **A try is early when** `wall_time_ns` did not change across the sleep **and** the sleep lasted at least 2 ms by `CLOCK_MONOTONIC`.
-- **Pass:** at least 20 of 50 tries are early, and the pin succeeded. Sentinel: `PRADYOS_SCHED_C early_ok=1 pin_ok=1`, with the count on a `[sched] C` line.
-- **Why ticks alone cannot produce an early try.** A tick-timed wait ends only after `g_ticks` advanced, and `timer_tick` advances `wall_time_ns` three lines later. A sweep on another CPU could land between those two stores. That is a window of a few instructions, which is why the bar is 20 and not "more than 0".
-- **Why 20 and not more.** A try that happens to span a tick is not early even with one-shots. A 2 ms sleep spans a tick about 2 times in 10, and TCG adds latency.
-- **Vacuity is checked on the baseline before the arm is written:** the arm's count on the tree without T2 must be far below 20. The number goes in the PR.
-- **Mutant C3** ("arm the periodic tick only"): the arming step never switches the LVT. Expected: red on arm C only.
+- **The arm.** A thread pinned to CPU 2, with no other load there, runs 50 back-to-back tries of `nanosleep(2 ms)`, timed by `CLOCK_MONOTONIC`.
+- **A try is early when** it lasted at least 2 ms and under 4 ms.
+- **Why back-to-back tries cannot be early on ticks alone.** A tick-timed sleep ends on a tick. The next try then starts just after that tick, so it ends on the next one, about 10 ms later. Each try is phase-locked to the tick, whichever CPU's tick ends it.
+- **Pass:** at least 25 of 50 tries are early, and the pin succeeded. Sentinel: `PRADYOS_SCHED_C early_ok=1 pin_ok=1`, with the counts on a `[sched] C` line.
+- **`nowall` is data only.** It counts tries across which the BSP's `wall_time_ns` did not move. A first draft used it as the test. It proves less: a tick on the sleeper's own CPU can end a sleep without the BSP's clock moving.
+- **Vacuity, measured locally (QEMU TCG, one boot each, not CI):**
+  - tree with P2: `early=49 of 50`;
+  - mutant C3: `early=3 of 50`.
+- **Mutant C3** ("arm the periodic tick only"): `hr_oneshot` never touches the LVT, so a slot is seen only on a tick.
+  - Red on arm C.
+  - It is also red on arm M (`sleeps=67`), through M's lower bound, which exists to catch a kernel with no one-shots. Recorded, as C2b was on B2 and B3.
 
 ### Arm M
 
 - **The arm.** One thread first sleeps 1.05 s. That sleep takes one one-shot when it begins, so more than a window passes with no new one. The thread then calls `nanosleep(50 µs)` in a loop for 1 s of `CLOCK_MONOTONIC` and counts the calls that returned. The loop's first sleep opens a new window, and the whole second lies inside it.
 - **Pass:** the count is at most 1 100. With T4, at most 1 000 calls get a one-shot; each of the rest ends on a tick. The 1 000 one-shot sleeps take at least 50 ms together, so at most 96 ticks are left in the second. Sentinel: `PRADYOS_SCHED_M capped_ok=1`, with the count on a `[sched] M` line.
-- **Vacuity.** The arm is only meaningful if the unbudgeted rate is above 1 100 per second under TCG. That is measured with C13 before the arm is accepted. If TCG cannot reach it, the arm is redesigned, not weakened.
+- **Vacuity, measured locally (QEMU TCG, one boot each, not CI):**
+  - tree with P2: `sleeps=1034`;
+  - mutant C13: `sleeps=3354`, so TCG does reach a rate the budget must cut;
+  - mutant C3: `sleeps=67` (no one-shots), caught by the lower bound.
 - **A lower bound too:** the count must be at least 500. Otherwise a kernel that arms no one-shot at all (about 100 per second) would pass arm M.
-- **Mutant C13** ("no per-thread budget"): the budget check is removed. Expected: red on arm M only.
+- **Mutant C13** ("no per-thread budget"): the budget check is removed. Locally, red on arm M only; arm C passes (`early=45 of 50`).
 
 ### Not gated in P2
 

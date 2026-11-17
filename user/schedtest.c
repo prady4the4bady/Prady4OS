@@ -375,17 +375,21 @@ static void arm_b(void) {
 }
 
 /* ---- arm C (DDR-1188 Amendment 3): a one-shot ends a sleep between ticks ----
- * The vDSO's wall_time_ns advances once per tick, in the handler that advances
- * g_ticks. A tick-timed sleep ends only after g_ticks moved, so a 2 ms sleep
- * across which wall_time_ns did not move was ended by a one-shot. */
+ * Back-to-back sleeps that end on a tick are phase-locked to it: each starts
+ * just after the tick that ended the one before, so each lasts about a whole
+ * 10 ms tick, whichever CPU's tick ends it. A 2 ms sleep that ends under 4 ms
+ * was therefore ended by a one-shot. `nowall` (the BSP's wall_time_ns did not
+ * move across the sleep) is printed as data only: a tick on the sleeper's own
+ * CPU can end a sleep without the BSP's clock moving, so it proves less. */
 #define C_TRIES  50
 #define C_NS     (2 * MS)
-#define C_MIN    20
+#define C_LATE   (4 * MS)
+#define C_MIN    25
 #define C_CPU    2
 
 static void arm_c(void) {
     const struct vdso *v = (const struct vdso *)VDSO_USER_VA;
-    long early = 0, slept = 0;
+    long early = 0, slept = 0, nowall = 0;
     long pinned = pin(C_CPU);
     for (int i = 0; i < C_TRIES; i++) {
         struct ts req = { 0, (long)C_NS };
@@ -396,11 +400,12 @@ static void arm_c(void) {
         uint64_t w1 = v->wall_time_ns;
         if (rc == 0 && d >= C_NS) {
             slept++;
-            if (w1 == w0) early++;
+            if (d < C_LATE) early++;
+            if (w1 == w0) nowall++;
         }
     }
     nsi(SYS_SCHED_CPU, 2, 0, 0);                    /* unpin */
-    say("[sched] C early=%d of %d slept=%d\n", early, (long)C_TRIES, slept);
+    say("[sched] C early=%d of %d slept=%d nowall=%d\n", early, (long)C_TRIES, slept, nowall);
     say("PRADYOS_SCHED_C early_ok=%d pin_ok=%d\n", (long)(early >= C_MIN), pinned);
 }
 
