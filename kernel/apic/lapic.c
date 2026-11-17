@@ -260,10 +260,8 @@ static void hr_oneshot(struct hr_cpu *h, uint64_t now) {
     uint32_t phase  = dl < h->tick_at ? HR_EARLY : HR_TAIL;
     if (target < h->last_irq + HR_SPACE_NS)
         target = h->last_irq + HR_SPACE_NS;         /* T5 */
-    if (target >= h->tick_at) {                     /* the clamp reached the tick */
-        target = h->tick_at;
-        phase  = HR_TAIL;
-    }
+    if (target >= h->tick_at)                       /* the floor reached the tick: */
+        phase = HR_TAIL;                            /* the tail waits for it (T5) */
     uint64_t ns = target > now ? target - now : 0;
     if (ns > HR_TICK_NS) ns = HR_TICK_NS;
     h->target = target;
@@ -295,7 +293,7 @@ int hrt_arm(struct tcb *t, uint64_t deadline_ns) {
     if (!pc || !g_lapic || !g_timer_count || pc->cpu_idx >= LAPIC_MAX_CPUS)
         return 0;
     uint64_t now = ktime_mono_ns();
-    if (now - t->hr_win >= HR_WINDOW_NS) {          /* T4: a new window */
+    if (t->hr_n == 0 || now - t->hr_win >= HR_WINDOW_NS) {   /* T4: a new window */
         t->hr_win = now;
         t->hr_n   = 0;
     }
@@ -321,9 +319,14 @@ int hrt_arm(struct tcb *t, uint64_t deadline_ns) {
      * Re-programming under it would lose a tick (periodic) or mistake a stale
      * interrupt for a new phase. */
     if (!hr_irr48()) {
+        now = ktime_mono_ns();                      /* under lk, beside the count read */
         if (h->phase == HR_PERIODIC) {
             uint64_t rem = lapic_rd(LAPIC_TIMER_CCR);       /* before any LVT write */
             uint64_t tick_at = now + rem * HR_TICK_NS / g_timer_count;
+            /* The periodic fast path does not record last_irq; in periodic
+             * mode the previous interrupt was one period before the next. */
+            if (tick_at > HR_TICK_NS && tick_at - HR_TICK_NS > h->last_irq)
+                h->last_irq = tick_at - HR_TICK_NS;
             if (deadline_ns + HR_SPACE_NS < tick_at) {
                 h->tick_at = tick_at;
                 hr_oneshot(h, now);
@@ -373,7 +376,8 @@ int hrt_irq(void) {
     } else {
         tick = 1;                                   /* periodic tick, or the tail */
         uint64_t dl = hr_earliest(h);
-        if (dl + HR_SPACE_NS < now + HR_TICK_NS) {  /* the next one is before the next tick */
+        if (dl != ~0ull &&                          /* empty table: back to periodic */
+            dl + HR_SPACE_NS < now + HR_TICK_NS) {  /* the next one is before the next tick */
             h->tick_at = now + HR_TICK_NS;
             hr_oneshot(h, now);
         } else if (h->phase != HR_PERIODIC) {

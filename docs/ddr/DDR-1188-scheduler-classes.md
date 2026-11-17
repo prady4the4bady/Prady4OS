@@ -289,6 +289,20 @@ Design only. No P2 code exists yet. It fills in what §2 leaves open for P2: who
 - **A lower bound too:** the count must be at least 500. Otherwise a kernel that arms no one-shot at all (about 100 per second) would pass arm M.
 - **Mutant C13** ("no per-thread budget"): the budget check is removed. Locally, red on arm M only; arm C passes (`early=45 of 50`).
 
+### Review fixes on #136 (Codex and CodeRabbit, before merge)
+
+Five findings, each confirmed by reading `e1652e2`:
+
+1. **An empty table never went back to periodic mode.** With no slot, `hr_earliest` returns all-ones, and `dl + HR_SPACE_NS` wraps. So the tail handler re-armed a one-shot at every tick: every tick then took `hr_lk` and wrote the LAPIC, forever, after the first one-shot. Fixed: the comparison requires a slot.
+2. **The budget window was anchored at boot** for a thread whose first one-shot came in the first second (`hr_win` starts at 0). Fixed: a thread's first arm opens its window.
+3. **`now` was sampled before `hr_lk`.** The count `rem` was read after it, so `tick_at` was early by the lock wait. Fixed: re-sampled under the lock, beside the count read.
+4. **`last_irq` was stale while periodic.** The fast path does not record it, so the first one-shot after a quiet spell could be armed under 50 µs after a tick. Fixed in `hrt_arm`: in periodic mode the previous interrupt was one period before the next tick, so `last_irq` is set to `tick_at - 10 ms`. This keeps the per-tick fast path at two loads, instead of adding a clock read to every tick on every CPU.
+5. **The boundary clamp undid the T5 floor.** When the 50 µs floor reached `tick_at`, the target was reset to `tick_at`. Fixed: the target stays at the floor, as a tail. That tick then comes up to 50 µs late, inside the tick delay already stated above.
+
+**Not gated:** none of the five is caught by arms B, C or M, which see only sleep lengths and counts. Fix 1 in particular passed every arm while the CPU stayed in one-shot mode. They are fixed by reading and stated here; no mutant would be red on them.
+
+**Not changed:** the request to update `docs/build_status.md` (`AGENTS.md`). Its last entry is DDR-1178 P1. The project records state in `V1_MASTER_CHECKLIST.md` and `FEATURE_STATUS.md`, as `CLAUDE.md` names them, and DDR-1173 declined a third status list. Whether to revive the file is the operator's call.
+
 ### Not gated in P2
 
 - T5's 50 µs spacing. No arm separates it from T4. A mutant that drops it would be recorded as a survivor.
