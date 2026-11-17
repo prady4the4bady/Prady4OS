@@ -264,10 +264,8 @@ static void hr_oneshot(struct hr_cpu *h, uint64_t now) {
         phase = HR_TAIL;                            /* the tail waits for it (T5) */
     uint64_t ns = target > now ? target - now : 0;
     if (ns > HR_TICK_NS) ns = HR_TICK_NS;
-    h->target = target;
-    h->phase  = phase;
-    lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR);              /* one-shot */
-    lapic_wr(LAPIC_TIMER_ICR, (uint32_t)hr_ns_to_counts(ns));
+    (void)target; (void)phase; (void)ns; (void)hr_ns_to_counts;
+    /* MUTANT C3: the LVT is never switched; slots are checked on ticks only */
 }
 
 static void hr_periodic(struct hr_cpu *h) {
