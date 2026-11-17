@@ -369,7 +369,7 @@ An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHE
   - With P3, the next tick preempts, so Δ = 1.
   - Mutant C4 (RT threads queued as fair, no tick preemption): the spinner resumes with a full 2-tick quantum, so the FIFO thread waits for it to expire and Δ = 2.
   - **Pass:** at most 5 of 50 wakes have Δ ≥ 2. The 5 allow for a tick that lands between the spinner's read and its wake.
-- **E (C5).** Two RR threads of priority 10, pinned to one CPU, each count loops for 1 s. **Pass:** both counts are above 0. Mutant C5 (RR never rotates) gives the second 0, because a throttle gap goes to `SCHED_OTHER` and the head re-queue (S2) puts the first back in front.
+- **E (C5).** Two threads each take RR at priority 10 *before* pinning to one CPU, then each counts loops for 1 s. Taking RR first means the second reaches that CPU as an RR thread, so only rotation lets it run there: a throttle gap goes to `SCHED_OTHER`, not to it. **Pass:** both threads got there (`ready=1`) and both counts are above 0. Mutant C5 (RR never rotates) leaves the second off the CPU until the first exits, so its count is 0. A setup timeout reports `rr_ok=0` rather than ending the probe.
 - **F (C6).** Two FIFO threads of priority 10 on one CPU. The first spins for 30 of its own ticks (15 quantum expiries), checking a flag the second sets when it runs, then blocks. **Pass:** the flag is still 0 when the first blocks, and the second runs after. Mutant C6 (FIFO rotates on quantum expiry) sets the flag within 2 ticks.
 - **G (C7).** As §4. Mutant C7 removes the throttle check.
 - **H (C8, C8b).** A forked child of the probe calls `SYS_SCHED_SETSCHED(FIFO)` and gets `-EPERM`, because fork drops `RES_SCHED` (C8: skip the check). The launcher also starts a second copy of the probe as an agent (`SCHEDAGT`, `is_agent` set, no grant). That copy's own `SYS_SCHED_SETSCHED(FIFO)` returns `-EPERM`, and the probe's `SYS_SCHED_GRANT(<SCHEDAGT pid>)` returns `-EPERM` (C8b: allow the grant to an agent).
@@ -384,11 +384,24 @@ An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHE
 
 **Thread ids in the arms.** `SYS_GETPID` returns the process id (`tgid`, DDR-1181 P1c), not a thread's own id. Every arm that reads a thread's `run_ticks` takes that thread's id from `SYS_THREAD_CREATE`'s return value, published by its creator. A first draft used `SYS_GETPID`, so arms D, N, F and G read the main thread's ticks, and all four passed on a meaningless number (arm G reported 100 ticks a second for a thread that shared its CPU with a FIFO spinner). That passing run is why each arm is checked against its mutant before it is trusted.
 
-**Vacuity.** Each arm's mutant is a P3 tree with one thing removed, built and run locally before the arm is trusted, then in CI. Arms D and N rest on the spinner starting each trial with a full quantum: that is checked against the mutant locally before the arm is written, as §4 requires.
+**Vacuity.** Each arm's mutant is a P3 tree with one thing removed, built and run locally before the arm is trusted, then in CI.
+
+**Local results (QEMU TCG, one boot each, not CI):**
+- tree with P3: every arm passes (D `late=0 of 50`; N `late=1 of 50`; G `w=5,5,5,5,5`; P `wait_ms=242`).
+- C4: red on D (`late=49 of 50`, the predicted Δ = 2), and on F (the fair picker rotates FIFO threads).
+- C5: red on E (`n1=0`).
+- C6: red on F.
+- C7: red on G only. A first arm E took RR after pinning and needed a throttle gap to get there, so C7 went red on E. E now takes RR first (above).
+- C8: red on H (the forked child and SCHEDAGT both got FIFO).
+- C8b: red on H (the grant to SCHEDAGT succeeded).
+- C14: red on N (`abort=1`), and on P (the boost to 20 loses to the spinner at 10 when the order is reversed).
+- C16: red on P. Arms D and N rest on the spinner starting each trial with a full quantum: that is checked against the mutant locally before the arm is written, as §4 requires.
 
 **Risks carried from §5.** P3 changes `rq_pop` and `sched_tick`, where OPEN-2 and OPEN-12/13 live. With no RT thread the new code runs nothing but the count check. Every P3 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
 
 **Correction to Amendment 3, T5 (CodeRabbit on #136, after merge review).** T5 says a one-shot is never armed closer than 50 µs "after the previous timer interrupt". What `hrt_arm` measures from periodic mode is the previous timer **expiry**, `tick_at - 10 ms`. If that tick's interrupt was delivered late by `d`, the next one-shot can expire `50 µs - d` after the handler ran. T5's purpose is the interrupt-rate bound (§5), and that holds: expiries on a CPU stay at least 50 µs apart, and deliveries cannot outnumber expiries. T5 should read "50 µs after the previous timer expiry". Not gated: no gate can delay an interrupt on purpose.
+- **Rounding.** `hr_ns_to_counts` truncated, so a count could be up to one LAPIC count short of the target (about 16 ns under QEMU's rate). P3 rounds it **up**. The count starts at the LAPIC write, after `now` was sampled, so the expiry is at or after `now + ns`, at or after the target. This rests on one unmeasured assumption: a count lasts `HR_TICK_NS / g_timer_count`, with `g_timer_count` calibrated against the PIT while `now` comes from the TSC. A rate mismatch moves the floor by that error.
+- **Per-window bound.** Spacing bounds expiries to 20 000 a second. One more can be delivered inside a one-second window, latched in IRR from an expiry before it: at most 20 001 deliveries in any one-second window.
 
 **Not gated in P3 (stated):** cross-CPU priority; RT priority on steal; a policy change on another thread; transitive inheritance; priority-ordered `kmutex` hand-off; the head re-queue on preemption by a higher priority (only the throttle case is exercised, by arm F).
 

@@ -234,7 +234,10 @@ struct hr_cpu {
 static struct hr_cpu g_hr[LAPIC_MAX_CPUS];
 
 static uint64_t hr_ns_to_counts(uint64_t ns) {
-    uint64_t c = ns * g_timer_count / HR_TICK_NS;   /* ns <= one tick: no overflow */
+    /* Rounded UP (DDR-1188 A4, the T5 correction): the count starts at the
+     * LAPIC write, after `now` was sampled, so a rounded-up count never
+     * expires before its target. ns <= one tick: no overflow. */
+    uint64_t c = (ns * g_timer_count + HR_TICK_NS - 1) / HR_TICK_NS;
     if (c == 0) c = 1;                              /* T5: never a count of 0 */
     if (c > 0xFFFFFFFFull) c = 0xFFFFFFFFull;
     return c;
