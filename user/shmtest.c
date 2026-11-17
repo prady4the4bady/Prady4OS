@@ -71,6 +71,7 @@
 #define FG_PATH "/SHMFG.BIN"
 #define FH_PATH "/SHMFH.BIN"     /* DDR-1178 A4.7 */
 #define FI_PATH "/SHMFI.BIN"     /* DDR-1178 A4.8 */
+#define FR_PATH "/SHMFR.BIN"     /* DDR-1178 A4.10 */
 #define FJ_PATH "/SHMFJ.BIN"
 #define FI_POLLS  1000
 #define FH_ROUNDS   16
@@ -298,6 +299,37 @@ static void fi_arm(void) {
         v = pread1(FI_PATH, 0);
     }
     hexline("PRADYOS_SHM_FI orphan=", v);
+}
+
+/* FR (DDR-1178 A4.10, #108): the reaper does the last mm_put. The kernel
+ * spawned this process, so its parent_pid is 0 and only the reaper takes its
+ * zombie. It forks a verifier V first, so V holds no mapping of the file; then
+ * it maps the file, stores a byte and exits with neither msync nor munmap. V
+ * reads the file back and prints the last two sentinels. Must be the last arm. */
+static __attribute__((noreturn)) void fr_arm(void) {
+    long hfd = make_file(FR_PATH, 4096);
+    nsi(SYS_CLOSE, hfd, 0, 0);
+    long vp = nsi(SYS_FORK, 0, 0, 0);
+    if (vp < 0) fail("fr_fork", vp);
+    if (vp == 0) {
+        unsigned v = 0;
+        for (int p = 0; p < FI_POLLS && v != 0x9c; p++) {
+            for (int i = 0; i < 20; i++) nsi(SYS_YIELD, 0, 0, 0);
+            v = pread1(FR_PATH, 0);
+        }
+        hexline("PRADYOS_SHM_FR reaper=", v);
+        wr("PRADYOS_SHM_DONE\n");
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    long cf = nsi(SYS_OPEN, (long)FR_PATH, O_RDWR, 0);
+    if (cf < 0) fail("fr_open", cf);
+    volatile unsigned char *cp = (volatile unsigned char *)
+        nsi6(SYS_MMAP, 0, 4096, PROT_RW, MAP_SHARED, cf, 0);
+    if ((long)cp < 0) fail("fr_mmap", (long)cp);
+    cp[0] = 0x9c;
+    nsi(SYS_EXIT, 0, 0, 0);                         /* no msync, no munmap */
+    for (;;) { }
 }
 
 /* FJ (DDR-1178 A4.8): a mapped file may not grow by write(2); a write inside
@@ -809,7 +841,5 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     nsi(SYS_CLOSE, 20, 0, 0);
 
     file_arms();
-    wr("PRADYOS_SHM_DONE\n");
-    nsi(SYS_EXIT, 0, 0, 0);
-    for (;;) { }
+    fr_arm();      /* never returns: its verifier prints FR and PRADYOS_SHM_DONE */
 }

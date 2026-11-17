@@ -623,6 +623,49 @@ The fixed tree is green on [41658933698](https://github.com/prady4the4bady/Prady
 
 These runs stand on the head that follows them. That head changes only this record and the PR text.
 
+### A4.10 Arm FR: the reaper does the last `mm_put` (#108, operator 6618228303; 2026-11-16)
+
+Design first; the code follows in the same PR. This is the reaper-path gate that §A4.8 left as a follow-up. It changes no behaviour: one kernel log line, one probe arm.
+
+**What was missing.** No arm made the `reaper` kernel thread release an address space that holds a dirty `MAP_SHARED` file mapping. So S4-8 (authorise write-back in the reaping thread's table) survived.
+
+**Which path reaches the reaper** (read from `b2181de`).
+- `reaper_thread` (`sched.c`) takes a zombie only when `!pid_alive(t->parent_pid)`, and `pid_alive(0)` is 0.
+- `elf_load` leaves `parent_pid` 0 (`sched_create_state`). So a process the kernel spawns is never a `wait4` child of anyone. Its zombie goes to the reaper, in every boot, with or without init.
+- **The probe process itself is such a process.** `SHMTEST` is loaded by `main.c`. Its last `mm_put` runs in the reaper. This is the second candidate of #108, and it does not depend on ordering.
+- The other candidates of #108 are not used. A thread's tcb holds the last reference only by a race. A boot with no init would be a new boot mode for one arm.
+
+**The arm** (`user/shmtest.c`, last arm; `/SHMFR.BIN`, 4096 B).
+1. The probe (A) creates the file and forks a verifier V **before** it maps the file. V holds no mapping of it.
+2. A opens the file, maps it `MAP_SHARED`, stores `0x9c` and calls `SYS_EXIT`, with neither `msync` nor `munmap`. A does not wait for V.
+3. A's zombie has `parent_pid` 0. The reaper frees it and does the last `mm_put`, which writes the page back.
+4. V polls the file with `read(2)`, 20 yields apart, for up to `FI_POLLS` polls, until the byte is `0x9c`. V then prints `PRADYOS_SHM_FR reaper=0x9c` and `PRADYOS_SHM_DONE`. V is reparented to init when A exits, and init reaps it.
+- Because A must exit to be reaped, **`PRADYOS_SHM_DONE` now comes from V**. A failed `fork`, `open` or `mmap` prints `PRADYOS_SHM FAIL`, the gate's forbidden string.
+
+**The kernel line** (#108 item 1, "show that the reaper did it").
+- `shm_vma_writeback` (`kernel/ipc/shm.c`), in release mode, prints one line when it wrote at least one page **and the calling thread has no address space** (`current_thread->mm == 0`, a kernel thread): `[shm] release wb by=<thread name> pages=<n>`.
+- A `wait4` caller always has an `mm`, so the line never prints for the `wait4` path (arms FE and FI). It prints only when a kernel thread released the mapping.
+- The gate requires `[shm] release wb by=reaper pages=1`.
+
+**Sentinels added to `smoke-shm`:** `PRADYOS_SHM_FR reaper=0x9c` and `[shm] release wb by=reaper pages=1`.
+
+**Vacuity, checked before the code.**
+- *Would FR pass with the pre-A4.8 check?* By reading: `cap_ok` resolves the handle in `current_thread->caps`. The reaper's table comes from `cap_table_create` and is empty, so the write is refused, the byte stays `0x00`, and no `release wb` line prints. FR would be red on both sentinels. FI is not, because init's table has the same handle number (§A4.8). **Mutant S4-8 must show this in CI; until it does, this is a reading, not a result.**
+- *Could init's `wait4` release A instead?* No. `sched_wait_child` matches `parent_pid == self->tgid`, and A's is 0.
+- *Does the kernel line prove anything the byte does not?* Yes. The byte alone would also arrive if some `wait4` caller released A. The line prints only for a thread without an `mm`.
+- *Can V see the byte before the write-back?* No. `read(2)` reads the file, not the mapped frames (§A4.6). S4-5 shows the same for FI (`orphan=0x00`).
+
+**Mutants.**
+- **S4-8** (re-applied on the current code): the release write is made only if `vfs_write_authorized(v->wcap)` holds in the calling thread. Expected: **red on FR only** (`reaper=0x00`, no `release wb` line, and a `[shm] writeback failed rc=-1` line). FE and FI stay green, as in run 41659209478.
+- **S4-5** (no write-back at the last `mm_put`) is already on record for FE and FI (§A4.9). It would be red on FR as well. It is not run again: it would add a CI run and show nothing new about the reaper.
+
+**Not gated by FR.**
+- A reaper release that fails for another reason than authorisation.
+- `MAP_SHARED` file mappings released by any other kernel thread. None exists today.
+- Timing: the poll bound is the same as FI's. A reaper starved for longer than the bound would read as red, not as a false pass.
+
+QEMU (TCG, 4 vCPU) only. Not verified on real hardware.
+
 ## 7. Honesty labels
 
 **Page counts in arms J, L, M and Q (DDR-1185).** All four read `SYS_SYSINFO.free_pages`, which is system-wide (DDR-1185 §1).
@@ -631,7 +674,7 @@ These runs stand on the head that follows them. That head changes only this reco
 - **J and L stay single-pair.** Each window is one syscall (`shmdt`, preceded in L by `shmctl(IPC_RMID)`), and when this was written smoke-shm ran on one CPU, where a false pass would need at least `RECLAIM_MIN` (12) pages freed by someone else inside one syscall. **Since §A4.7 smoke-shm boots with `QEMU_SMP=4`.** Other CPUs can now free pages inside those windows, so J's and L's cross-CPU false-pass risk is **not gated** (§A4.8).
 
 P1 is **gated by `smoke-shm` arms A-F**. P2 is **gated by `smoke-shm` arms G-M and T**; S2-1 to S2-7 are shown red in CI (A2.3), first on the A2.3 head and again on `551b562`. S2-8 is shown red on T (A2.4). P3 is **gated by `smoke-shm` arms N-S**; S3-1 to S3-6 are shown red in CI (Amendment 3). P4 is **gated by `smoke-shm` arms FA-FJ** (Amendment 4). S4-1 to S4-7 and S4-9 are shown red in CI on `b244eea` (A4.9); S4-2 is red on FH, so the TLB invalidation step is gated. **Not gated:**
-- the authorization-context fix of A4.8: S4-8 survived, and no arm reaches the reaper;
+- the authorization-context fix of A4.8: S4-8 survived on FI. Arm FR (§A4.10) reaches the reaper; it counts as gated only once S4-8 is shown red on FR in CI;
 - the io_uring growth refusal;
 - J's and L's cross-CPU false-pass risk;
 - two concurrent first mappers. Everything is emulated (QEMU TCG) only, and **not verified on real hardware**. This record does not close OPEN-1/2/12/13 or U1-U3.
