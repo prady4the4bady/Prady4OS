@@ -776,6 +776,8 @@ void isr_dispatch(struct regs *r) {
      * threads run on APs, cap-4.) */
     if (r->vector == LAPIC_TIMER_VECTOR) {
         lapic_eoi();                           /* EOI first: sched_tick may switch away */
+        if (!hrt_irq())                        /* DDR-1188 A3: an early one-shot, */
+            return;                            /* not a tick: no tick work at all  */
         struct percpu *pc = this_cpu();
         if (pc && !pc->is_bsp) {
             sched_tick();                      /* AP: preemption only (no global tick) */

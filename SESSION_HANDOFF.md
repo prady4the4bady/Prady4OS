@@ -4,16 +4,15 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## State (2026-11-17)
 
-- **dev/phase1 tip:** `0f16c16` (#133, DDR-1206 and Amendment 1: `FUTEX_WAIT` ends on a handlerless SIGTERM/SIGPIPE, but not inside an active handler; arms FK, FL). Before it: #134 `03a3326` (DDR-1178 §A4.10, arm FR, the reaper-path write-back gate; closed #108), #131 `b2181de` (DDR-1205, `execve` resets the FS base; closed #110), #130 `ec6187d` (C1.5 P1).
-- **Kernel:** `kernel.bin` 1,659,274 B against the 1,703,936 B gate, 44,662 B headroom (printed by CI on `2996628`, run 44055028121). NSI: next free 122. DDR numbers: next free is 1207. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
+- **dev/phase1 tip:** `5086ec6` (#136, C1.5 P2: one-shot LAPIC timers, DDR-1188 Amendment 3; arms C and M). Before it: `0f16c16` (#133, DDR-1206 and Amendment 1: `FUTEX_WAIT` ends on a handlerless SIGTERM/SIGPIPE, but not inside an active handler; arms FK, FL). Before it: #134 `03a3326` (DDR-1178 §A4.10, arm FR, the reaper-path write-back gate; closed #108), #131 `b2181de` (DDR-1205, `execve` resets the FS base; closed #110), #130 `ec6187d` (C1.5 P1).
+- **Kernel:** `kernel.bin` 1,663,370 B against the 1,703,936 B gate, 40,566 B headroom (printed by CI on `a10315a`, run 44087243331). NSI: next free 122. DDR numbers: next free is 1207. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
 - **Work queue (#45 6761846242, the newest owner comment):**
   1. ~~#115~~ #118. 2. ~~#112~~ #120. 3. ~~RCU code~~ #123, #125.
-  4. **C1.5 from DDR-1188:** ~~P1~~ #130. **P2 is #136** (one-shot LAPIC timers, DDR-1188 Amendment 3; arms C and M; mutants C3 and C13). Then P3–P6. Then C1.6 from DDR-1189, C1.7 from DDR-1179 (check the stale KASLR PRs #82, #84, #85 first), then deadlock detection (needs a DDR; none exists).
+  4. **C1.5 from DDR-1188:** ~~P1~~ #130, ~~P2~~ #136. **P3 is next** (FIFO/RR, throttle, `RES_SCHED`, `kmutex` PI: DDR-1188 Amendment 4, written on local branch `c15-p3`; arms D, E, F, G, H, N, P; mutants C4–C8b, C14, C16). Then P4–P6. Then C1.6 from DDR-1189, C1.7 from DDR-1179 (check the stale KASLR PRs #82, #84, #85 first), then deadlock detection (needs a DDR; none exists).
   - Notes for DDR-1188 (A1-5): P3's priority inheritance must move a boosted fair owner onto the RT queue and back; P6's tickless idle must wake on RT-throttle budget replenishment.
   - **Merge terms:** the five conditions of 6594914166, with the evidence posted on #45 before the merge. dev/phase1 requires branches to be up to date (strict status checks): merging one PR puts the others behind, and a base merge changes the head, so gated mutants must be re-run on the new head. Merge one gated PR at a time. At most 3 CI runs at once. Post status on #45 at the end of each item.
 - **Open PRs:**
-  - **#136** (C1.5 P2). Local: arm C 45–49 of 50, arm M about 1 035; C3 red on C (and on M through its lower bound), C13 red on M only. Mutant branches `mut/c15p2-C3` and `mut/c15p2-C13` exist locally on the old head and must be rebuilt on the final head.
-  - **Branch `ddr1203-mapguard`** (`94f41d3`, no PR yet): the DDR-1203 `map_core` guard, gate `smoke-mapguard`, `GLOBAL_FORBIDDEN` count 78. G-B moved from slot 256 to slot 0 (Amendment 1: `vmm_unmap` frees emptied tables up to the top level). Local: M1 red on G-A/G-B, M2 on G-C, M3 on G-A/G-B/G-C.
+  - **Branch `ddr1203-mapguard`** (`df3685f`, base `0f16c16` merged, no PR yet): the DDR-1203 `map_core` guard, gate `smoke-mapguard`, `GLOBAL_FORBIDDEN` count 78. G-B moved from slot 256 to slot 0 (Amendment 1: `vmm_unmap` frees emptied tables up to the top level). Local: M1 red on G-A/G-B, M2 on G-C, M3 on G-A/G-B/G-C.
   - **#132** (this bookkeeping).
 - **Issues filed:** #135 (one local `PTHR_R` "R create" failure in 7 runs; mechanism not named; the probe prints no return code). Earlier, all open: #116, #117, #119.
 - **Follow-ups recorded, not started:** the four other waits that ignore a handlerless SIGTERM (DDR-1206 §4); `signal_deliver` acting on default-terminate signals while a handler is active (DDR-1206 A1).
@@ -31,8 +30,8 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## Next
 
-- Merge #136 (C1.5 P2) under the merge terms, then open and merge the DDR-1203 PR.
-- C1.5 P3 per DDR-1188 §3–§4.
+- Open and merge the DDR-1203 PR (merge the base first).
+- C1.5 P3 per DDR-1188 Amendment 4; it also carries the T5 correction CodeRabbit asked for on #136 (round the count up, reword T5).
 - Then continue from the next unticked item in `docs/V1_MASTER_CHECKLIST.md`. C11.1 stays last.
 
 ## Open blockers

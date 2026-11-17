@@ -75,13 +75,19 @@ Status: IN PROGRESS. Needs: C1.1, C1.2, C1.3. Merged: #76 `3358b35` (P1c, DDR-11
 Exit gate: threads and lock gates (names TBD) incl. race stress, plus the three DDR-1177 items above.
 
 ### C1.5 Scheduler classes
-Status: IN PROGRESS (P1 of 6 merged; DDR-1188 §3). Needs: C1.4.
+Status: IN PROGRESS (P1 and P2 of 6 merged; DDR-1188 §3). Needs: C1.4.
 - [x] **P1, the time ABI** (DDR-1188 P1, Amendments 1–2): #130 `ec6187d`. `CLOCK_MONOTONIC` and `CLOCK_REALTIME` on the TSC through the vDSO (K7), `SYS_CLOCK_GETTIME` (120), `SYS_NANOSLEEP` (121), the per-AP TSC skew measurement, and gate `smoke-schedclass` arms A, B, B2 and B3.
   - Green on the final head `5317bf5` (run [43775518109](https://github.com/prady4the4bady/Prady4OS/actions/runs/43775518109)).
   - Mutants, each built on `5317bf5` and red: C1 on arm A (`back=110`, run 43790409362); C2 on arm B (`slept_ok=1`, run 43790413646); C2b on arm B2 and also B3 (`usr1_ms=5008 eintr=0`, run 43775724179); C2c on arm B3 only (`term_ms=5009`, run 43775726375).
   - Not gated: C1b (the reader's seqlock retry, A1-3) and A2-2 (the `lfence` before the reader's TSC sample).
   - P1 does not tick any of the three items below: it is only the clock part of the third. P2 (one-shot timers) to P6 (tickless) remain.
   - QEMU (TCG, 4 vCPU) only, not verified on real hardware.
+- [x] **P2, one-shot LAPIC timers** (DDR-1188 Amendment 3): #136 `5086ec6`. `nanosleep` arms a one-shot on the LAPIC count between ticks (T1–T5: an 8-slot per-CPU table, a budget of 1 000 one-shots per thread per 1 s window, 50 µs spacing). Gate `smoke-schedclass` arms C and M.
+  - Green on the final head `a10315a` (run [44087243331](https://github.com/prady4the4bady/Prady4OS/actions/runs/44087243331): `early=48 of 50`, `sleeps=1042`).
+  - Mutants on `a10315a`: C3 red on arm C and on arm M (`early=6`, `sleeps=102`, run 44087238859); C13 red on arm M only (`sleeps=2040`, run 44087247529).
+  - Not gated (Amendment 3): T5 spacing, the table-full path, a cancel from another CPU, the tick delay, the five review fixes. TSC-deadline mode is not built.
+  - Open on review: T5's floor is measured from the previous expiry and the count rounds down (under one LAPIC count short). P3 rounds up and rewords T5 (#45 6950265363).
+  - P2 does not tick the three items below either; it is the high-resolution part of the third. QEMU (TCG, 4 vCPU) only, not verified on real hardware.
 - [ ] real-time classes (FIFO, RR, deadline), with `kmutex` priority inheritance (DDR-1193 D1)
 - [ ] pressure stall information (CPU, memory, I/O)
 - [ ] CPU frequency and tickless timers, high-resolution clocks
