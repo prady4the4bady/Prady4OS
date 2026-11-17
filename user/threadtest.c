@@ -49,6 +49,7 @@ void pthr_arms(void);    /* user/pthrtest.c (DDR-1197 Amendment 1) */
 #define WNOHANG        1
 #define SIGKILL        9
 #define SIGUSR1        10
+#define SIGTERM        15
 #define EFAULT         14
 #define FUTEX_WAIT     0
 #define FUTEX_WAKE     1
@@ -177,6 +178,7 @@ struct shared {
     volatile unsigned a_ctid;  /* arm A: zeroed by the kernel at thread exit */
     volatile unsigned c_ctid;  /* arm C */
     volatile uint32_t fw, fdw, few, ffw, fhw, fbw, fcw, ictid;   /* futex words */
+    volatile uint32_t fkw;     /* DDR-1206: arm FK */
     volatile long fq;          /* FD: threads about to wait               */
     volatile long frc, brc, crc, cms, erc, hrc;   /* futex return values  */
     volatile long ready, hdone;
@@ -344,6 +346,20 @@ __attribute__((noreturn, force_align_arg_pointer)) static void t_slow(long arg) 
 
 __attribute__((noreturn, force_align_arg_pointer)) static void on_usr1(long sig) {
     (void)sig;
+    nsi(SYS_SIGRETURN, 0, 0, 0);
+    for (;;) { }
+}
+
+/* Arm FL (DDR-1206 Amendment 1): a handler that waits 1 s on a word of its
+ * own. A wait that ends in any way but its timeout is reported through the
+ * exit status, because the handler cannot reach the shared page. */
+__attribute__((noreturn, force_align_arg_pointer)) static void on_usr1_wait(long sig) {
+    (void)sig;
+    volatile uint32_t w = 0;
+    struct fx_ts ts = { 1, 0 };
+    long rc = fx(&w, FUTEX_WAIT | FUTEX_PRIVATE, 0, &ts);
+    if (rc != -110 /* -ETIMEDOUT */)
+        nsi(SYS_EXIT, 40, 0, 0);
     nsi(SYS_SIGRETURN, 0, 0, 0);
     for (;;) { }
 }
@@ -1105,6 +1121,84 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     if (fx(&s->fw, 5, 0, 0) == -38) rej++;
     if (fx(&s->fw, FUTEX_WAIT, 0, &bad) == -22) rej++;
     say("PRADYOS_FUTEX_J rejects=%d\n", (long)(rej));
+
+    /* FK (DDR-1206): SIGTERM with no handler ends an untimed FUTEX_WAIT. The
+     * waiter must be seen BLOCKED with its WAIT not returned (frc_f == 99)
+     * before the signal, and must be reaped with status -1 (ended by the
+     * kernel) without its WAIT ever returning to ring 3. */
+    s->fkw = 0; s->ready = 0; s->frc_f = 99;
+    long kp = nsi(SYS_FORK, 0, 0, 0);
+    if (kp < 0) fail("fork");
+    if (kp == 0) {
+        s->ready = 1;
+        s->frc_f = fx(&s->fkw, FUTEX_WAIT, 0, 0);
+        nsi(SYS_EXIT, 0, 0, 0);
+        for (;;) { }
+    }
+    long kasleep = await(&s->ready, 2000) && sy_blocked(kp, 2000) && s->frc_f == 99;
+    long kkill = nsi(SYS_KILL, kp, SIGTERM, 0);
+    long kterm = 0;
+    {
+        int st = 0x7fffffff;
+        uint64_t end = now() + 2000 * MS;
+        while (now() < end) {
+            if (nsi(SYS_WAIT4, kp, (long)&st, WNOHANG) == kp) {
+                kterm = kasleep && kkill == 0 && st == -1 && s->frc_f == 99;
+                break;
+            }
+            nsi(SYS_YIELD, 0, 0, 0);
+        }
+        if (st == 0x7fffffff) {          /* never reaped: end it so later arms run */
+            nsi(SYS_KILL, kp, SIGKILL, 0);
+            end = now() + 5000 * MS;
+            while (now() < end && nsi(SYS_WAIT4, kp, (long)&st, WNOHANG) != kp)
+                nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    say("PRADYOS_FUTEX_K term_waiter=%d\n", (long)(kterm));
+
+    /* FL (DDR-1206 Amendment 1): a SIGTERM with no handler does NOT end a wait
+     * made inside an active handler, because it cannot be acted on until the
+     * handler returns. The child never blocks outside the handler, so BLOCKED
+     * means "in the handler's wait". The SIGTERM must go out under 900 ms
+     * after the SIGUSR1, so it lands inside the 1 s wait; a slower run is red,
+     * not a pass. Then the wait times out, the handler returns, and the
+     * SIGTERM ends the child (status -1). A wait cut short exits with 40. */
+    s->ready = 0;
+    long lp = nsi(SYS_FORK, 0, 0, 0);
+    if (lp < 0) fail("fork");
+    if (lp == 0) {
+        struct { uint64_t h, flags, mask; } act = { (uint64_t)on_usr1_wait, 0, 0 };
+        if (nsi(SYS_SIGACTION2, SIGUSR1, (long)&act, 0) != 0) nsi(SYS_EXIT, 2, 0, 0);
+        s->ready = 1;
+        for (;;) nsi(SYS_YIELD, 0, 0, 0);
+    }
+    long lready = await(&s->ready, 2000);
+    uint64_t lt0 = now();
+    long lusr = nsi(SYS_KILL, lp, SIGUSR1, 0);
+    long lin = lready && lusr == 0 && sy_blocked(lp, 2000);
+    long lkill = nsi(SYS_KILL, lp, SIGTERM, 0);
+    long lfast = (now() - lt0) < 900 * MS;
+    long lok = 0;
+    int lst = 0x7fffffff;
+    {
+        uint64_t end = now() + 4000 * MS;
+        while (now() < end) {
+            if (nsi(SYS_WAIT4, lp, (long)&lst, WNOHANG) == lp) {
+                lok = lin && lfast && lkill == 0 && lst == -1;
+                break;
+            }
+            nsi(SYS_YIELD, 0, 0, 0);
+        }
+        if (lst == 0x7fffffff) {         /* never reaped: end it so later arms run */
+            nsi(SYS_KILL, lp, SIGKILL, 0);
+            end = now() + 5000 * MS;
+            while (now() < end && nsi(SYS_WAIT4, lp, (long)&lst, WNOHANG) != lp)
+                nsi(SYS_YIELD, 0, 0, 0);
+        }
+    }
+    say("[futex] FL in_handler=%d fast=%d st=%d\n", lin, lfast, (long)lst);
+    say("PRADYOS_FUTEX_L handler_wait=%d\n", (long)(lok));
 
     /* ---- DDR-1193 (C1.4 P3a): psync arms ---- */
     {
