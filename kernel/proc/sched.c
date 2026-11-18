@@ -240,7 +240,7 @@ static struct tcb *rt_candidate(struct rq *q) {
         if (c->state != THREAD_READY)
             continue;
         uint32_t p = sched_eff_prio(c);
-        if (p > bp) {
+        if (p && (!bp || p < bp)) {      /* MUTANT C14 */
             bp = p;
             best = c;
         }
@@ -2842,7 +2842,7 @@ static int rt_tick(int cpu, struct tcb *cur) {
     spin_unlock(&q->lock);
     if (!me)
         return (top && !thr) ? 1 : 0;             /* arm D: RT waiting, OTHER running */
-    if ((thr && other) || top > me) {
+    if ((thr && other) || (top && top < me)) {   /* MUTANT C14 */
         cur->rt_head = 1;                          /* arms G, N: back to the head */
         return 2;
     }
