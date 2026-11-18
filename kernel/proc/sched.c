@@ -1585,10 +1585,16 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
             cm->mmap_next = parent->mm->mmap_next;
             shm_fork_vmas(cm);   /* DDR-1178 A2.2: the copies are attachments */
             t->mm = cm;
-            /* DDR-1188 A4 S3: fork drops RES_SCHED. cap_fork copied the slot;
-             * revoke the child's copy so no handle value works there. */
-            if (parent->sched_cap != CAP_NULL)
-                cap_revoke(t->caps, parent->sched_cap);
+            /* DDR-1188 A4 S3: fork drops RES_SCHED. cap_fork copied every
+             * slot, so revoke every RES_SCHED slot in the child's table, not
+             * only the one this parent thread names: a thread that missed the
+             * handle's copy may fork too, and the child would otherwise find
+             * the live slot through cap_find (CodeRabbit on #138). */
+            for (int k = 0; k < 64; k++) {
+                cap_t rs = cap_find(t->caps, RES_SCHED, SCHED_RES_ID, 0);
+                if (rs == CAP_NULL || cap_revoke(t->caps, rs) != 0)
+                    break;
+            }
         }
     }
 
