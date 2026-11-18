@@ -521,7 +521,12 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 - Every block device is virtio-blk in the gate VMs (`boot_test.sh`). A virtio-blk request's issuer waits for its completion in `submit()` (`virtio_blk.c`), in a `sched_block_timeout` loop on `req[s].done`. There is no block cache, so every `blk_read` reaches the device.
 
 **P1. Definition.** As §2: `some` is the number of ticks, out of the last 100 sampled, in which at least one thread was stalled. That is a percentage of the last second at 100 Hz: a plain sliding window with no decay.
-- **CPU, per CPU.** A tick on CPU `c` is *stalled* when `g_rq[c]` holds a READY entry, a thread runnable on `c` but not running. The tick takes the queue lock and stops at the first READY entry; most queues hold a few entries.
+- **CPU, per CPU.** A tick on CPU `c` is *stalled* when `g_rq[c]` holds a READY entry, a thread runnable on `c` but not running. Two kinds of READY entry do not count:
+  - **The idle thread**, which is never queued (`schedule()` re-queues `prev` only when it is not idle). The check is defensive.
+  - **A thread queued by its own `yield()`.** It offered the CPU away, so it is not being denied it. A new `tcb` field `psi_yld` is set by `yield()` before it calls `schedule()` and cleared when the thread runs again.
+  - **Why the yield exclusion.** A first draft counted every READY entry. In the gate VM, every CPU then read 100 before any load (`pre 100 100 100 100`). The queues hold busy-polling threads that never stop: SURFTEST, INPUTTST, AETHERD, PRISM, INIT and the reaper. Each is dispatched about 20 000 times a second against about 25 run ticks a second, a `yield()` loop. With them counted, CPU `some` is pinned at 100 on every CPU of this OS and measures nothing.
+  - **Deviation from Linux, stated.** Linux counts a yielding task as runnable. Here a CPU stall means a thread that wants the CPU and was not given it: woken and not yet run, or preempted.
+  - With the exclusion, the same VM reads 0 on every CPU without load (`base=0,0,100,0`: CPU 2 still holds the last second of arm Q). The tick takes the queue lock and stops at the first READY entry; most queues hold a few entries.
 - **I/O, system-wide.** A tick is *stalled* when at least one thread is waiting for a virtio-blk **read** (`VIRTIO_BLK_T_IN`) to complete. A counter `g_psi_io_wait` is raised before the completion wait in `submit()` and lowered after it, on every exit path. Only CPU 0's tick samples the I/O window, so its time base is one CPU's ticks. P6 must keep CPU 0 ticking, or move the sample.
 - Writes and flushes are not I/O pressure in P5. §2 names reads only.
 - **Memory pressure** waits for C2.1 (§2).
@@ -533,7 +538,7 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 - It returns 0–100, the stalled ticks in the last 100, or `-EINVAL` (bad `res` or `cpu`).
 - No capability: pressure is a count, like Linux's world-readable `/proc/pressure`, and it names no thread.
 
-**P4. The probe's I/O load: `SYS_SCHED_CPU` op 5, probe-only** (`g_sched_probe`, as ops 3 and 4; `-ENOSYS` otherwise). It reads `n` MiB (1–16) from the start of block device 0, the boot disk, in 64 KiB requests into one 64 KiB buffer (`pmm_alloc_pages(4)`). It returns 0, or the first error. Read-only, so the boot disk is safe. No new NSI is spent on a test hook.
+**P4. The probe's I/O load: `SYS_SCHED_CPU` op 5, probe-only** (`g_sched_probe`, as ops 3 and 4; `-ENOSYS` otherwise). Arm O reads 16 MiB: a 4 MiB read finished in about 20 ms under TCG and raised the window by only 2 ticks. It reads `n` MiB (1–16) from the start of the first block device that holds that many, in 64 KiB requests into one 64 KiB buffer (`pmm_alloc_pages(4)`). It returns 0, or the first error. It is read-only, so whichever disk it picks is safe. A first draft used device 0, the boot image, which is 2 MiB, and op 5 returned `-EINVAL`. No new NSI is spent on a test hook.
 
 **P5. Arms and mutants.** Mutants land on different arms (rule 3), so §4's arm K is split into its two halves.
 
@@ -541,7 +546,7 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 |---|---|---|---|
 | K | two `SCHED_OTHER` spinners pinned to CPU 2 for 1.5 s: CPU 2's `some` is at least 50 | C11 | the CPU stall bit is never set (always 0) |
 | K0 | 1.5 s after both spinners exit: CPU 2's `some` is at most 5 | C11b | the window never forgets: an old bit is not cleared (it stays near 100) |
-| O | a thread reads 4 MiB through op 5: the I/O `some` the main thread reads during the read is above 0 at least once, and 2 s after the read it is 0 | C15 | `g_psi_io_wait` is never raised (always 0) |
+| O | a thread reads 16 MiB through op 5: the I/O `some` the main thread reads during the read is above 0 at least once, and 2 s after the read it is 0 | C15 | `g_psi_io_wait` is never raised (always 0) |
 
 - **Why K asserts ≥ 50 and not §4's "above 0".** Two spinners on one CPU leave one READY on almost every tick, so the value is near 100. A partial accounting bug would still pass "above 0".
 - **Why K0 allows 5 and not 0.** Unpinned threads (the shell, kernel workers) may briefly queue on CPU 2. A tick where two of them are runnable together is stalled, rightly. §4's "0 when that CPU is idle" assumed an idle CPU, which a gate VM does not have.
@@ -549,7 +554,16 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 - **Vacuity, read from the code before writing:** on the P4 tree `SYS_PSI` does not exist (`-ENOSYS`), so all three arms fail at their first read. Each mutant is built and run locally before its arm is trusted, then in CI on the final head.
 - The new sentinels: `PRADYOS_SCHED_K some_ok=1`, `PRADYOS_SCHED_K0 idle_ok=1`, `PRADYOS_SCHED_O io_ok=1`.
 
-**Not gated in P5 (stated):** the I/O window's sampling only on CPU 0, and the exclusion of writes and flushes; the one-tick-stale read; `-EINVAL` paths; I/O through a non-virtio device (none exists in the gate VMs).
+**Local results (QEMU TCG, one boot each, not CI):**
+- the tree with P5: every arm passes. K `base=0,0,100,0 load=100 idle=0`; O `peak=8 after=0`.
+- C11: red on K only (`load=0`).
+- C11b: red on K0 (`idle=100`) and on O (`after=100`), the second witness predicted above.
+- C15: red on O only (`peak=0`).
+- `kernel.bin`: 1,683,850 B by default and 1,700,234 B with `RCU_TORTURE=1` (3,702 B under the gate). That counts the probe at `-Os`, from P4's CI fix. P6 has under 4 KB left in the binding build.
+- The first draft failed K0 (`idle=67`, then `idle=74` after excluding the idle thread) for the polling-thread reason above, and O (`rc=-22`, device 0 too small). Both were measured, named and fixed before the mutants were run.
+
+**Not gated in P5 (stated):**
+- the yield exclusion (`psi_yld`): no arm runs a yielder beside a waiting thread; the I/O window's sampling only on CPU 0, and the exclusion of writes and flushes; the one-tick-stale read; `-EINVAL` paths; I/O through a non-virtio device (none exists in the gate VMs).
 
 **Risk.** P5 adds one queue-lock walk to every tick, stopping at the first READY entry, and two atomics per virtio-blk read. The walk is on the scheduling path, where OPEN-2 and OPEN-12/13 live. Every P5 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
 

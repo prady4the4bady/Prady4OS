@@ -424,6 +424,11 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     uint64_t dest_t0 = 0;
     { struct percpu *dp = percpu_get(v->dest_cpu_idx);
       if (dp) dest_t0 = dp->ticks; }
+    /* DDR-1188 A6 P1: a thread waiting for a read is I/O pressure, until the
+     * wait ends by completion or by timeout (both exits lower the count). */
+    int psi_io = (type == VIRTIO_BLK_T_IN);
+    if (psi_io)
+        __atomic_add_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
     while (!v->req[s].done) {
         vown_clear(v);                           /* DDR-1138: see the slot wait */
         int _to = sched_block_timeout(&v->compl_lock, &v->req[s].done, 500);
@@ -496,10 +501,14 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
             }
             data_timeout_release(v, s);          /* DDR-1160 */
             vown_clear(v);                       /* DDR-1138 */
+            if (psi_io)
+                __atomic_sub_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
         }
     }
+    if (psi_io)
+        __atomic_sub_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
 
     int ok = (*status == 0);
     if (type == VIRTIO_BLK_T_FLUSH && ok)

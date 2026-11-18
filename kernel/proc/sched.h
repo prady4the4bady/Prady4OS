@@ -307,6 +307,9 @@ struct tcb {
     uint32_t   dl_left;        /* D3: budget left in this period, ticks          */
     uint32_t   dl_thr;         /* D3: budget spent; eligible again at deadline   */
     uint64_t   dl_bw;          /* D4: runtime/period, DL_BW_SHIFT fixed point    */
+    /* DDR-1188 A6 P1: set while this thread is queued by its own yield();
+     * psi_tick does not count it as stalled. Initialised in sched_create_state. */
+    uint32_t   psi_yld;
 };
 
 /* DDR-1188 Amendment 4 (C1.5 P3). */
@@ -334,6 +337,10 @@ static inline uint32_t sched_eff_prio(const struct tcb *t) {
  * pick and the tick take today's path. */
 extern volatile uint32_t g_rt_threads;
 /* S3: the calling thread's own policy. 0, -EINVAL or -EPERM. */
+/* DDR-1188 A6 (C1.5 P5): pressure stall information. Threads waiting for a
+ * virtio-blk read; stalled ticks of the last 100 (res 0 CPU, 1 I/O). */
+extern volatile uint32_t g_psi_io_wait;
+int  psi_read(long res, long cpu);
 int  sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime_ns,
                          uint64_t period_ns);   /* A5 D5: -EBUSY on admission */
 /* S3: kernel-only grant of RES_SCHED with `rights`. -EPERM for an agent. */

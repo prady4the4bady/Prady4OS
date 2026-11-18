@@ -19,6 +19,8 @@
 #include "syscall.h"
 #include "errno.h"
 #include "kmutex.h"
+#include "blk.h"       /* DDR-1188 A6 P4: op 5 reads the boot disk */
+#include "pmm.h"
 
 /* DDR-1188 A4 arm P: set by the launcher when QEMU_PROBES has schedclass;
  * SYS_SCHED_CPU ops 3 and 4 answer -ENOSYS otherwise. */
@@ -115,8 +117,36 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
         kmutex_lock(&g_pi_test_mx);
         kmutex_unlock(&g_pi_test_mx);
         return 0;
+    case 5: {                                   /* DDR-1188 A6 P4 arm O: read a_cpu MiB */
+        if (!g_sched_probe)
+            return -ENOSYS;
+        if (a_cpu < 1 || a_cpu > 16)
+            return -EINVAL;
+        /* The first device with room: disk 0, the boot image, is 2 MiB. */
+        uint64_t sectors = (uint64_t)a_cpu * 2048;          /* 1 MiB = 2048 sectors */
+        unsigned dev = 0;
+        while (dev < blk_count() && (!blk_get(dev) || blk_get(dev)->capacity_sectors < sectors))
+            dev++;
+        if (dev >= blk_count())
+            return -EINVAL;
+        uint64_t buf = pmm_alloc_pages(4);                   /* 64 KiB, contiguous */
+        if (!buf)
+            return -ENOMEM;
+        long rc = 0;
+        for (uint64_t lba = 0; lba < sectors && rc == 0; lba += 128)
+            if (blk_read(dev, lba, (void *)(uintptr_t)buf, 128) != 0)
+                rc = -EIO;
+        pmm_free_pages(buf, 4);
+        return rc;
+    }
     }
     return -EINVAL;
+}
+
+/* DDR-1188 Amendment 6 P3: pressure stall information, 0..100 or -EINVAL. */
+static long sys_psi(long a_res, long a_cpu, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    return psi_read(a_res, a_cpu);
 }
 
 /* DDR-1188 Amendment 4 S3: the calling thread's own scheduling policy. */
@@ -151,5 +181,6 @@ void sys_thread_register(void) {
     syscall_register(SYS_THREAD_EXIT,   sys_thread_exit);
     syscall_register(SYS_SCHED_CPU,     sys_sched_cpu);
     syscall_register(SYS_SCHED_SETSCHED, sys_sched_setsched);   /* DDR-1188 A4 */
+    syscall_register(SYS_PSI,           sys_psi);               /* DDR-1188 A6 */
     syscall_register(SYS_SCHED_GRANT,    sys_sched_grant);
 }
