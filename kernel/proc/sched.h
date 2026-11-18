@@ -307,6 +307,7 @@ struct tcb {
     uint32_t   dl_left;        /* D3: budget left in this period, ticks          */
     uint32_t   dl_thr;         /* D3: budget spent; eligible again at deadline   */
     uint64_t   dl_bw;          /* D4: runtime/period, DL_BW_SHIFT fixed point    */
+    int32_t    dl_cpu;         /* D2: whose ticks dl_deadline counts, -1 = none  */
     /* DDR-1188 A6 P1: set while this thread is queued by its own yield();
      * psi_tick does not count it as stalled. Initialised in sched_create_state. */
     uint32_t   psi_yld;

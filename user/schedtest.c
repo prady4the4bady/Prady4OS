@@ -904,6 +904,7 @@ static long arm_i(void) {
 
 struct j_state {
     volatile long f[2], order, afirst, ran, ready, pinned, setok, done, stop, abort, trials;
+    volatile long first, tries, spid;   /* first: which worker ran first this release */
     volatile long miss[2];
     volatile uint64_t rel;
 };
@@ -916,14 +917,17 @@ __attribute__((noreturn, force_align_arg_pointer)) static void j_dl(long arg) {
     __atomic_add_fetch(&s->setok, setdl(10, k ? 60 : 30) == 0, __ATOMIC_ACQ_REL);
     __atomic_add_fetch(&s->ready, 1, __ATOMIC_ACQ_REL);
     for (;;) {
-        while (!__atomic_load_n(&s->f[k], __ATOMIC_ACQUIRE) &&
-               !__atomic_load_n(&s->stop, __ATOMIC_ACQUIRE))
+        /* f[k]: 0 idle, 1 a release, 2 shut down. A release is consumed by
+         * 1 -> 0 compare-and-exchange, so it can never overwrite the
+         * terminal 2 the spinner publishes (CodeRabbit on #140). */
+        long one = 1;
+        while (__atomic_load_n(&s->f[k], __ATOMIC_ACQUIRE) == 0)
             fx_wait(&s->f[k], 0);
-        if (__atomic_load_n(&s->stop, __ATOMIC_ACQUIRE))
-            break;
-        s->f[k] = 0;
-        if (__atomic_fetch_add(&s->order, 1, __ATOMIC_ACQ_REL) == 0 && k == 0)
-            s->afirst++;
+        if (!__atomic_compare_exchange_n(&s->f[k], &one, 0, 0, __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE))
+            break;                          /* it was 2: shut down */
+        if (__atomic_fetch_add(&s->order, 1, __ATOMIC_ACQ_REL) == 0)
+            s->first = k;               /* scored by the spinner, if the release counts */
         if (mono() - s->rel > per)
             s->miss[k]++;
         __atomic_add_fetch(&s->ran, 1, __ATOMIC_ACQ_REL);
@@ -938,23 +942,44 @@ __attribute__((noreturn, force_align_arg_pointer)) static void j_spin(long arg) 
     __atomic_add_fetch(&s->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
     if (!await_eq(&s->ready, 2, 10))
         s->abort = 1;
-    for (long i = 0; i < J_TRIES && !s->abort; i++) {
+    while (!__atomic_load_n(&s->spid, __ATOMIC_ACQUIRE))   /* own tid, from spawn() */
+        __asm__ volatile("pause");
+    long hint = -1;
+    /* A release is scored only when both FUTEX_WAKEs woke a parked worker
+     * (each returned 1) and no tick landed between them: the spinner's own
+     * run_ticks did not move across the two wakes. Anything else is retried
+     * unscored (CodeRabbit on #140), so B cannot run alone and be counted. */
+    while (s->trials < J_TRIES && s->tries < 3 * J_TRIES && !s->abort) {
+        s->tries++;
+        /* 70 ms of quiet before each release: both workers have parked, and
+         * both previous deadlines have passed. */
+        struct ts req = { 0, (long)(70 * MS) };
+        nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
         s->order = 0;
         s->ran = 0;
+        s->first = -1;
         s->rel = mono();
+        long t0 = rticks(s->spid, &hint);
         __atomic_store_n(&s->f[1], 1, __ATOMIC_RELEASE);
-        fx_wake(&s->f[1]);                  /* B first */
+        long wb = nsi6(SYS_FUTEX, (long)&s->f[1], FX_WAKE, 1, 0, 0, 0);   /* B first */
         __atomic_store_n(&s->f[0], 1, __ATOMIC_RELEASE);
-        fx_wake(&s->f[0]);                  /* then A */
+        long wa = nsi6(SYS_FUTEX, (long)&s->f[0], FX_WAKE, 1, 0, 0, 0);   /* then A */
+        long t1 = rticks(s->spid, &hint);
         if (!await_eq(&s->ran, 2, 3)) {
             s->abort = 1;
             break;
         }
-        s->trials++;
-        struct ts req = { 0, (long)(70 * MS) };
-        nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
+        if (wb == 1 && wa == 1 && t0 >= 0 && t1 == t0) {
+            s->trials++;
+            if (s->first == 0)
+                s->afirst++;
+        }
     }
     __atomic_store_n(&s->stop, 1, __ATOMIC_RELEASE);
+    /* The terminal value on the futex words: a worker that has not reached
+     * FUTEX_WAIT sees a value mismatch instead of sleeping (CodeRabbit). */
+    __atomic_store_n(&s->f[0], 2, __ATOMIC_RELEASE);
+    __atomic_store_n(&s->f[1], 2, __ATOMIC_RELEASE);
     fx_wake(&s->f[0]);
     fx_wake(&s->f[1]);
     __atomic_add_fetch(&s->done, 1, __ATOMIC_ACQ_REL);
@@ -965,12 +990,12 @@ static long arm_j(void) {
     struct j_state *s = page();
     spawn(j_dl, (long)s | 0);
     spawn(j_dl, (long)s | 1);
-    spawn(j_spin, (long)s);
-    await_eq(&s->done, 3, 60);
+    __atomic_store_n(&s->spid, spawn(j_spin, (long)s), __ATOMIC_RELEASE);
+    await_eq(&s->done, 3, 90);
     long ok = s->done == 3 && !s->abort && s->trials == J_TRIES && s->afirst >= J_MIN &&
               s->pinned == 3 && s->setok == 2;
-    say("[sched] J afirst=%d of %d miss_a=%d miss_b=%d abort=%d setok=%d\n", s->afirst,
-        s->trials, s->miss[0], s->miss[1], s->abort, s->setok);
+    say("[sched] J afirst=%d of %d tries=%d miss_a=%d miss_b=%d abort=%d setok=%d\n",
+        s->afirst, s->trials, s->tries, s->miss[0], s->miss[1], s->abort, s->setok);
     return ok;
 }
 

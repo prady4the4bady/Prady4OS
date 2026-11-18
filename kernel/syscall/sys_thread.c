@@ -152,7 +152,9 @@ static long sys_psi(long a_res, long a_cpu, long a3, long a4, long a5, long a6) 
 /* DDR-1188 Amendment 4 S3: the calling thread's own scheduling policy. */
 static long sys_sched_setsched(long a_tid, long a_pol, long a_prio, long a_rt, long a_per, long a6) {
     (void)a6;
-    if (a_tid != 0 || a_pol < 0 || a_prio < 0)
+    /* Range-checked before the casts below (CodeRabbit on #140). */
+    if (a_tid != 0 || a_pol < 0 || a_pol > (long)SCHED_DEADLINE || a_prio < 0 ||
+        a_prio > (long)SCHED_RT_MAX)
         return -EINVAL;
     /* DDR-1188 A5 D5: runtime and period (ns) are read only for SCHED_DEADLINE;
      * a FIFO/RR/OTHER caller may leave those registers unset. */

@@ -500,6 +500,25 @@ A `SCHED_OTHER` current thread is preempted for an eligible deadline entry by P3
   - **After the fix** (local, clean objects): the default build is 1,679,754 B (24,182 B under the gate) and the `RCU_TORTURE=1` build is 1,696,138 B (7,798 B under).
   - Every arm is re-run at `-Os` locally, and in CI with every mutant, because the probe's code changed.
 
+**Review fixes on #140 (CodeRabbit, before merge).**
+- **A repeated request refilled the budget.** Re-submitting the same parameters subtracted the thread's own share and restored a full budget and a new deadline: unbounded deadline-class time. Leaving to `SCHED_OTHER` and rejoining did the same. Fixed:
+  - a thread already in `SCHED_DEADLINE` keeps its deadline, and its budget left is capped at the new runtime;
+  - a thread that rejoins before the deadline of the interval it left starts throttled, with no budget until that deadline;
+  - that deadline is counted in the ticks of the CPU it was set on (`dl_cpu`, a new `tcb` field). A thread that re-pins before rejoining carries the time left on the old CPU's clock over to the new one. CPUs start ticking at different times, so comparing raw counts across CPUs could refill early (CodeRabbit's second round);
+  - leaving still releases the admission share.
+- **Admission shares rounded down.** Two 45 000 001/100 000 000 requests each stored 471 859, summing exactly to `DL_BW_MAX`, so both were admitted although they exceed 0.90. Fixed: each share is rounded up. This is conservative: a sum of exactly 0.90 made of shares that do not divide evenly can now be refused. Arm I's 0.5, 0.3 and 0.2 still give `0, 0, -EBUSY`.
+- **Equal effective priority.** A `kmutex` owner boosted to 100 by a deadline waiter was not preempted by another eligible deadline entry (`top == me`), although the picker ranks the deadline entry first. Fixed: a non-deadline current thread is preempted whenever an eligible deadline entry waits and K2 allows RT.
+- **Charging a thread that has begun to block.** In `switch_wait_offcpu_sched`'s interrupt window, a blocking deadline thread is still `current` and can be woken by another CPU. A tick could then charge the budget `dl_wake` had just refilled. Fixed: only a `THREAD_RUNNING` current thread is charged.
+- **`prio` was cast before it was checked.** `SYS_SCHED_SETSCHED` now rejects `policy > 3` and `prio > 99` before narrowing to `uint32_t`.
+- **Arm J scores only verified releases.** CodeRabbit raised two ways a release could be scored without both workers competing:
+  - a worker not yet parked when it was woken;
+  - a tick between the two wakes, which lets B run alone.
+  - Each release now checks both. `FUTEX_WAKE` returns how many waiters it woke, and the spinner reads its own `run_ticks` before the first wake and after the second. A release counts only when both wakes returned 1 and the spinner's `run_ticks` did not move. Any other release is retried unscored, up to 300 tries for 100 scored releases.
+  - A 70 ms quiet gap precedes every release, so both previous deadlines have passed.
+  - Each futex word is 0 (idle), 1 (a release) or 2 (shut down). A worker consumes a release by a 1 → 0 compare-and-exchange, so it can never overwrite the 2 the spinner publishes before its final wake. A worker that has not reached `FUTEX_WAIT` then sees a value mismatch instead of sleeping.
+  - Locally the arm scored 100 of 100 in 112 releases: 12 were discarded as unverified. C10 scored 0 of 100 in 102.
+- **None of these is gated:** no arm repeats a request, rejoins, sums shares near 0.90 by rounding, boosts a `kmutex` owner from a deadline waiter, or blocks during the switch window.
+
 **Not gated in P4 (stated):**
 - deadline inheritance through a `kmutex` (D1);
 - the work-conserving run of a CBS-throttled thread (D3);
