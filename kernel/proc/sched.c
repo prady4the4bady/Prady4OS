@@ -229,10 +229,7 @@ int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64
     uint64_t fl = spin_lock_irqsave(&g_prio_lk);
     if (policy == SCHED_DEADLINE) {
         uint64_t sum = g_dl_bw[t->pin_cpu] - t->dl_bw;   /* without its own old share */
-        if (sum + bw > DL_BW_MAX) {
-            spin_unlock_irqrestore(&g_prio_lk, fl);
-            return -EBUSY;                                /* A5 D4, K4 */
-        }
+        /* MUTANT C9: no admission check */
         g_dl_bw[t->pin_cpu] = sum + bw;
         t->dl_bw = bw;
         uint64_t now = dl_now(t);
