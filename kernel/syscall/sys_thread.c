@@ -80,6 +80,8 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
         struct percpu *tp = percpu_get((uint32_t)a_cpu);
         if (!tp || !tp->present)
             return -EINVAL;
+        if (current_thread->sched_policy == SCHED_DEADLINE)
+            return -EBUSY;                      /* DDR-1188 A5 D2: its share is per CPU */
         current_thread->pin_cpu = (int32_t)a_cpu;
         /* schedule() re-queues us through rq_push, which honours the pin, so
          * this returns on the pin CPU. */
@@ -87,6 +89,8 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
         return 0;
     }
     case 2:                                     /* UNPIN */
+        if (current_thread->sched_policy == SCHED_DEADLINE)
+            return -EBUSY;                      /* DDR-1188 A5 D2 */
         current_thread->pin_cpu = -1;
         return 0;
     case 3: {                                   /* DDR-1188 A4 arm P: hold the test kmutex */
@@ -116,11 +120,18 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
 }
 
 /* DDR-1188 Amendment 4 S3: the calling thread's own scheduling policy. */
-static long sys_sched_setsched(long a_tid, long a_pol, long a_prio, long a4, long a5, long a6) {
-    (void)a4; (void)a5; (void)a6;
+static long sys_sched_setsched(long a_tid, long a_pol, long a_prio, long a_rt, long a_per, long a6) {
+    (void)a6;
     if (a_tid != 0 || a_pol < 0 || a_prio < 0)
         return -EINVAL;
-    return sched_setsched_self((uint32_t)a_pol, (uint32_t)a_prio);
+    /* DDR-1188 A5 D5: runtime and period (ns) are read only for SCHED_DEADLINE;
+     * a FIFO/RR/OTHER caller may leave those registers unset. */
+    if (a_pol != (long)SCHED_DEADLINE)
+        a_rt = a_per = 0;
+    else if (a_rt < 0 || a_per < 0)
+        return -EINVAL;
+    return sched_setsched_self((uint32_t)a_pol, (uint32_t)a_prio, (uint64_t)a_rt,
+                               (uint64_t)a_per);
 }
 
 /* DDR-1188 Amendment 4 S3: grant CAP_SCHED_RT to process `pid`. The caller
