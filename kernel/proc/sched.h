@@ -307,6 +307,7 @@ struct tcb {
     uint32_t   dl_left;        /* D3: budget left in this period, ticks          */
     uint32_t   dl_thr;         /* D3: budget spent; eligible again at deadline   */
     uint64_t   dl_bw;          /* D4: runtime/period, DL_BW_SHIFT fixed point    */
+    int32_t    dl_cpu;         /* D2: whose ticks dl_deadline counts, -1 = none  */
 };
 
 /* DDR-1188 Amendment 4 (C1.5 P3). */

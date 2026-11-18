@@ -236,6 +236,16 @@ int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64
         g_dl_bw[t->pin_cpu] = sum + bw;
         t->dl_bw = bw;
         uint64_t now = dl_now(t);
+        /* A deadline is counted in the ticks of the CPU it was set on. A thread
+         * that left, re-pinned and rejoins carries the time left on that
+         * CPU's clock over to this one (CodeRabbit on #140): CPUs start
+         * ticking at different times, so their counts differ. */
+        if (t->sched_policy != SCHED_DEADLINE && t->dl_cpu >= 0 && t->dl_cpu != t->pin_cpu) {
+            struct percpu *op = percpu_get((unsigned)t->dl_cpu);
+            uint64_t onow = op ? __atomic_load_n(&op->ticks, __ATOMIC_RELAXED) : ~0ull;
+            t->dl_deadline = onow < t->dl_deadline ? now + (t->dl_deadline - onow) : 0;
+        }
+        t->dl_cpu = t->pin_cpu;
         t->dl_runtime = (uint32_t)(runtime / DL_TICK_NS);
         t->dl_period = (uint32_t)((period + DL_TICK_NS - 1) / DL_TICK_NS);
         if (t->sched_policy == SCHED_DEADLINE) {
@@ -1444,6 +1454,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dl_left         = 0;
     t->dl_thr          = 0;
     t->dl_bw           = 0;
+    t->dl_cpu          = -1;           /* DDR-1188 A5: no deadline yet */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
