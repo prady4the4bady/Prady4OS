@@ -2,26 +2,27 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-11-18)
+## State (2026-11-19)
 
-- **dev/phase1 tip:** `1c4e6bc` (#138, C1.5 P3: `SCHED_FIFO`/`SCHED_RR`, the RT throttle, `RES_SCHED`, one-level `kmutex` PI; DDR-1188 Amendment 4; arms D, E, F, G, H, N, P). Before it: `2506c94` (#137, the DDR-1203 `map_core` guard, `smoke-mapguard`, `GLOBAL_FORBIDDEN` 78), `e19ca88` (#132, bookkeeping), `5086ec6` (#136, C1.5 P2: one-shot LAPIC timers, DDR-1188 Amendment 3; arms C and M). Before those: `0f16c16` (#133, DDR-1206 and Amendment 1: `FUTEX_WAIT` ends on a handlerless SIGTERM/SIGPIPE, but not inside an active handler; arms FK, FL). Before it: #134 `03a3326` (DDR-1178 §A4.10, arm FR, the reaper-path write-back gate; closed #108), #131 `b2181de` (DDR-1205, `execve` resets the FS base; closed #110), #130 `ec6187d` (C1.5 P1).
-- **Kernel:** `kernel.bin` 1,683,850 B against the 1,703,936 B gate, 20,086 B headroom (printed by CI on `45e8319`, run 44217157028). P4–P6 must fit in that. NSI: 122 `SYS_SCHED_SETSCHED`, 123 `SYS_SCHED_GRANT`; next free 124. DDR numbers: next free is 1207. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
-- **Work queue (#45 6761846242, the newest owner comment):**
-  1. ~~#115~~ #118. 2. ~~#112~~ #120. 3. ~~RCU code~~ #123, #125.
-  4. **C1.5 from DDR-1188:** ~~P1~~ #130, ~~P2~~ #136, ~~P3~~ #138. **P4 is next** (`SCHED_DEADLINE`; needs a DDR-1188 amendment before code). Then P5, P6. Then C1.6 from DDR-1189, C1.7 from DDR-1179 (check the stale KASLR PRs #82, #84, #85 first), then deadlock detection (needs a DDR; none exists).
-  - Notes for DDR-1188 (A1-5): P3's priority inheritance must move a boosted fair owner onto the RT queue and back; P6's tickless idle must wake on RT-throttle budget replenishment.
-  - **Merge terms:** the five conditions of 6594914166, with the evidence posted on #45 before the merge. dev/phase1 requires branches to be up to date (strict status checks): merging one PR puts the others behind, and a base merge changes the head, so gated mutants must be re-run on the new head. Merge one gated PR at a time. At most 3 CI runs at once. Post status on #45 at the end of each item.
-- **Open PRs:**
-  - This bookkeeping PR (#137 and #138 in the checklist and here).
-  - Review threads left open for the operator: `docs/build_status.md` on #136 and #138 (question in #45 6948599917).
-- **Issues filed:** #135 (one local `PTHR_R` "R create" failure in 7 runs; mechanism not named; the probe prints no return code). Earlier, all open: #116, #117, #119.
-- **Follow-ups recorded, not started:** the four other waits that ignore a handlerless SIGTERM (DDR-1206 §4); `signal_deliver` acting on default-terminate signals while a handler is active (DDR-1206 A1).
+- **dev/phase1 tip:** `449cd7f` (#140, C1.5 P4: `SCHED_DEADLINE`, EDF + CBS + admission at 0.90; DDR-1188 Amendment 5; arms I, J, Q; mutants C9, C10, C17 red on `b869d4e`). Before it: `2ca1ea2` (#142, DDR-1207: the kheap large registry holds 1024 entries, arm KL, mutant K1 red), `a50e509` (#141, DDR-1197 A2: arm R prints the refusing step), `e00fc55` (#139, bookkeeping), `1c4e6bc` (#138, C1.5 P3).
+- **Kernel:** default `kernel.bin` 1,683,850 B (20,086 B headroom); the binding `RCU_TORTURE=1` build 1,700,234 B (3,702 B headroom), both printed by CI on `b869d4e` (run 44398576450). NSI: max 123; next free 124 (P5 takes it for `SYS_PSI`). DDR numbers: next free is 1208. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
+- **Standing instruction: #45 6993979920 (Nov 19).** Build every remaining chunk in checklist order, one feature per PR: DDR, code, CI gate, mutants red, merge. Merge each PR yourself under the five conditions of 6594914166 (green on the exact head, `mergeable_state` clean, mutants red or recorded not gated, CodeRabbit answered, previous PR merged). Update the checklist and this file after each merge; post a short status on #45 after each chunk. At most 3 CI runs at a time.
+  - **Still wait for the operator on:** drafts #68 and #85 (the operator merges them); any key, secret, credential or trust-root step (C3.3: write the DDR, open the PR, stop); C6.2 branding.
+  - **Blocker rule:** a red or inconclusive gate you cannot explain, a recurrence of an unnamed failure, or a CodeRabbit finding that shows the design is wrong: one blocker comment, mark the chunk BLOCKED, take the next unblocked chunk.
+- **Order now (the operator's, 6993979920):** C1.5 P5 (PSI), P6 (tickless), deadlock detection (C1.4), C1.6, C1.7, then Phase 2 onward by `Needs`. C11.1 stays last. This order puts deadlock detection after P5 and P6, although the checklist lists C1.4's row first. The operator chose that order (as 6761846242 did before it), and the newest owner comment wins over both the checklist order and DDR-1188's "No code until C1.4 has merged". P1–P4 were built under the same orders and run on C1.4's merged parts (threads, futex, `psync`, RCU).
+- **Branches ready:**
+  - `c15-p5` at `b8bead4`: P5 (DDR-1188 Amendment 6, `SYS_PSI` 124, arms K, K0, O, mutants C11, C11b, C15) plus two P4 review fixes (`rt_tick` spent budget with no replacement; the `rq_pop` K2 fallback), stated not gated in A6. Local: `smoke-schedclass` PASS, `smoke-shell` 5/5. Needs `dev/phase1` merged in, then a PR.
+  - `c15-p6` at `64fa91f`: DDR-1188 Amendment 7 only (design: APs only, a bounded 1 s stop, an RCU extended quiescent state, a probe-only isolate op for arms L, L1, L2). Read it before writing P6 code. P6 may need a DDR-1183 window raise first.
+- **#135 (open):** the `-ENOMEM` mechanism is named and fixed (#142). Arm R was green in 5 CI runs on trees with P4 and the fix; it failed 2 of 6 with P4 before it. What P4 changes to raise the rate is not explained. Close it only after repeated green runs; a recurrence is a blocker.
+- **Issues open:** #135, #143 (arm C2 `net_leak_ok=0`, 1 in 202 runs, no mechanism), #116, #117, #119.
+- **Review threads left open for the operator:** the Codex `docs/build_status.md` notes on #136, #138, #140 and #142 (question in #45 6948599917).
+- **Follow-ups recorded, not started:** the four other waits that ignore a handlerless SIGTERM (DDR-1206 §4); `signal_deliver` acting on default-terminate signals while a handler is active (DDR-1206 A1); the surface logging DDR-1199 proposes.
 - **Lessons:**
   - Push work as soon as it builds. A container replacement lost an uncommitted build once.
   - Never `git checkout <file>` to drop a mutant from a tree with uncommitted work; revert the mutant with its own script.
-  - A probe's design assumption about kernel state (DDR-1203's slot 256) must be checked by running it before the gate is trusted.
-  - A probe arm that a mutant can damage must restore what it snapshots whatever the call returned, or one mutant's damage reaches the control arm.
-- **Small tasks still open (6761846242 item 5):** the surface logging DDR-1199 proposes, as its own PR.
+  - A probe's design assumption about kernel state must be checked by running it before the gate is trusted.
+  - A probe arm that a mutant can damage must restore what it snapshots whatever the call returned.
+  - `hygiene_check.sh` runs `make` targets: never run it while a local gate loop is using the same build directory.
 - **Known CI defects:**
   - shard 8 `smoke-rqstress` "CPU stops ticking" (DDR-987 §8), seen once on #80; not fixed.
   - A pull_request run that fails for a runner outage keeps `mergeable_state` `blocked` even after a green workflow_dispatch run on the same SHA. A fresh pull_request run clears it.
@@ -30,8 +31,8 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## Next
 
-- C1.5 P4 (`SCHED_DEADLINE`): DDR-1188 amendment first, then code, arms and mutants. Size headroom is 20,086 B.
-- Then continue from the next unticked item in `docs/V1_MASTER_CHECKLIST.md`. C11.1 stays last.
+- Merge this bookkeeping PR (docs-only rule), then open P5's PR from `c15-p5` with `dev/phase1` merged in; run C11, C11b, C15 on its final head.
+- Then P6 from the Amendment 7 design.
 
 ## Open blockers
 
