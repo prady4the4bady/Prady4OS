@@ -2846,8 +2846,7 @@ static int rt_tick(int cpu, struct tcb *cur) {
         cur->rt_head = 1;                          /* arms G, N: back to the head */
         return 2;
     }
-    if (rr_out && top == me)
-        return 1;                                  /* arm E: RR rotates to the tail */
+    (void)rr_out;                                  /* MUTANT C5 */
     return 0;
 }
 
