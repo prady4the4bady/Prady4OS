@@ -328,8 +328,8 @@ static struct tcb *rt_candidate(struct rq *q) {
         if (c->sched_policy == SCHED_DEADLINE) {
             if (!dl_eligible(c))
                 continue;                /* A5 D3: CBS-throttled */
-            if (!dl || c->dl_deadline < dl->dl_deadline)
-                dl = c;                  /* A5 D1: EDF */
+            if (!dl)
+                dl = c;                  /* MUTANT C10: list order */
             continue;
         }
         uint32_t p = sched_eff_prio(c);
