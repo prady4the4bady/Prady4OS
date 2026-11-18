@@ -23,3 +23,5 @@ void *ptnode_alloc(void);   void ptnode_free(void *p);  /* zeroed 4 KiB page tab
 
 /* Total outstanding allocations across all pools (0 == no leaks). */
 uint64_t kheap_outstanding(void);
+/* DDR-1207 arm KL: n 16 KiB allocations held at once, then freed. */
+unsigned kheap_large_selftest(unsigned n);
