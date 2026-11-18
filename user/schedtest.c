@@ -15,6 +15,7 @@
  *
  * C1.5 P3 arms (DDR-1188 Amendment 4): D (C4), E (C5), F (C6), G (C7),
  * H (C8, C8b; with user/schedagt.c), N (C14), P (C16, DDR-1193 D1).
+ * C1.5 P4 arms (DDR-1188 Amendment 5): I (C9), J (C10), Q (C17).
  *
  * `[sched]` lines are data; the PRADYOS_SCHED_* lines are the sentinels, each
  * emitted by one write (DDR-1182 §3.1). QEMU (TCG) only; not verified on real
@@ -817,6 +818,248 @@ static void arms_p3(void) {
     nsi(SYS_SCHED_CPU, 2, 0, 0);
 }
 
+/* ---- C1.5 P4 (DDR-1188 Amendment 5): SCHED_DEADLINE, arms I, J, Q ----
+ * Every deadline thread pins to P4_CPU first (D2). Each arm returns its
+ * threads to SCHED_OTHER before they exit, so the next arm starts with no
+ * admitted bandwidth on that CPU. */
+#define POL_DL      3
+#define EBUSY       16
+#define P4_CPU      2
+
+static long setdl(long rt_ms, long per_ms) {
+    return nsi6(SYS_SCHED_SETSCHED, 0, POL_DL, 0, rt_ms * (long)MS, per_ms * (long)MS, 0);
+}
+
+static void fx_wake_all(volatile long *w) {
+    nsi6(SYS_FUTEX, (long)w, FX_WAKE, 64, 0, 0, 0);
+}
+
+/* ---- arm I (C9): admission refuses a CPU over 0.90 ----
+ * Steps, one per value of `go`: 1 T0 asks 50/100; 2 T1 asks 30/100; 3 T2 asks
+ * 20/100 (sum 1.00: -EBUSY); 4 T0 returns to OTHER; 5 T2 asks 20/100 again. */
+#define I_END 6
+
+struct i_state { volatile long go, ack, ready, done, pinned, rc[5]; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void i_thread(long arg) {
+    long k = arg & 3;
+    struct i_state *s = (struct i_state *)(arg & ~3L);
+    __atomic_add_fetch(&s->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&s->ready, 1, __ATOMIC_ACQ_REL);
+    long seen = 0;
+    for (;;) {
+        long g = __atomic_load_n(&s->go, __ATOMIC_ACQUIRE);
+        if (g == seen) {
+            fx_wait(&s->go, g);
+            continue;
+        }
+        seen = g;
+        if (g >= I_END)
+            break;
+        if (k == 0 && g == 1) s->rc[0] = setdl(50, 100);
+        if (k == 1 && g == 2) s->rc[1] = setdl(30, 100);
+        if (k == 2 && g == 3) s->rc[2] = setdl(20, 100);
+        if (k == 0 && g == 4) s->rc[3] = setsched(POL_OTHER, 0);
+        if (k == 2 && g == 5) s->rc[4] = setdl(20, 100);
+        __atomic_add_fetch(&s->ack, 1, __ATOMIC_ACQ_REL);
+    }
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&s->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_i(void) {
+    struct i_state *s = page();
+    for (long k = 0; k < 3; k++)
+        spawn(i_thread, (long)s | k);
+    if (!await_eq(&s->ready, 3, 10)) fail("I ready");
+    long steps = 0;
+    for (long g = 1; g < I_END; g++) {
+        __atomic_store_n(&s->go, g, __ATOMIC_RELEASE);
+        fx_wake_all(&s->go);
+        if (!await_eq(&s->ack, 3 * g, 5))
+            break;
+        steps = g;
+    }
+    __atomic_store_n(&s->go, I_END, __ATOMIC_RELEASE);
+    fx_wake_all(&s->go);
+    await_eq(&s->done, 3, 10);
+    long ok = steps == I_END - 1 && s->done == 3 && s->pinned == 3 &&
+              s->rc[0] == 0 && s->rc[1] == 0 && s->rc[2] == -EBUSY &&
+              s->rc[3] == 0 && s->rc[4] == 0;
+    say("[sched] I rc=%d,%d,%d,%d,%d steps=%d done=%d\n", s->rc[0], s->rc[1], s->rc[2],
+        s->rc[3], s->rc[4], steps, s->done);
+    return ok;
+}
+
+/* ---- arm J (C10): EDF picks the earlier deadline ----
+ * A (10 ms / 30 ms) and B (10 ms / 60 ms) wait on futexes. A SCHED_OTHER
+ * spinner pinned to the same CPU wakes B, then A, and spins: with no IPI both
+ * are READY when the next tick preempts it, and EDF must pick A. Releases are
+ * 70 ms apart, so each wake starts from a fresh deadline (D3). Misses are data
+ * (Amendment 5 D7), not asserted. */
+#define J_TRIES 100
+#define J_MIN   95
+
+struct j_state {
+    volatile long f[2], order, afirst, ran, ready, pinned, setok, done, stop, abort, trials;
+    volatile long first, tries, spid;   /* first: which worker ran first this release */
+    volatile long miss[2];
+    volatile uint64_t rel;
+};
+
+__attribute__((noreturn, force_align_arg_pointer)) static void j_dl(long arg) {
+    long k = arg & 1;                       /* 0 = A, 1 = B */
+    struct j_state *s = (struct j_state *)(arg & ~1L);
+    uint64_t per = (k ? 60 : 30) * MS;
+    __atomic_add_fetch(&s->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&s->setok, setdl(10, k ? 60 : 30) == 0, __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&s->ready, 1, __ATOMIC_ACQ_REL);
+    for (;;) {
+        /* f[k]: 0 idle, 1 a release, 2 shut down. A release is consumed by
+         * 1 -> 0 compare-and-exchange, so it can never overwrite the
+         * terminal 2 the spinner publishes (CodeRabbit on #140). */
+        long one = 1;
+        while (__atomic_load_n(&s->f[k], __ATOMIC_ACQUIRE) == 0)
+            fx_wait(&s->f[k], 0);
+        if (!__atomic_compare_exchange_n(&s->f[k], &one, 0, 0, __ATOMIC_ACQ_REL,
+                                         __ATOMIC_ACQUIRE))
+            break;                          /* it was 2: shut down */
+        if (__atomic_fetch_add(&s->order, 1, __ATOMIC_ACQ_REL) == 0)
+            s->first = k;               /* scored by the spinner, if the release counts */
+        if (mono() - s->rel > per)
+            s->miss[k]++;
+        __atomic_add_fetch(&s->ran, 1, __ATOMIC_ACQ_REL);
+    }
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&s->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void j_spin(long arg) {
+    struct j_state *s = (struct j_state *)arg;
+    __atomic_add_fetch(&s->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
+    if (!await_eq(&s->ready, 2, 10))
+        s->abort = 1;
+    while (!__atomic_load_n(&s->spid, __ATOMIC_ACQUIRE))   /* own tid, from spawn() */
+        __asm__ volatile("pause");
+    long hint = -1;
+    /* A release is scored only when both FUTEX_WAKEs woke a parked worker
+     * (each returned 1) and no tick landed between them: the spinner's own
+     * run_ticks did not move across the two wakes. Anything else is retried
+     * unscored (CodeRabbit on #140), so B cannot run alone and be counted. */
+    while (s->trials < J_TRIES && s->tries < 3 * J_TRIES && !s->abort) {
+        s->tries++;
+        /* 70 ms of quiet before each release: both workers have parked, and
+         * both previous deadlines have passed. */
+        struct ts req = { 0, (long)(70 * MS) };
+        nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
+        s->order = 0;
+        s->ran = 0;
+        s->first = -1;
+        s->rel = mono();
+        long t0 = rticks(s->spid, &hint);
+        __atomic_store_n(&s->f[1], 1, __ATOMIC_RELEASE);
+        long wb = nsi6(SYS_FUTEX, (long)&s->f[1], FX_WAKE, 1, 0, 0, 0);   /* B first */
+        __atomic_store_n(&s->f[0], 1, __ATOMIC_RELEASE);
+        long wa = nsi6(SYS_FUTEX, (long)&s->f[0], FX_WAKE, 1, 0, 0, 0);   /* then A */
+        long t1 = rticks(s->spid, &hint);
+        if (!await_eq(&s->ran, 2, 3)) {
+            s->abort = 1;
+            break;
+        }
+        if (wb == 1 && wa == 1 && t0 >= 0 && t1 == t0) {
+            s->trials++;
+            if (s->first == 0)
+                s->afirst++;
+        }
+    }
+    __atomic_store_n(&s->stop, 1, __ATOMIC_RELEASE);
+    /* The terminal value on the futex words: a worker that has not reached
+     * FUTEX_WAIT sees a value mismatch instead of sleeping (CodeRabbit). */
+    __atomic_store_n(&s->f[0], 2, __ATOMIC_RELEASE);
+    __atomic_store_n(&s->f[1], 2, __ATOMIC_RELEASE);
+    fx_wake(&s->f[0]);
+    fx_wake(&s->f[1]);
+    __atomic_add_fetch(&s->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_j(void) {
+    struct j_state *s = page();
+    spawn(j_dl, (long)s | 0);
+    spawn(j_dl, (long)s | 1);
+    __atomic_store_n(&s->spid, spawn(j_spin, (long)s), __ATOMIC_RELEASE);
+    await_eq(&s->done, 3, 90);
+    long ok = s->done == 3 && !s->abort && s->trials == J_TRIES && s->afirst >= J_MIN &&
+              s->pinned == 3 && s->setok == 2;
+    say("[sched] J afirst=%d of %d tries=%d miss_a=%d miss_b=%d abort=%d setok=%d\n",
+        s->afirst, s->trials, s->tries, s->miss[0], s->miss[1], s->abort, s->setok);
+    return ok;
+}
+
+/* ---- arm Q (C17): the CBS budget bounds a deadline spinner ----
+ * A deadline spinner (10 ms / 100 ms) and a SCHED_OTHER thread share P4_CPU.
+ * With the budget charged, the spinner runs about one tick in ten, so the
+ * other thread gets most of each second; uncharged, only K2's gaps. */
+#define Q_WIN 3
+#define Q_MIN 30
+
+struct q_state { volatile long stop, opid, ready, done, w[Q_WIN], pinned, setok; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void q_other(long arg) {
+    struct q_state *q = (struct q_state *)arg;
+    __atomic_add_fetch(&q->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
+    __atomic_store_n(&q->ready, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&q->stop, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    __atomic_add_fetch(&q->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+__attribute__((noreturn, force_align_arg_pointer)) static void q_dl(long arg) {
+    struct q_state *q = (struct q_state *)arg;
+    long hint = -1;
+    __atomic_add_fetch(&q->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&q->setok, setdl(10, 100) == 0, __ATOMIC_ACQ_REL);
+    long prev = rticks(q->opid, &hint);
+    for (int i = 0; i < Q_WIN; i++) {
+        uint64_t end = mono() + NS_PER_SEC;
+        while (mono() < end)
+            __asm__ volatile("pause");
+        long now = rticks(q->opid, &hint);
+        q->w[i] = now - prev;
+        prev = now;
+    }
+    __atomic_store_n(&q->stop, 1, __ATOMIC_RELEASE);
+    setsched(POL_OTHER, 0);
+    __atomic_add_fetch(&q->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static long arm_q(void) {
+    struct q_state *q = page();
+    __atomic_store_n(&q->opid, spawn(q_other, (long)q), __ATOMIC_RELEASE);
+    if (!await_eq(&q->ready, 1, 10)) fail("Q ready");
+    spawn(q_dl, (long)q);
+    await_eq(&q->done, 2, 30);
+    long ok = q->done == 2 && q->pinned == 2 && q->setok == 1;
+    long mn = 1L << 30;
+    for (int i = 0; i < Q_WIN; i++)
+        if (q->w[i] < mn) mn = q->w[i];
+    if (mn < Q_MIN) ok = 0;
+    say("[sched] Q w=%d,%d,%d min=%d setok=%d\n", q->w[0], q->w[1], q->w[2], mn, q->setok);
+    return ok;
+}
+
+static void arms_p4(void) {
+    pin(0);
+    say("PRADYOS_SCHED_I adm_ok=%d\n", arm_i());
+    say("PRADYOS_SCHED_J edf_ok=%d\n", arm_j());
+    say("PRADYOS_SCHED_Q cbs_ok=%d\n", arm_q());
+    nsi(SYS_SCHED_CPU, 2, 0, 0);
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_b2();     /* first: it forks, so before arm A creates threads */
     arm_h();      /* forks too; and SCHEDAGT is certainly still alive */
@@ -825,6 +1068,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_c();
     arm_m();
     arms_p3();
+    arms_p4();
     say("PRADYOS_SCHED_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }

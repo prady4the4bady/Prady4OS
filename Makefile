@@ -657,9 +657,9 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	# probe linked with $(USER_LD), never with $(MUSL_CRT)/$(MUSL_LIB) (D3).
 	$(CC) $(USER_C_CFLAGS) -DPTHR_FREESTANDING -c $(USER_PTHR_SRC) -o build/pthrtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_THR_ELF) build/threadtest.o build/pthrtest.o
-	$(CC) $(USER_C_CFLAGS) -c $(USER_SCHED_SRC) -o build/schedtest.o
+	$(CC) $(USER_C_CFLAGS) -Os -c $(USER_SCHED_SRC) -o build/schedtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHED_ELF) build/schedtest.o
-	$(CC) $(USER_C_CFLAGS) -c $(USER_SCHEDAGT_SRC) -o build/schedagt.o
+	$(CC) $(USER_C_CFLAGS) -Os -c $(USER_SCHEDAGT_SRC) -o build/schedagt.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHEDAGT_ELF) build/schedagt.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
@@ -4501,7 +4501,7 @@ smoke-thread: $(IMG) fat-image sfs-image
 smoke-schedclass: $(IMG) fat-image sfs-image
 	@rm -f build/schedclass.log
 	@SERIAL_LOG=build/schedclass.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=schedclass \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_H fork_eperm=1 agent_grant_eperm=1 own_ok=1\nPRADYOS_SCHED_HA eperm=1\nPRADYOS_SCHED_D preempt_ok=1\nPRADYOS_SCHED_N prio_ok=1\nPRADYOS_SCHED_E rr_ok=1\nPRADYOS_SCHED_F fifo_ok=1\nPRADYOS_SCHED_G throttle_ok=1\nPRADYOS_SCHED_P pi_ok=1 main_pin=1\nPRADYOS_SCHED_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_H fork_eperm=1 agent_grant_eperm=1 own_ok=1\nPRADYOS_SCHED_HA eperm=1\nPRADYOS_SCHED_D preempt_ok=1\nPRADYOS_SCHED_N prio_ok=1\nPRADYOS_SCHED_E rr_ok=1\nPRADYOS_SCHED_F fifo_ok=1\nPRADYOS_SCHED_G throttle_ok=1\nPRADYOS_SCHED_P pi_ok=1 main_pin=1\nPRADYOS_SCHED_I adm_ok=1\nPRADYOS_SCHED_J edf_ok=1\nPRADYOS_SCHED_Q cbs_ok=1\nPRADYOS_SCHED_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'SCHED FAIL\nschedclass probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[time\] tsc skew\|\[sched\]\|PRADYOS_SCHED\|SCHED FAIL" build/schedclass.log || true

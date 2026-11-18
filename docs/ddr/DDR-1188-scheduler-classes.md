@@ -418,3 +418,115 @@ An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHE
 **Not gated in P3 (stated):** cross-CPU priority; RT priority on steal; a policy change on another thread; a successful grant and its spread to sibling threads; transitive inheritance; priority-ordered `kmutex` hand-off; the head re-queue on preemption by a higher priority (only the throttle case is exercised, by arm F).
 
 QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
+
+## Amendment 5 (2026-11-18): P4 design, `SCHED_DEADLINE` in front of the RT classes
+
+Design only; no P4 code exists when this is written. It fills in what §2–§5 leave open for P4. Read from `dev/phase1` at `1c4e6bc` (#138, P3).
+
+**What exists after P3.**
+- The one per-CPU queue holds every class. `rt_candidate()` picks the READY entry with the highest effective priority (`max(rt_prio, pi_prio)`). `fair_candidate()` skips entries whose effective priority is above 0. `rq_take` is the fallback.
+- `rt_tick()` charges the K2 window, rotates RR and decides preemption on the tick. There is no IPI.
+- `sched_unblock()` is the only BLOCKED-to-READY transition (one CAS). A pinned thread is queued only on its CPU (`rq_push` honours `pin_cpu`, DDR-1186).
+- Each CPU counts its own ticks in `percpu.ticks`. `g_ticks` is incremented by every CPU's tick, so it is not one CPU's time.
+
+**D1. A deadline thread is the top RT tier.**
+- `SCHED_DEADLINE` (policy 3) sets `rt_prio` to 100 (`SCHED_DL_PRIO`), above any FIFO or RR priority (1–99). So every P3 path that tests "effective priority above 0" already treats it as RT:
+  - the `g_rt_threads` gate;
+  - `fair_candidate` skipping it;
+  - the K2 throttle charging its ticks (K2 covers RT and deadline together);
+  - the tick preempting a `SCHED_OTHER` or FIFO/RR current thread for it.
+- A deadline thread that waits on a `kmutex` donates 100 to the owner (S6, unchanged code). The owner then outranks every FIFO and RR thread, but not the deadline threads. That is one level, as S6. **Not gated.**
+- **The pick.** `rt_candidate` first looks at the deadline entries. Among those that are READY and not CBS-throttled (D3), it picks the earliest absolute deadline, and the earliest in list order among equals. Only when there is none does it pick by priority as in P3.
+
+**D2. Time base: the pinned CPU's own tick count.**
+- A deadline thread must be pinned (`SYS_SCHED_CPU` op 1) before it takes `SCHED_DEADLINE`, or the call returns `-EINVAL`. While it is a deadline thread, pin and unpin return `-EBUSY`. So it is never stolen (DDR-1186), and its deadlines are counted in its CPU's `percpu.ticks`, which the tick, the pick and the wake all read.
+- Runtime and period are converted to ticks conservatively: `runtime_t = runtime / 10 ms`, rounded down; `period_t = period / 10 ms`, rounded up. The thread then never gets more than it asked for.
+- **Valid parameters:** 10 ms ≤ runtime ≤ period, and 20 ms ≤ period ≤ 10 s. The deadline equals the period (implicit deadlines), as in most Linux use. Otherwise `-EINVAL`.
+- **Why ticks, not nanoseconds.** The budget is charged on the tick (D3) and preemption happens on the tick (S2), so a finer clock buys no precision here. P6's tickless idle must not stop the tick on a CPU with a deadline thread waiting for replenishment (as A1-5 already says for the K2 throttle).
+
+**D3. The constant-bandwidth server (CBS), charged by tick sampling.**
+- Each deadline thread has a budget `dl_left` (ticks) and an absolute deadline `dl_deadline` (ticks of its CPU).
+- **Charge.** Each tick that finds a deadline thread current takes one tick from its budget. This is the same sampled charging as `run_ticks`. A job shorter than a tick is charged 0 or 1, so the budget is enforced to one tick, not exactly. When the budget reaches 0 the thread is *CBS-throttled* (`dl_thr`) and the tick preempts it to the tail.
+- **Replenish.** A CBS-throttled thread becomes eligible again at its deadline. Its new deadline is `now + period_t` and its budget is `runtime_t`. The check is lazy: it runs in the pick and in the tick's scan, under the queue lock, for the entries they look at.
+- **Wake (the CBS rule).** In `sched_unblock`, before the push, a deadline thread whose deadline has passed, or whose remaining budget would exceed its bandwidth over the time left (`dl_left * period_t > (dl_deadline - now) * runtime_t`), gets a fresh deadline `now + period_t` and a full budget. Otherwise it keeps both. This is the textbook CBS wake rule. A woken thread is not on any queue and not running, so the wake owns these fields.
+- **Work conserving when nothing else can run.** A CBS-throttled entry is skipped by `rt_candidate` and by `fair_candidate`. If nothing else is READY, `rq_take` may still take it, so the CPU does not idle under a READY thread. Linux's hard CBS would idle. The debt is forgiven at the next replenishment. **Stated limit; not gated.**
+
+**D4. Admission (K4).**
+- Bandwidth is `runtime/period`, computed from the nanosecond values the caller passed, in 20-bit fixed point. `g_dl_bw[cpu]` sums the bandwidth of the deadline threads pinned to that CPU, under `g_prio_lk`.
+- A request that would take the CPU's sum above 0.90 returns `-EBUSY`. A thread already in `SCHED_DEADLINE` that changes its parameters is admitted against the sum without its own old share.
+- The share is released when the thread leaves `SCHED_DEADLINE` (to any other policy) and when its `tcb` is freed. That is conservative: an exited thread holds its share until it is reaped.
+
+**D5. The syscall.** NSI 122 `SYS_SCHED_SETSCHED (0, 3, 0, runtime_ns, period_ns)`, the fourth and fifth arguments.
+- It takes the same `CAP_SCHED_RT` right as FIFO and RR (K1), through the same check. So arm H's C8 covers that code, but no arm calls `SCHED_DEADLINE` without the right.
+- It returns 0, `-EINVAL`, `-EPERM` or `-EBUSY`. No new NSI.
+- Fork: the child starts `SCHED_OTHER` with no share, as P3's fork does for RT.
+- New `tcb` fields: `dl_runtime`, `dl_period`, `dl_deadline`, `dl_left`, `dl_thr`, `dl_bw`. Each gets an explicit initialiser in `sched_create_state` (CLAUDE.md rule 11).
+
+**D6. The tick.** `rt_tick` gains three things, all inside the existing `g_rt_threads` gate:
+- it charges a deadline current thread (D3);
+- its scan replenishes the CBS-throttled entries it passes, and leaves the ones still throttled out of `top`, so they cause no preemption;
+- it preempts a deadline current thread when a READY, eligible deadline entry has an earlier deadline.
+A `SCHED_OTHER` current thread is preempted for an eligible deadline entry by P3's rule (`top > 0`), and a FIFO or RR current thread by `top > me` (100 > 99).
+
+**D7. Arms and mutants.**
+
+| Arm | Assertion | Mutant | What the mutant breaks |
+|---|---|---|---|
+| I | On one CPU, deadline requests of 50/100 ms and 30/100 ms are admitted, and a third of 20/100 ms (sum 1.00) gets `-EBUSY`. After the first thread returns to `SCHED_OTHER`, the third is admitted | C9 | no admission check (the third gets 0) |
+| J | On one CPU, A (10 ms / 30 ms) and B (10 ms / 60 ms) are both admitted. A `SCHED_OTHER` spinner pinned there wakes B, then A, and spins. At the next tick both are READY: A runs first in at least 95 of 100 releases | C10 | EDF ignored: deadline entries are picked in list order, so B, woken first, runs first |
+| Q | On one CPU, a deadline spinner (10 ms / 100 ms) beside a `SCHED_OTHER` thread. The `SCHED_OTHER` thread gets at least 30 of its own run ticks in each of 3 one-second windows of `CLOCK_MONOTONIC` | C17 | the budget is never charged, so the spinner is limited only by K2 and the `SCHED_OTHER` thread gets about 5 ticks a second |
+
+- **Arm J's periods differ from §4** (10 and 40 ms there). A wake is seen at the next tick (S2: no IPI), so A can wait up to one tick, 10 ms, before it runs. With a 10 ms period A would miss its deadline on almost every release whatever the order. 30 and 60 ms keep the order test and leave A two ticks of margin. Releases are spaced 70 ms apart, so each wake finds the previous deadline passed and both threads start from a fresh deadline (D3 wake rule).
+- **Deadline misses in arm J are reported, not asserted.** A job misses when it finishes later than its release plus its period, by `CLOCK_MONOTONIC`. No mutant here causes misses that the ordering assertion would not already catch, so an assertion on them would be ungated (rule 3). The count is printed as data.
+- **Vacuity, read from the code before writing:** on the P3 tree, `SCHED_DEADLINE` is `-EINVAL`, so all three arms fail at their first call. On a P4 tree with C9, C10 or C17, the arm in the table fails for the reason given. Each mutant is built and run locally before the arm is trusted, then in CI on the final head.
+- The new sentinels: `PRADYOS_SCHED_I adm_ok=1`, `PRADYOS_SCHED_J edf_ok=1`, `PRADYOS_SCHED_Q cbs_ok=1`.
+
+**Local results (QEMU TCG, one boot each, not CI), on `cc28e9c` (`smoke-shell` 5/5 on `beb4630`, the base merged):**
+- the tree with P4: every arm passes, the P3 arms too. I `rc=0,0,-16,0,0`; J `afirst=100 of 100`, `miss_a=0 miss_b=0`; Q `w=90,90,90`.
+- C9: red on I only (`rc=0,0,0,0,0`: the third request admitted).
+- C10: red on J only (`afirst=0 of 100`: B, woken first, always ran first).
+- C17: red on Q only (`w=5,5,5`: the spinner limited only by K2's one tick in 20).
+- `kernel.bin` 1,692,042 B, 8,192 B over P3: 11,894 B under the gate for P5 and P6.
+
+**CI failure on the first head (`c185452`), and its fix.**
+- **What failed.** `flag-gates (smoke-rcu)` failed in [44271669243](https://github.com/prady4the4bady/Prady4OS/actions/runs/44271669243): `kernel.bin exceeds 1,703,936 B`.
+- **Mechanism.** The `RCU_TORTURE=1` build is the largest of the CI builds. Locally on P4 it is 1,704,330 B: `.text` padded to 0x77000, `.rodata` padded to 0x129000, plus 394 B of `.data`. On P3 it was 8,192 B smaller. P4's growth was mostly the embedded `schedtest.elf`, which grew to 26,432 B. That pushed `.rodata` past one more 4 KiB boundary.
+- **The number that bounds us.** The default build's headroom (CLAUDE.md) is not the binding number: the `RCU_TORTURE` build is. Measured from clean objects on P4:
+  - the default, `ZANCHOR_TEST=1`, `PIPE_TRACE=1` and `BSP_LIVENESS=1` builds land on the same pages;
+  - the `RCU_TORTURE=1` build is one or two pages larger.
+- **Fix: the two schedclass probes are compiled at `-Os`.** Raising the stage-2 window is a DDR-1183 decision (operator item 5), so it is not taken here; that is the safe option.
+  - Every other user probe keeps the default flags.
+  - `schedtest.elf` goes from 26,432 B to 16,360 B and `schedagt.elf` from 4,800 B to 4,672 B. Both keep one R+X segment and no writable section.
+  - **After the fix** (local, clean objects): the default build is 1,679,754 B (24,182 B under the gate) and the `RCU_TORTURE=1` build is 1,696,138 B (7,798 B under).
+  - Every arm is re-run at `-Os` locally, and in CI with every mutant, because the probe's code changed.
+
+**Review fixes on #140 (CodeRabbit, before merge).**
+- **A repeated request refilled the budget.** Re-submitting the same parameters subtracted the thread's own share and restored a full budget and a new deadline: unbounded deadline-class time. Leaving to `SCHED_OTHER` and rejoining did the same. Fixed:
+  - a thread already in `SCHED_DEADLINE` keeps its deadline, and its budget left is capped at the new runtime;
+  - a thread that rejoins before the deadline of the interval it left starts throttled, with no budget until that deadline;
+  - that deadline is counted in the ticks of the CPU it was set on (`dl_cpu`, a new `tcb` field). A thread that re-pins before rejoining carries the time left on the old CPU's clock over to the new one. CPUs start ticking at different times, so comparing raw counts across CPUs could refill early (CodeRabbit's second round);
+  - leaving still releases the admission share.
+- **Admission shares rounded down.** Two 45 000 001/100 000 000 requests each stored 471 859, summing exactly to `DL_BW_MAX`, so both were admitted although they exceed 0.90. Fixed: each share is rounded up. This is conservative: a sum of exactly 0.90 made of shares that do not divide evenly can now be refused. Arm I's 0.5, 0.3 and 0.2 still give `0, 0, -EBUSY`.
+- **Equal effective priority.** A `kmutex` owner boosted to 100 by a deadline waiter was not preempted by another eligible deadline entry (`top == me`), although the picker ranks the deadline entry first. Fixed: a non-deadline current thread is preempted whenever an eligible deadline entry waits and K2 allows RT.
+- **Charging a thread that has begun to block.** In `switch_wait_offcpu_sched`'s interrupt window, a blocking deadline thread is still `current` and can be woken by another CPU. A tick could then charge the budget `dl_wake` had just refilled. Fixed: only a `THREAD_RUNNING` current thread is charged.
+- **`prio` was cast before it was checked.** `SYS_SCHED_SETSCHED` now rejects `policy > 3` and `prio > 99` before narrowing to `uint32_t`.
+- **Arm J scores only verified releases.** CodeRabbit raised two ways a release could be scored without both workers competing:
+  - a worker not yet parked when it was woken;
+  - a tick between the two wakes, which lets B run alone.
+  - Each release now checks both. `FUTEX_WAKE` returns how many waiters it woke, and the spinner reads its own `run_ticks` before the first wake and after the second. A release counts only when both wakes returned 1 and the spinner's `run_ticks` did not move. Any other release is retried unscored, up to 300 tries for 100 scored releases.
+  - A 70 ms quiet gap precedes every release, so both previous deadlines have passed.
+  - Each futex word is 0 (idle), 1 (a release) or 2 (shut down). A worker consumes a release by a 1 → 0 compare-and-exchange, so it can never overwrite the 2 the spinner publishes before its final wake. A worker that has not reached `FUTEX_WAIT` then sees a value mismatch instead of sleeping.
+  - Locally the arm scored 100 of 100 in 112 releases: 12 were discarded as unverified. C10 scored 0 of 100 in 102.
+- **None of these is gated:** no arm repeats a request, rejoins, sums shares near 0.90 by rounding, boosts a `kmutex` owner from a deadline waiter, or blocks during the switch window.
+
+**Not gated in P4 (stated):**
+- deadline inheritance through a `kmutex` (D1);
+- the work-conserving run of a CBS-throttled thread (D3);
+- the CBS wake rule's "keep the old deadline" branch (arm J's releases always start fresh);
+- `-EBUSY` on pin and unpin, and `-EINVAL` for an unpinned or out-of-range request;
+- share release on `tcb` free;
+- preemption of one deadline thread by another with an earlier deadline (arm J's two threads become READY together).
+
+**Risks carried from §5.** P4 adds work to `rq_pop` and `rt_tick` only behind `g_rt_threads`, and one policy test in `sched_unblock`. With no deadline thread the deadline code runs nothing. Every P4 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
+
+QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.

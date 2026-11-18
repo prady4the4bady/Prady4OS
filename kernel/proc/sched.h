@@ -299,6 +299,15 @@ struct tcb {
     uint32_t   rt_head;        /* S2: the next rq_push puts this thread first    */
     uint32_t   kmx_held;       /* S6: kmutexes this thread holds                 */
     cap_t      sched_cap;      /* S3: the RES_SCHED handle, CAP_NULL = none      */
+    /* DDR-1188 Amendment 5 (C1.5 P4): SCHED_DEADLINE. Appended last; each has
+     * an initialiser in sched_create_state. Ticks are the pinned CPU's own. */
+    uint32_t   dl_runtime;     /* D2: budget per period, ticks                   */
+    uint32_t   dl_period;      /* D2: period = relative deadline, ticks          */
+    uint64_t   dl_deadline;    /* D3: absolute deadline, ticks of pin_cpu        */
+    uint32_t   dl_left;        /* D3: budget left in this period, ticks          */
+    uint32_t   dl_thr;         /* D3: budget spent; eligible again at deadline   */
+    uint64_t   dl_bw;          /* D4: runtime/period, DL_BW_SHIFT fixed point    */
+    int32_t    dl_cpu;         /* D2: whose ticks dl_deadline counts, -1 = none  */
 };
 
 /* DDR-1188 Amendment 4 (C1.5 P3). */
@@ -306,6 +315,11 @@ struct tcb {
 #define SCHED_FIFO    1u
 #define SCHED_RR      2u
 #define SCHED_RT_MAX  99u
+#define SCHED_DEADLINE 3u      /* DDR-1188 A5 */
+#define SCHED_DL_PRIO 100u     /* A5 D1: a deadline thread outranks FIFO/RR 1-99 */
+#define DL_TICK_NS    10000000ull               /* A5 D2: one tick at 100 Hz */
+#define DL_BW_SHIFT   20
+#define DL_BW_MAX     ((90ull << DL_BW_SHIFT) / 100)   /* K4: 0.90 per CPU */
 #define RR_SLICE      10u      /* K3: 100 ms at the 100 Hz tick (S5)         */
 #define RT_WIN_TICKS  20u      /* S4: RT runs at most RT_WIN_TICKS - 1 of every RT_WIN_TICKS */
 #define SCHED_RES_ID  0x52545343ull   /* "RTSC": one res_id, like RES_EXEC */
@@ -321,7 +335,8 @@ static inline uint32_t sched_eff_prio(const struct tcb *t) {
  * pick and the tick take today's path. */
 extern volatile uint32_t g_rt_threads;
 /* S3: the calling thread's own policy. 0, -EINVAL or -EPERM. */
-int  sched_setsched_self(uint32_t policy, uint32_t prio);
+int  sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime_ns,
+                         uint64_t period_ns);   /* A5 D5: -EBUSY on admission */
 /* S3: kernel-only grant of RES_SCHED with `rights`. -EPERM for an agent. */
 int  sched_grant(struct tcb *t, uint32_t rights);
 /* S3: sched_grant on the live process `pid`, found and granted under

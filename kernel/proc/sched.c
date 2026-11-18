@@ -147,6 +147,40 @@ volatile uint32_t g_rt_threads;
 static spinlock_t g_prio_lk;
 static uint64_t g_rt_win[PERCPU_MAX];     /* S4: window index (ticks / RT_WIN_TICKS) */
 static uint32_t g_rt_used[PERCPU_MAX];    /* S4: RT ticks used in that window     */
+static uint64_t g_dl_bw[PERCPU_MAX];      /* A5 D4: admitted bandwidth, g_prio_lk */
+
+/* DDR-1188 A5 D2: a deadline thread is pinned, so its time is its CPU's ticks. */
+static inline uint64_t dl_now(const struct tcb *t) {
+    struct percpu *pc = percpu_get((unsigned)t->pin_cpu);
+    return pc ? __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) : 0;
+}
+
+/* A5 D3: a CBS-throttled thread is eligible again at its deadline, with a new
+ * deadline one period on and a full budget. Caller owns t's deadline fields
+ * (its queue lock, or it is current on this CPU). 1 if eligible. */
+static inline int dl_eligible(struct tcb *t) {
+    if (t->dl_thr) {
+        uint64_t now = dl_now(t);
+        if (now < t->dl_deadline)
+            return 0;
+        t->dl_deadline = now + t->dl_period;
+        t->dl_left = t->dl_runtime;
+        t->dl_thr = 0;
+    }
+    return 1;
+}
+
+/* A5 D3: the CBS wake rule. Called from sched_unblock between the CAS to READY
+ * and the push, when nothing else can touch these fields. */
+static void dl_wake(struct tcb *t) {
+    uint64_t now = dl_now(t);
+    if (now >= t->dl_deadline ||
+        (uint64_t)t->dl_left * t->dl_period > (t->dl_deadline - now) * t->dl_runtime) {
+        t->dl_deadline = now + t->dl_period;
+        t->dl_left = t->dl_runtime;
+        t->dl_thr = 0;
+    }
+}
 
 static void prio_count(uint32_t before, uint32_t after) {
     if (!before && after)
@@ -168,14 +202,24 @@ static int sched_cap_adopt(struct tcb *self) {
     return 1;
 }
 
-int sched_setsched_self(uint32_t policy, uint32_t prio) {
+int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64_t period) {
     struct tcb *t = current_thread;
+    uint64_t bw = 0;
     if (policy == SCHED_OTHER) {
         if (prio != 0)
             return -EINVAL;
-    } else if (policy == SCHED_FIFO || policy == SCHED_RR) {
-        if (prio < 1 || prio > SCHED_RT_MAX)
+    } else if (policy == SCHED_FIFO || policy == SCHED_RR || policy == SCHED_DEADLINE) {
+        if (policy == SCHED_DEADLINE) {
+            /* A5 D2: pinned, 10 ms <= runtime <= period, 20 ms <= period <= 10 s */
+            if (prio != 0 || t->pin_cpu < 0 || runtime < DL_TICK_NS || runtime > period ||
+                period < 2 * DL_TICK_NS || period > 1000 * DL_TICK_NS)
+                return -EINVAL;
+            /* Rounded UP, so shares that round down cannot sum to exactly
+             * DL_BW_MAX while the requests exceed 0.90 (CodeRabbit on #140). */
+            bw = ((runtime << DL_BW_SHIFT) + period - 1) / period;
+        } else if (prio < 1 || prio > SCHED_RT_MAX) {
             return -EINVAL;
+        }
         if (!cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT) &&
             !sched_cap_adopt(t))
             return -EPERM;                                  /* K1 */
@@ -183,6 +227,47 @@ int sched_setsched_self(uint32_t policy, uint32_t prio) {
         return -EINVAL;
     }
     uint64_t fl = spin_lock_irqsave(&g_prio_lk);
+    if (policy == SCHED_DEADLINE) {
+        uint64_t sum = g_dl_bw[t->pin_cpu] - t->dl_bw;   /* without its own old share */
+        if (sum + bw > DL_BW_MAX) {
+            spin_unlock_irqrestore(&g_prio_lk, fl);
+            return -EBUSY;                                /* A5 D4, K4 */
+        }
+        g_dl_bw[t->pin_cpu] = sum + bw;
+        t->dl_bw = bw;
+        uint64_t now = dl_now(t);
+        /* A deadline is counted in the ticks of the CPU it was set on. A thread
+         * that left, re-pinned and rejoins carries the time left on that
+         * CPU's clock over to this one (CodeRabbit on #140): CPUs start
+         * ticking at different times, so their counts differ. */
+        if (t->sched_policy != SCHED_DEADLINE && t->dl_cpu >= 0 && t->dl_cpu != t->pin_cpu) {
+            struct percpu *op = percpu_get((unsigned)t->dl_cpu);
+            uint64_t onow = op ? __atomic_load_n(&op->ticks, __ATOMIC_RELAXED) : ~0ull;
+            t->dl_deadline = onow < t->dl_deadline ? now + (t->dl_deadline - onow) : 0;
+        }
+        t->dl_cpu = t->pin_cpu;
+        t->dl_runtime = (uint32_t)(runtime / DL_TICK_NS);
+        t->dl_period = (uint32_t)((period + DL_TICK_NS - 1) / DL_TICK_NS);
+        if (t->sched_policy == SCHED_DEADLINE) {
+            /* A5 D3 (CodeRabbit on #140): a repeated or changed request keeps
+             * the current deadline and never raises the budget left in it. */
+            if (t->dl_left > t->dl_runtime)
+                t->dl_left = t->dl_runtime;
+        } else if (now < t->dl_deadline) {
+            /* Rejoining inside the interval it left: no budget until that
+             * interval's deadline, so leave-and-rejoin is not a refill. */
+            t->dl_left = 0;
+            t->dl_thr = 1;
+        } else {
+            t->dl_left = t->dl_runtime;
+            t->dl_thr = 0;
+            t->dl_deadline = now + t->dl_period;
+        }
+        prio = SCHED_DL_PRIO;
+    } else if (t->sched_policy == SCHED_DEADLINE) {
+        g_dl_bw[t->pin_cpu] -= t->dl_bw;                  /* A5 D4: share released */
+        t->dl_bw = 0;
+    }
     uint32_t before = sched_eff_prio(t);
     t->sched_policy = policy;
     __atomic_store_n(&t->rt_prio, prio, __ATOMIC_RELAXED);
@@ -232,20 +317,28 @@ static inline int rt_throttled(int cpu) {
 }
 
 /* S1: the READY entry with the highest effective priority, earliest in list
- * order among equals. Caller holds q->lock. NULL if no RT entry is READY. */
+ * order among equals. A5 D1: an eligible deadline entry first, the earliest
+ * deadline winning. Caller holds q->lock. NULL if no RT entry is READY. */
 static struct tcb *rt_candidate(struct rq *q) {
-    struct tcb *best = 0;
+    struct tcb *best = 0, *dl = 0;
     uint32_t bp = 0;
     for (struct tcb *c = q->head; c; c = c->rq_next) {
         if (c->state != THREAD_READY)
             continue;
+        if (c->sched_policy == SCHED_DEADLINE) {
+            if (!dl_eligible(c))
+                continue;                /* A5 D3: CBS-throttled */
+            if (!dl || c->dl_deadline < dl->dl_deadline)
+                dl = c;                  /* A5 D1: EDF */
+            continue;
+        }
         uint32_t p = sched_eff_prio(c);
         if (p > bp) {
             bp = p;
             best = c;
         }
     }
-    return best;
+    return dl ? dl : best;
 }
 
 static void sched_place(struct tcb *t) {
@@ -1355,6 +1448,13 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->rt_head         = 0;
     t->kmx_held        = 0;
     t->sched_cap       = CAP_NULL;     /* DDR-1188 A4 S3: no RES_SCHED unless granted */
+    t->dl_runtime      = 0;            /* DDR-1188 A5: not a deadline thread */
+    t->dl_period       = 0;
+    t->dl_deadline     = 0;
+    t->dl_left         = 0;
+    t->dl_thr          = 0;
+    t->dl_bw           = 0;
+    t->dl_cpu          = -1;           /* DDR-1188 A5: no deadline yet */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -1831,6 +1931,11 @@ static void sched_free_tcb(struct tcb *t) {
     {   /* DDR-1188 A4: an RT thread leaves g_rt_threads when it is freed. */
         uint64_t pfl = spin_lock_irqsave(&g_prio_lk);
         uint32_t before = sched_eff_prio(t);
+        if (t->sched_policy == SCHED_DEADLINE && t->pin_cpu >= 0) {
+            g_dl_bw[t->pin_cpu] -= t->dl_bw;   /* A5 D4: a freed thread's share */
+            t->dl_bw = 0;
+            t->sched_policy = SCHED_OTHER;
+        }
         __atomic_store_n(&t->rt_prio, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&t->pi_prio, 0, __ATOMIC_RELAXED);
         prio_count(before, 0);
@@ -2819,7 +2924,19 @@ static int rt_tick(int cpu, struct tcb *cur) {
     if (me)
         g_rt_used[cpu]++;
     int thr = rt_throttled(cpu);
-    int rr_out = 0;
+    int rr_out = 0, dl_out = 0;
+    /* Only a RUNNING current thread: one that has begun to block may be woken
+     * by another CPU, and from then dl_wake owns its budget (CodeRabbit on #140). */
+    if (me && cur->sched_policy == SCHED_DEADLINE &&
+        __atomic_load_n(&cur->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING) {
+        dl_eligible(cur);                          /* A5 D3: replenish if due */
+        if (cur->dl_left)
+            cur->dl_left--;                        /* A5 D3: charge this tick */
+        if (!cur->dl_left) {
+            cur->dl_thr = 1;
+            dl_out = 1;                            /* arm Q: budget spent */
+        }
+    }
     if (me && cur->sched_policy == SCHED_RR) {
         if (cur->rr_left)
             cur->rr_left--;
@@ -2831,10 +2948,17 @@ static int rt_tick(int cpu, struct tcb *cur) {
     struct rq *q = &g_rq[cpu];
     uint32_t top = 0;
     int other = 0;
+    uint64_t dl_first = ~0ull;
     spin_lock(&q->lock);
     for (struct tcb *c = q->head; c; c = c->rq_next) {
         if (c->state != THREAD_READY)
             continue;
+        if (c->sched_policy == SCHED_DEADLINE) {
+            if (!dl_eligible(c))
+                continue;                  /* A5 D6: throttled, no reason to preempt */
+            if (c->dl_deadline < dl_first)
+                dl_first = c->dl_deadline;
+        }
         uint32_t p = sched_eff_prio(c);
         if (p > top) top = p;
         if (!p) other = 1;
@@ -2842,7 +2966,19 @@ static int rt_tick(int cpu, struct tcb *cur) {
     spin_unlock(&q->lock);
     if (!me)
         return (top && !thr) ? 1 : 0;             /* arm D: RT waiting, OTHER running */
-    if ((thr && other) || top > me) {
+    if (cur->sched_policy == SCHED_DEADLINE) {
+        if (thr && other) {
+            cur->rt_head = 1;                      /* K2 covers deadline threads too */
+            return 2;
+        }
+        if (dl_out || dl_first < cur->dl_deadline)
+            return 1;                              /* A5 D3, D6 */
+        return 0;
+    }
+    /* An eligible deadline entry outranks a non-deadline current thread even
+     * at equal effective priority (a kmutex owner boosted to 100 by a deadline
+     * waiter): the picker ranks it first (CodeRabbit on #140). */
+    if ((thr && other) || top > me || (!thr && dl_first != ~0ull)) {
         cur->rt_head = 1;                          /* arms G, N: back to the head */
         return 2;
     }
@@ -3191,6 +3327,8 @@ void sched_unblock(struct tcb *t) {
         /* rq-1: a freshly READY thread must be findable — enqueue it on the
          * waker's own CPU's FIFO. rq_push is a leaf lock, safe from IRQ handlers
          * and under device compl locks. */
+        if (t->sched_policy == SCHED_DEADLINE)
+            dl_wake(t);                  /* DDR-1188 A5 D3: the CBS wake rule */
         struct percpu *pc = this_cpu();
         int self = pc ? (int)pc->cpu_idx : 0;
         rq_push(self, t);
