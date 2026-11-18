@@ -195,8 +195,7 @@ int sched_setsched_self(uint32_t policy, uint32_t prio) {
 int sched_grant(struct tcb *t, uint32_t rights) {
     if (!t || !t->caps)
         return -EINVAL;
-    if (t->is_agent)
-        return -EPERM;              /* K1: an agent at RT could starve the supervisor */
+    /* MUTANT C8b: agents accepted */
     /* A repeated grant reuses the handle it made before, so a caller holding
      * CAP_SCHED_GRANT cannot fill the target's table (CodeRabbit on #138). */
     if (t->sched_cap != CAP_NULL &&
