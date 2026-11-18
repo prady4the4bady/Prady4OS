@@ -228,7 +228,7 @@ void sched_pi_clear(struct tcb *t) {
 
 /* S4: is this CPU's RT budget for the current window spent? */
 static inline int rt_throttled(int cpu) {
-    return g_rt_used[cpu] >= RT_WIN_TICKS - 1;
+    (void)cpu; return 0;                         /* MUTANT C7 */
 }
 
 /* S1: the READY entry with the highest effective priority, earliest in list
