@@ -512,8 +512,7 @@ static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
     for (struct tcb *c = q->head; c; c = c->rq_next) {
         if (c->state != THREAD_READY)
             continue;
-        if (rt_on && sched_eff_prio(c))
-            continue;                    /* DDR-1188 A4 S1: RT is picked ahead */
+        (void)rt_on;                     /* MUTANT C4 */
         depth++;
         if (!best || c->dbg_vruntime < best->dbg_vruntime)
             best = c;
@@ -795,8 +794,7 @@ static struct tcb *rq_pop(int cpu) {
      * comparison would be against a different set. */
     uint32_t depth = 0;
     struct tcb *rt = 0;
-    if (__atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) && !rt_throttled(cpu))
-        rt = rt_candidate(q);            /* DDR-1188 A4 S1 */
+    (void)rt_candidate;                  /* MUTANT C4: RT never picked ahead */
     struct tcb *fair = fair_candidate(q, &depth);
     struct tcb *t = rt ? rq_unlink(q, rt) : fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
@@ -2841,7 +2839,7 @@ static int rt_tick(int cpu, struct tcb *cur) {
     }
     spin_unlock(&q->lock);
     if (!me)
-        return (top && !thr) ? 1 : 0;             /* arm D: RT waiting, OTHER running */
+        return 0;                                  /* MUTANT C4 */
     if ((thr && other) || top > me) {
         cur->rt_head = 1;                          /* arms G, N: back to the head */
         return 2;
