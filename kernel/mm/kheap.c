@@ -268,9 +268,12 @@ void *kmalloc(size_t size) {
     uint64_t used = large_in_use;
     spin_unlock_irqrestore(&g_heap_lock, fl);
     if (full0 == 0 && full1 == 1) {       /* DDR-1207 D3: once, outside the lock */
-        kputs("[kheap] large registry full in_use=");
-        kputdec(used);
-        kputs("\r\n");
+        kline k;
+        kline_init(&k);
+        kline_s(&k, "[kheap] large registry full in_use=");
+        kline_d(&k, used);
+        kline_s(&k, "\r\n");
+        kline_emit(&k);
     }
     return p;
 }
@@ -377,11 +380,16 @@ unsigned kheap_large_selftest(unsigned n) {
             kfree(v[i]);
         kfree(v);
     }
-    kputs("PRADYOS_KHEAP_LARGE want=");
-    kputdec(n);
-    kputs(" got=");
-    kputdec(got);
-    kputs(got == n ? " ok=1\r\n" : " ok=0\r\n");
+    /* One kline: the gate matches this line whole, and separate kputs
+     * calls could be split by another CPU's output (CodeRabbit on #142). */
+    kline k;
+    kline_init(&k);
+    kline_s(&k, "PRADYOS_KHEAP_LARGE want=");
+    kline_d(&k, n);
+    kline_s(&k, " got=");
+    kline_d(&k, got);
+    kline_s(&k, got == n ? " ok=1\r\n" : " ok=0\r\n");
+    kline_emit(&k);
     return got;
 }
 

@@ -28,6 +28,7 @@ Written 2026-11-18, before the code, on `dev/phase1` `a50e509`. Operator #45 com
   - 300 alone exceeds the old cap, whatever else is in use. 300 + steady use (about 100 at that point) stays under 1024.
 - **Vacuity, read from the code before writing:** on `dev/phase1` the 257th entry cannot be had, so `got` is at most 256 minus the entries already in use, and the arm is red.
 - **Mutant K1:** `MAX_LARGE` back to 256. It must be red on KL in CI on the final head.
+- Both lines are emitted as one `kline` each, so another CPU's output cannot split the sentinel the gate matches (CodeRabbit on #142). The gate's post-run `grep` also prints them.
 - **Arm R** stays as it is. It is the real-world check, and #135 stays open until it is green over repeated CI runs.
 
 ## 4. Local results (QEMU TCG, one boot each; CI on the head is the check)
