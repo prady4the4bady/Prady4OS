@@ -488,6 +488,18 @@ A `SCHED_OTHER` current thread is preempted for an eligible deadline entry by P3
 - C17: red on Q only (`w=5,5,5`: the spinner limited only by K2's one tick in 20).
 - `kernel.bin` 1,692,042 B, 8,192 B over P3: 11,894 B under the gate for P5 and P6.
 
+**CI failure on the first head (`c185452`), and its fix.**
+- **What failed.** `flag-gates (smoke-rcu)` failed in [44271669243](https://github.com/prady4the4bady/Prady4OS/actions/runs/44271669243): `kernel.bin exceeds 1,703,936 B`.
+- **Mechanism.** The `RCU_TORTURE=1` build is the largest of the CI builds. Locally on P4 it is 1,704,330 B: `.text` padded to 0x77000, `.rodata` padded to 0x129000, plus 394 B of `.data`. On P3 it was 8,192 B smaller. P4's growth was mostly the embedded `schedtest.elf`, which grew to 26,432 B. That pushed `.rodata` past one more 4 KiB boundary.
+- **The number that bounds us.** The default build's headroom (CLAUDE.md) is not the binding number: the `RCU_TORTURE` build is. Measured from clean objects on P4:
+  - the default, `ZANCHOR_TEST=1`, `PIPE_TRACE=1` and `BSP_LIVENESS=1` builds land on the same pages;
+  - the `RCU_TORTURE=1` build is one or two pages larger.
+- **Fix: the two schedclass probes are compiled at `-Os`.** Raising the stage-2 window is a DDR-1183 decision (operator item 5), so it is not taken here; that is the safe option.
+  - Every other user probe keeps the default flags.
+  - `schedtest.elf` goes from 26,432 B to 16,360 B and `schedagt.elf` from 4,800 B to 4,672 B. Both keep one R+X segment and no writable section.
+  - **After the fix** (local, clean objects): the default build is 1,679,754 B (24,182 B under the gate) and the `RCU_TORTURE=1` build is 1,696,138 B (7,798 B under).
+  - Every arm is re-run at `-Os` locally, and in CI with every mutant, because the probe's code changed.
+
 **Not gated in P4 (stated):**
 - deadline inheritance through a `kmutex` (D1);
 - the work-conserving run of a CBS-throttled thread (D3);
