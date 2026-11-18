@@ -499,3 +499,46 @@ A `SCHED_OTHER` current thread is preempted for an eligible deadline entry by P3
 **Risks carried from §5.** P4 adds work to `rq_pop` and `rt_tick` only behind `g_rt_threads`, and one policy test in `sched_unblock`. With no deadline thread the deadline code runs nothing. Every P4 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
 
 QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
+
+## Amendment 6 (2026-11-18): P5 design, pressure stall information for CPU and I/O
+
+Design only; no P5 code exists when this is written. It is read from P4's head (`c15-p4`, #140), on which P5 is stacked because both touch `sched_tick`. P5 opens as a PR only after P4 merges.
+
+**What exists.**
+- Each CPU ticks at 100 Hz and counts its own ticks (`percpu.ticks`). The run queue `g_rq[cpu]` is a list with a lock and no count.
+- Every block device is virtio-blk in the gate VMs (`boot_test.sh`). A virtio-blk request's issuer waits for its completion in `submit()` (`virtio_blk.c`), in a `sched_block_timeout` loop on `req[s].done`. There is no block cache, so every `blk_read` reaches the device.
+
+**P1. Definition.** As §2: `some` is the number of ticks, out of the last 100 sampled, in which at least one thread was stalled. That is a percentage of the last second at 100 Hz: a plain sliding window with no decay.
+- **CPU, per CPU.** A tick on CPU `c` is *stalled* when `g_rq[c]` holds a READY entry, a thread runnable on `c` but not running. The tick takes the queue lock and stops at the first READY entry; most queues hold a few entries.
+- **I/O, system-wide.** A tick is *stalled* when at least one thread is waiting for a virtio-blk **read** (`VIRTIO_BLK_T_IN`) to complete. A counter `g_psi_io_wait` is raised before the completion wait in `submit()` and lowered after it, on every exit path. Only CPU 0's tick samples the I/O window, so its time base is one CPU's ticks. P6 must keep CPU 0 ticking, or move the sample.
+- Writes and flushes are not I/O pressure in P5. §2 names reads only.
+- **Memory pressure** waits for C2.1 (§2).
+
+**P2. The window.** Each window is a 128-bit ring (two `uint64_t`) indexed by `ticks % 100`, plus a count. Each tick clears the old bit at its index, sets the new one, and adjusts the count. Per-CPU windows are written only by their own CPU's tick. The I/O window is written only by CPU 0's. A reader reads the count with one relaxed load: one tick stale at worst.
+
+**P3. The interface. NSI 124 `SYS_PSI (res, cpu)`.**
+- `res` 0 = CPU (`cpu` is the index), `res` 1 = I/O (`cpu` ignored).
+- It returns 0–100, the stalled ticks in the last 100, or `-EINVAL` (bad `res` or `cpu`).
+- No capability: pressure is a count, like Linux's world-readable `/proc/pressure`, and it names no thread.
+
+**P4. The probe's I/O load: `SYS_SCHED_CPU` op 5, probe-only** (`g_sched_probe`, as ops 3 and 4; `-ENOSYS` otherwise). It reads `n` MiB (1–16) from the start of block device 0, the boot disk, in 64 KiB requests into one 64 KiB buffer (`pmm_alloc_pages(4)`). It returns 0, or the first error. Read-only, so the boot disk is safe. No new NSI is spent on a test hook.
+
+**P5. Arms and mutants.** Mutants land on different arms (rule 3), so §4's arm K is split into its two halves.
+
+| Arm | Assertion | Mutant | What the mutant breaks |
+|---|---|---|---|
+| K | two `SCHED_OTHER` spinners pinned to CPU 2 for 1.5 s: CPU 2's `some` is at least 50 | C11 | the CPU stall bit is never set (always 0) |
+| K0 | 1.5 s after both spinners exit: CPU 2's `some` is at most 5 | C11b | the window never forgets: an old bit is not cleared (it stays near 100) |
+| O | a thread reads 4 MiB through op 5: the I/O `some` the main thread reads during the read is above 0 at least once, and 2 s after the read it is 0 | C15 | `g_psi_io_wait` is never raised (always 0) |
+
+- **Why K asserts ≥ 50 and not §4's "above 0".** Two spinners on one CPU leave one READY on almost every tick, so the value is near 100. A partial accounting bug would still pass "above 0".
+- **Why K0 allows 5 and not 0.** Unpinned threads (the shell, kernel workers) may briefly queue on CPU 2. A tick where two of them are runnable together is stalled, rightly. §4's "0 when that CPU is idle" assumed an idle CPU, which a gate VM does not have.
+- **O's "back to 0"** shares the window code with K0, so C11b also turns it red. That is a second witness, not the arm's own mutant.
+- **Vacuity, read from the code before writing:** on the P4 tree `SYS_PSI` does not exist (`-ENOSYS`), so all three arms fail at their first read. Each mutant is built and run locally before its arm is trusted, then in CI on the final head.
+- The new sentinels: `PRADYOS_SCHED_K some_ok=1`, `PRADYOS_SCHED_K0 idle_ok=1`, `PRADYOS_SCHED_O io_ok=1`.
+
+**Not gated in P5 (stated):** the I/O window's sampling only on CPU 0, and the exclusion of writes and flushes; the one-tick-stale read; `-EINVAL` paths; I/O through a non-virtio device (none exists in the gate VMs).
+
+**Risk.** P5 adds one queue-lock walk to every tick, stopping at the first READY entry, and two atomics per virtio-blk read. The walk is on the scheduling path, where OPEN-2 and OPEN-12/13 live. Every P5 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
+
+QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
