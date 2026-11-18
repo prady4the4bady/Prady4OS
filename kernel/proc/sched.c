@@ -176,9 +176,7 @@ int sched_setsched_self(uint32_t policy, uint32_t prio) {
     } else if (policy == SCHED_FIFO || policy == SCHED_RR) {
         if (prio < 1 || prio > SCHED_RT_MAX)
             return -EINVAL;
-        if (!cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT) &&
-            !sched_cap_adopt(t))
-            return -EPERM;                                  /* K1 */
+        (void)sched_cap_adopt;           /* MUTANT C8: no RES_SCHED check */
     } else {
         return -EINVAL;
     }
