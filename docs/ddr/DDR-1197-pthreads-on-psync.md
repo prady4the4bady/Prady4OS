@@ -358,3 +358,31 @@ Written on `dev/phase1` `6bb8062`, before the P4b runs. Operator #45 comment 665
 
     - The earlier mutant runs on `3e5237e` (all 8 red) are superseded; they are listed in #111's description.
     - Emulated (QEMU TCG) only; not verified on real hardware.
+
+## Amendment 2 (2026-11-18): name the step that refuses a create (#135)
+
+Operator #45 comment 6983608675, step 2. Design only; written before the code.
+
+**Why.** Issue #135: `smoke-thread` arm R fails, rarely, with `PTHR FAIL: R create` and nothing else. The failure was seen once locally on `3b10d2e`, and once in CI on #140's head `1227ff6` (run [44293893851](https://github.com/prady4the4bady/Prady4OS/actions/runs/44293893851/job/134766539646)). `pthr_create` can refuse at six points, and the probe prints none of them, so no mechanism can be named.
+
+**Change (user space only; no kernel code, syscall, capability or page table).**
+- `struct pthr` gains two fields, appended at its end so no offset moves (offset 0 stays `%fs:0`):
+  - `err_step`, which step refused;
+  - `err_rc`, that step's return value.
+- `pthr_create` writes them into the **caller's** block (`pthr_self()`), which is writable memory. The probe has no writable segment, so a global is not possible. The fields are written only on a refusal; a successful create leaves them as they were.
+- The steps:
+
+| Step | Where | Typical code |
+|---|---|---|
+| 1 | stack size out of range | `-EINVAL` |
+| 2 | `mmap` of guard + stack + block | `-ENOMEM` |
+| 3 | `mprotect` of the guard to read-only | |
+| 4 | the RW check `mprotect`, with an error other than `-EACCES` | |
+| 5 | the `-EACCES` retries exhausted (`PTHR_CREATE_TRIES` forks mid-create) | `-EAGAIN` |
+| 6 | `SYS_THREAD_CREATE` | `-EAGAIN` (group exiting), `-ENOMEM` (no tid) |
+
+- **Arm R** prints `[pthr] R create rc=<rc> step=<n> err_rc=<rc> round=<i>` before `PTHR FAIL: R create`, and likewise for `R warm create`. That line is data; the gate's sentinels and `FORBIDDEN_SENTINEL` do not change.
+
+**Not a new gate.** No assertion changes, so there is nothing for a mutant to turn red. The print path is checked once, locally, by forcing a refusal (an out-of-range stack size, step 1) on a scratch tree. That check is not committed.
+
+**This does not close #135.** It only makes the next occurrence name its step. QEMU (TCG) only; not verified on real hardware.
