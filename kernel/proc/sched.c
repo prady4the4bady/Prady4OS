@@ -138,6 +138,116 @@ static uint64_t g_place_zero;     /* early return: NO placement happened      */
 static uint64_t g_place_lift;
 static uint64_t g_place_credit;
 
+/* ---- DDR-1188 Amendment 4 (C1.5 P3): RT classes ----------------------------
+ * S1: RT threads share the one per-CPU queue. g_rt_threads gates every new
+ * path, so with no RT thread the pick and the tick are today's. g_prio_lk is
+ * a leaf lock: it guards rt_prio / pi_prio writes and the count together, so
+ * the count follows each thread's 0 <-> non-0 transition exactly once. */
+volatile uint32_t g_rt_threads;
+static spinlock_t g_prio_lk;
+static uint64_t g_rt_win[PERCPU_MAX];     /* S4: window index (ticks / RT_WIN_TICKS) */
+static uint32_t g_rt_used[PERCPU_MAX];    /* S4: RT ticks used in that window     */
+
+static void prio_count(uint32_t before, uint32_t after) {
+    if (!before && after)
+        __atomic_add_fetch(&g_rt_threads, 1, __ATOMIC_RELEASE);
+    else if (before && !after)
+        __atomic_sub_fetch(&g_rt_threads, 1, __ATOMIC_RELEASE);
+}
+
+/* S3: the threads of a process share one capability table, so a thread whose
+ * own copy of the handle is missing (created while a grant was in flight, or
+ * whose only sibling has since exited) finds the handle in that table
+ * (CodeRabbit on #138: a sibling to copy from may no longer exist). A forked
+ * child's copy was revoked, so it finds nothing. 1 if a handle was adopted. */
+static int sched_cap_adopt(struct tcb *self) {
+    cap_t h = cap_find(self->caps, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT);
+    if (h == CAP_NULL)
+        return 0;
+    self->sched_cap = h;
+    return 1;
+}
+
+int sched_setsched_self(uint32_t policy, uint32_t prio) {
+    struct tcb *t = current_thread;
+    if (policy == SCHED_OTHER) {
+        if (prio != 0)
+            return -EINVAL;
+    } else if (policy == SCHED_FIFO || policy == SCHED_RR) {
+        if (prio < 1 || prio > SCHED_RT_MAX)
+            return -EINVAL;
+        if (!cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT) &&
+            !sched_cap_adopt(t))
+            return -EPERM;                                  /* K1 */
+    } else {
+        return -EINVAL;
+    }
+    uint64_t fl = spin_lock_irqsave(&g_prio_lk);
+    uint32_t before = sched_eff_prio(t);
+    t->sched_policy = policy;
+    __atomic_store_n(&t->rt_prio, prio, __ATOMIC_RELAXED);
+    t->rr_left = RR_SLICE;
+    prio_count(before, sched_eff_prio(t));
+    spin_unlock_irqrestore(&g_prio_lk, fl);
+    return 0;
+}
+
+int sched_grant(struct tcb *t, uint32_t rights) {
+    if (!t || !t->caps)
+        return -EINVAL;
+    if (t->is_agent)
+        return -EPERM;              /* K1: an agent at RT could starve the supervisor */
+    /* A repeated grant reuses the handle it made before, so a caller holding
+     * CAP_SCHED_GRANT cannot fill the target's table (CodeRabbit on #138). */
+    if (t->sched_cap != CAP_NULL &&
+        cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, rights))
+        return 0;
+    cap_t h = cap_create(t->caps, RES_SCHED, SCHED_RES_ID, rights);
+    if (h == CAP_NULL)
+        return -EINVAL;
+    t->sched_cap = h;
+    return 0;
+}
+
+void sched_pi_raise(struct tcb *t, uint32_t p) {
+    uint64_t fl = spin_lock_irqsave(&g_prio_lk);
+    uint32_t before = sched_eff_prio(t);
+    if (p > t->pi_prio)
+        __atomic_store_n(&t->pi_prio, p, __ATOMIC_RELAXED);
+    prio_count(before, sched_eff_prio(t));
+    spin_unlock_irqrestore(&g_prio_lk, fl);
+}
+
+void sched_pi_clear(struct tcb *t) {
+    uint64_t fl = spin_lock_irqsave(&g_prio_lk);
+    uint32_t before = sched_eff_prio(t);
+    __atomic_store_n(&t->pi_prio, 0, __ATOMIC_RELAXED);
+    prio_count(before, sched_eff_prio(t));
+    spin_unlock_irqrestore(&g_prio_lk, fl);
+}
+
+/* S4: is this CPU's RT budget for the current window spent? */
+static inline int rt_throttled(int cpu) {
+    return g_rt_used[cpu] >= RT_WIN_TICKS - 1;
+}
+
+/* S1: the READY entry with the highest effective priority, earliest in list
+ * order among equals. Caller holds q->lock. NULL if no RT entry is READY. */
+static struct tcb *rt_candidate(struct rq *q) {
+    struct tcb *best = 0;
+    uint32_t bp = 0;
+    for (struct tcb *c = q->head; c; c = c->rq_next) {
+        if (c->state != THREAD_READY)
+            continue;
+        uint32_t p = sched_eff_prio(c);
+        if (p > bp) {
+            bp = p;
+            best = c;
+        }
+    }
+    return best;
+}
+
 static void sched_place(struct tcb *t) {
     /* No printing here: this runs under the runqueue lock with IRQs off, and
      * serial output at that point perturbs exactly the timing under test. The
@@ -244,9 +354,19 @@ static void rq_push(int cpu, struct tcb *t) {
 #else
     uint64_t fl = spin_lock_irqsave(&q->lock);
 #endif
-    t->rq_next = 0;
-    if (q->tail) q->tail->rq_next = t; else q->head = t;
-    q->tail = t;
+    if (t->rt_head) {
+        /* DDR-1188 A4 S2: an RT thread preempted by a higher priority or by
+         * the throttle goes back FIRST, as POSIX puts it at the head of its
+         * priority list. */
+        t->rt_head = 0;
+        t->rq_next = q->head;
+        q->head = t;
+        if (!q->tail) q->tail = t;
+    } else {
+        t->rq_next = 0;
+        if (q->tail) q->tail->rq_next = t; else q->head = t;
+        q->tail = t;
+    }
     spin_unlock_irqrestore(&q->lock, fl);
 }
 
@@ -388,9 +508,12 @@ static void sched_dbg_charge(struct tcb *t, uint64_t ticks) {
 static struct tcb *fair_candidate(struct rq *q, uint32_t *depth_out) {
     struct tcb *best = 0;
     uint32_t depth = 0;
+    int rt_on = __atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) != 0;
     for (struct tcb *c = q->head; c; c = c->rq_next) {
         if (c->state != THREAD_READY)
             continue;
+        if (rt_on && sched_eff_prio(c))
+            continue;                    /* DDR-1188 A4 S1: RT is picked ahead */
         depth++;
         if (!best || c->dbg_vruntime < best->dbg_vruntime)
             best = c;
@@ -671,8 +794,11 @@ static struct tcb *rq_pop(int cpu) {
      * queue no longer contains what the picker was choosing from, and the
      * comparison would be against a different set. */
     uint32_t depth = 0;
+    struct tcb *rt = 0;
+    if (__atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) && !rt_throttled(cpu))
+        rt = rt_candidate(q);            /* DDR-1188 A4 S1 */
     struct tcb *fair = fair_candidate(q, &depth);
-    struct tcb *t = fair ? rq_unlink(q, fair) : rq_take(q);
+    struct tcb *t = rt ? rq_unlink(q, rt) : fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
         t->dbg_picks++;
         t->vt_in  = sched_rdtsc();
@@ -1222,6 +1348,13 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->block_lk        = 0;   /* DDR-1200 §5.2: not in a timed wait; kmalloc does not zero */
     t->rcu_next        = 0;   /* DDR-1200 D5: not waiting for a grace period */
     t->pin_cpu         = -1;  /* DDR-1186: unpinned; kmalloc does not zero */
+    t->sched_policy    = SCHED_OTHER;  /* DDR-1188 A4: every new thread starts OTHER */
+    t->rt_prio         = 0;
+    t->pi_prio         = 0;
+    t->rr_left         = RR_SLICE;
+    t->rt_head         = 0;
+    t->kmx_held        = 0;
+    t->sched_cap       = CAP_NULL;     /* DDR-1188 A4 S3: no RES_SCHED unless granted */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -1452,6 +1585,16 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
             cm->mmap_next = parent->mm->mmap_next;
             shm_fork_vmas(cm);   /* DDR-1178 A2.2: the copies are attachments */
             t->mm = cm;
+            /* DDR-1188 A4 S3: fork drops RES_SCHED. cap_fork copied every
+             * slot, so revoke every RES_SCHED slot in the child's table, not
+             * only the one this parent thread names: a thread that missed the
+             * handle's copy may fork too, and the child would otherwise find
+             * the live slot through cap_find (CodeRabbit on #138). */
+            for (int k = 0; k < 64; k++) {
+                cap_t rs = cap_find(t->caps, RES_SCHED, SCHED_RES_ID, 0);
+                if (rs == CAP_NULL || cap_revoke(t->caps, rs) != 0)
+                    break;
+            }
         }
     }
 
@@ -1486,6 +1629,7 @@ uint32_t sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t s
     t->clear_tid  = clear_tid;
     t->root_mnt   = parent->root_mnt;
     t->fs_cap     = parent->fs_cap;
+    t->sched_cap  = parent->sched_cap;   /* DDR-1188 A4 S3: one table per process */
     t->agent_depth = parent->agent_depth;
     signal_fork_copy(t, parent);     /* §3.6: dispositions copied (P4 shares them) */
     memcpy(t->fpu_state, parent->fpu_state, sizeof t->fpu_state);
@@ -1684,6 +1828,14 @@ static void sched_free_tcb(struct tcb *t) {
      * before freeing that stack — this is what replaces rq-1's
      * lock-held-across-the-exit-switch (DDR-SMP-exit-stack-race). */
     switch_wait_offcpu(t);
+    {   /* DDR-1188 A4: an RT thread leaves g_rt_threads when it is freed. */
+        uint64_t pfl = spin_lock_irqsave(&g_prio_lk);
+        uint32_t before = sched_eff_prio(t);
+        __atomic_store_n(&t->rt_prio, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&t->pi_prio, 0, __ATOMIC_RELAXED);
+        prio_count(before, 0);
+        spin_unlock_irqrestore(&g_prio_lk, pfl);
+    }
 
     /* DDR-996: and off the RUNQUEUE, which nothing above waits for. A thread
      * carries two independent links — the all-threads ring (->next) and a
@@ -2653,6 +2805,52 @@ static void sched_timed_sweep(void) {
 #endif
 }
 
+/* DDR-1188 A4 S2/S4/S5: called from sched_tick on `cpu` with interrupts off,
+ * only while g_rt_threads > 0. Charges the throttle window, then returns 1 to
+ * preempt `cur` to the tail, 2 to preempt it to the head (sets rt_head), or 0. */
+static int rt_tick(int cpu, struct tcb *cur) {
+    struct percpu *pc = this_cpu();
+    uint64_t w = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) / RT_WIN_TICKS;
+    if (w != g_rt_win[cpu]) {
+        g_rt_win[cpu] = w;
+        g_rt_used[cpu] = 0;
+    }
+    uint32_t me = cur->is_idle ? 0 : sched_eff_prio(cur);
+    if (me)
+        g_rt_used[cpu]++;
+    int thr = rt_throttled(cpu);
+    int rr_out = 0;
+    if (me && cur->sched_policy == SCHED_RR) {
+        if (cur->rr_left)
+            cur->rr_left--;
+        if (!cur->rr_left) {
+            cur->rr_left = RR_SLICE;
+            rr_out = 1;
+        }
+    }
+    struct rq *q = &g_rq[cpu];
+    uint32_t top = 0;
+    int other = 0;
+    spin_lock(&q->lock);
+    for (struct tcb *c = q->head; c; c = c->rq_next) {
+        if (c->state != THREAD_READY)
+            continue;
+        uint32_t p = sched_eff_prio(c);
+        if (p > top) top = p;
+        if (!p) other = 1;
+    }
+    spin_unlock(&q->lock);
+    if (!me)
+        return (top && !thr) ? 1 : 0;             /* arm D: RT waiting, OTHER running */
+    if ((thr && other) || top > me) {
+        cur->rt_head = 1;                          /* arms G, N: back to the head */
+        return 2;
+    }
+    if (rr_out && top == me)
+        return 1;                                  /* arm E: RR rotates to the tail */
+    return 0;
+}
+
 void sched_tick(void) {
     struct percpu *pc = this_cpu();
     if (pc)
@@ -2681,6 +2879,20 @@ void sched_tick(void) {
         g_vr_last_tick = g_dbg_floor;
         if (d)
             g_vr_per_tick = g_vr_per_tick ? ((g_vr_per_tick * 3 + d) / 4) : d;
+    }
+    /* DDR-1188 A4 S2/S4/S5: with an RT thread anywhere, decide RT preemption
+     * here. An RT current thread never takes the quantum rule below. */
+    if (pc && __atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE)) {
+        int act = rt_tick(pc->cpu_idx, current_thread);
+        if (sched_eff_prio(current_thread) || act) {
+            if (act && !g_in_switch[pc->cpu_idx]) {
+                schedule();
+                current_thread->rt_head = 0;   /* not re-queued: nothing to consume it */
+            } else {
+                current_thread->rt_head = 0;
+            }
+            return;
+        }
     }
     if (current_thread->quantum > 0)
         current_thread->quantum--;
@@ -3236,6 +3448,27 @@ int sched_checkpoint_pid(uint32_t pid) {
     struct tcb *t = find_pid_locked(pid);
     int rc = -ESRCH;
     if (t) { t->checkpointed = 1; rc = 0; }
+    irq_restore(fl);
+    return rc;
+}
+
+/* DDR-1188 A4 S3: find and grant inside one g_sched_lock section (DDR-1157). */
+int sched_grant_pid(uint32_t pid, uint32_t rights) {
+    uint64_t fl = irq_save();
+    struct tcb *t = find_pid_locked(pid);
+    int rc = t ? sched_grant(t, rights) : -ESRCH;
+    if (rc == 0) {
+        /* The threads of a process share one capability table (DDR-1181
+         * §3.6), so the handle is valid for all of them: give it to every live
+         * thread of the process, not only the one the pid named (Codex on
+         * #138). A thread created later copies it from its creator. */
+        struct tcb *u = t;
+        do {
+            if (u->caps == t->caps && u->state != THREAD_ZOMBIE && u->state != THREAD_DONE)
+                u->sched_cap = t->sched_cap;
+            u = u->next;
+        } while (u != t);
+    }
     irq_restore(fl);
     return rc;
 }

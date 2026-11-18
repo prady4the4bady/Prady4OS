@@ -8,7 +8,10 @@
  * waiter is never overtaken by a later locker.
  *
  * Callable only from thread context with no spinlock held (it may block):
- * syscalls and ring-3 fault handling. No priority inheritance (C1.4 P3).
+ * syscalls and ring-3 fault handling. Priority inheritance, one level
+ * (DDR-1188 Amendment 4 S6, DDR-1193 D1): a waiter raises the owner's
+ * inherited priority to its own; the boost ends when the owner releases its
+ * last kmutex.
  * ===========================================================================
  */
 #pragma once

@@ -312,3 +312,109 @@ Five findings, each confirmed by reading `e1652e2`:
 - TSC-deadline mode (not built).
 
 QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
+
+## Amendment 4 (2026-11-17): P3 design, FIFO and RR in front of the fair picker
+
+Design only; no P3 code exists when this is written. It fills in what §2–§5 leave open for P3. Read from the P2 head `a10315a` (#136).
+
+**What exists.**
+- Each CPU has one run queue, `g_rq[cpu]`: a singly linked FIFO of `tcb`s, one link per thread (`rq_on`), with a lock. Every path that makes a thread runnable pushes through `rq_push`. A pinned thread is queued only on its CPU (DDR-1186).
+- `rq_pop` picks `fair_candidate()` (smallest `dbg_vruntime` among READY entries), and falls back to `rq_take` (the head) when it returns nothing. `schedule_locked` picks *before* it re-queues `prev`, so `prev` is never a candidate for its own replacement.
+- `sched_tick` charges `run_ticks`, and calls `schedule()` when the 2-tick quantum (`QUANTUM`) runs out. There is no wake-up preemption.
+- `kmutex` (DDR-1181 §3.3) hands ownership to its first waiter, FIFO. No priority inheritance.
+- Capabilities are per-process tables (`cap.h`). Kernel-only grants follow the two-layer `exec_grant` form (DDR-1034): a kernel-set flag plus a handle checked by `cap_authorize`.
+- There is no user-space init. Probes, agents and the supervisor are launched by the kernel's boot path (`main.c`).
+
+**S1. One queue, two pickers.** RT threads stay on the same per-CPU list. No second list, so `rq_on`, the steal path, `rq_unlink`, the DDR-1139 token rules and the OPEN-2 instrumentation see one structure, as today.
+- Each `tcb` gets `sched_policy` (OTHER, FIFO, RR), `rt_prio` (1–99, 0 for OTHER) and `pi_prio` (S6). Its *effective priority* is `max(rt_prio, pi_prio)`; a thread is *RT* when that is above 0.
+- `rq_pop` first runs `rt_candidate()`: the READY entry with the highest effective priority, and the earliest in list order among equals. So FIFO and RR of one priority share one queue in arrival order, as §2 states.
+- If that finds nothing, or the CPU is throttled (S4), `fair_candidate()` runs as today but skips RT entries. If it then finds nothing, `rq_take` takes the head as today. So a throttled CPU with no `SCHED_OTHER` work keeps running its RT threads instead of idling.
+- With no RT thread in the system the pick is unchanged. A global count `g_rt_threads` (threads whose effective priority is above 0) gates the new code, so a boot with no RT thread does one extra load per pick and per tick.
+- **Stated limit:** priorities are per CPU. A higher-priority RT thread queued on another CPU does not preempt this one. Stealing (`rq_steal`) is unchanged and does not look at priority. The P3 arms pin every RT thread.
+
+**S2. Preemption happens on the tick.** When `g_rt_threads > 0`, `sched_tick` scans the local queue under its lock and calls `schedule()` when:
+- the current thread is `SCHED_OTHER` and an RT entry is READY (arm D), or
+- the current thread is RT and a READY entry has a higher effective priority (arm N), or
+- the current thread is RR, its 10-tick slice (K3) has run out, and a READY entry of equal effective priority waits (arm E), or
+- the current thread is RT, the CPU is throttled, and a `SCHED_OTHER` entry is READY (arm G).
+An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHED_OTHER` current thread keeps today's quantum rule unchanged.
+- No IPI. A wake on another CPU is seen at this CPU's next tick, so the bound is one tick, which is what arms D and N assert.
+- **Head re-queue.** An RT thread preempted by a higher priority or by the throttle goes back to the *head* of the queue, not the tail (`rt_head`, consumed in `rq_push`). POSIX puts it at the head of its priority list, and without it a throttle slot would rotate two equal FIFO threads (arm F). An RR thread whose slice ran out goes to the tail.
+
+**S3. `sched_setscheduler` and `RES_SCHED` (K1).**
+- **NSI 122 `SYS_SCHED_SETSCHED (tid, policy, prio)`.** `tid` must be 0 (the calling thread) in P3, so a policy never changes while its thread is queued. `policy` is 0 OTHER, 1 FIFO, 2 RR; `prio` is 1–99 for FIFO and RR, 0 for OTHER. Returns 0, `-EINVAL` or `-EPERM`. Moving to OTHER needs no capability.
+- **`RES_SCHED` (resource type 7) with two rights:** `CAP_SCHED_RT` (bit 26), to use FIFO and RR, and `CAP_SCHED_GRANT` (bit 27), to grant `RES_SCHED` to another process. Both bits are free on `dev/phase1`.
+- **One layer: the handle `sched_cap`, checked by `cap_authorize`.** DDR-1034 pairs a kernel-set flag with the handle and tests them apart. That needs a case with the flag but no handle and one with the handle but no flag, and the P3 arms have neither: a forked child would lack both, so a mutant dropping either check would survive (the masking DDR-1033 records). With fork revoking the handle, one check is the whole boundary, and one mutant (C8) is red on it.
+- **Who is "init".** K1 says init holds `RES_SCHED` and grants it. This kernel has no user-space init: the boot path in `main.c` launches every process. So the kernel's launcher plays init. It calls a kernel-only `sched_grant(t, rights)`, which refuses (returns `-EPERM`) any `tcb` with `is_agent` set. In P3 it is called for the schedclass probe only. The supervisor (`is_sovereign`) does not get it in P3, because nothing in it needs RT yet. That is the safe option, and it is said on #45.
+- **NSI 123 `SYS_SCHED_GRANT (pid, rights)`.** The caller needs `CAP_SCHED_GRANT`. It grants `rights & (CAP_SCHED_RT)` to the process `pid` through `sched_grant`, so a granted process cannot grant on, and an agent target gets `-EPERM`. Returns 0, `-EPERM`, `-ESRCH` or `-EINVAL`.
+- **Fork drops it.** The child of a fork gets its copy of the handle revoked (`cap_fork` copies every slot), `sched_cap = CAP_NULL`, and `SCHED_OTHER`, as Linux's `SCHED_RESET_ON_FORK`. Otherwise every process forked by a holder would inherit RT. A new thread of the same process (`CLONE_VM`) shares the table, as all its capabilities, but starts as `SCHED_OTHER`; it copies `sched_cap`, as it copies `fs_cap`.
+- New `tcb` fields: `sched_policy`, `rt_prio`, `pi_prio`, `rr_left`, `rt_head`, `sched_cap`, `kmx_held`. Each gets an explicit initialiser in `sched_create_state` (CLAUDE.md rule 11).
+
+**S4. Throttling (K2) as 19 of every 20 ticks.** On each CPU, in each window of 20 ticks of that CPU's own count, RT threads run at most 19.
+- In each aligned 20-tick window RT runs at most 19 ticks, so each aligned 100-tick span (one second at 100 Hz) holds at most 95 RT ticks: K2's 950 ms. A sliding 100-tick span can hold 96, because it can include parts of six windows whose non-RT ticks fall outside it (CodeRabbit on #138; an earlier draft claimed 95 for every span, which was wrong). The sliding bound is 960 ms per second.
+- **Why not one 50 ms gap per 1 s window, as Linux does.** Arm G counts the `SCHED_OTHER` thread's run ticks in 1 s windows of `CLOCK_MONOTONIC`. Under TCG the tick rate drifts from 100 Hz. With one 5-tick gap per 100 ticks, a tick rate a little under 100 Hz makes the gap's period longer than 1 s, so some 1 s windows hold no gap and arm G fails at random. With one gap every 20 ticks, a 1 s window at 80–120 Hz holds 4–6 gaps.
+- Cost: a CPU running an RT spinner and a `SCHED_OTHER` thread switches twice every 200 ms instead of twice a second.
+- A throttled CPU with no READY `SCHED_OTHER` entry keeps running RT (S1, S2). The throttle guarantees `SCHED_OTHER` time; it does not idle the CPU.
+
+**S5. RR timeslice (K3):** 10 ticks (`rr_left`), reset when the thread is picked after a rotation, and when it sets RR.
+
+**S6. `kmutex` priority inheritance (DDR-1193 D1; A1-5).**
+- **Boost.** A waiter about to block in `kmutex_lock` raises the owner's `pi_prio` to its own effective priority, if that is higher. This is done under `m->lk`. A boosted `SCHED_OTHER` owner is then RT for S1 and S2: it is picked and preempts at the boosted priority, which is A1-5's "move it onto the RT queue". A queued owner is seen by the next tick on its CPU, without a re-queue.
+- **Hand-off.** `kmutex_unlock` hands the lock to the first waiter, FIFO as today. The new owner's `pi_prio` becomes the highest effective priority among the waiters still queued.
+- **Drop.** The releasing thread's `pi_prio` goes to 0 when it holds no other `kmutex` (`kmx_held` reaches 0). While it still holds one it keeps the boost. This is conservative: the boost lasts until its last `kmutex` is released, never shorter than needed.
+- **Stated limits:** one level only (an owner blocked on a second `kmutex` does not pass the boost on), and waiters are handed the lock FIFO, not by priority.
+
+**S7. Arms, how each is measured, and its mutant.** All in `user/schedtest.c`, all RT threads pinned with `SYS_SCHED_CPU`.
+- **D (C4).** A `SCHED_OTHER` spinner and a FIFO thread are pinned to one CPU. Fifty times, the spinner resumes, spins under 1 ms, reads its own `run_ticks` (`SYS_GETPROCS`, DDR-754), and wakes the FIFO thread through a futex. The FIFO thread reads the spinner's `run_ticks` when it runs, then blocks again. Δ = the spinner's ticks between the wake and the FIFO thread's run.
+  - With P3, the next tick preempts, so Δ = 1.
+  - Mutant C4 (RT threads queued as fair, no tick preemption): the spinner resumes with a full 2-tick quantum, so the FIFO thread waits for it to expire and Δ = 2.
+  - **Pass:** at most 5 of 50 wakes have Δ ≥ 2. The 5 allow for a tick that lands between the spinner's read and its wake.
+- **E (C5).** Two threads each take RR at priority 10 *before* pinning to one CPU, then each counts loops for 1 s. Taking RR first means the second reaches that CPU as an RR thread, so only rotation lets it run there: a throttle gap goes to `SCHED_OTHER`, not to it. **Pass:** both threads got there (`ready=1`) and both counts are above 0. Mutant C5 (RR never rotates) leaves the second off the CPU until the first exits, so its count is 0. A setup timeout reports `rr_ok=0` rather than ending the probe.
+- **F (C6).** Two FIFO threads of priority 10 on one CPU. The first spins for 30 of its own ticks (15 quantum expiries), checking a flag the second sets when it runs, then blocks. **Pass:** the flag is still 0 when the first blocks, and the second runs after. Mutant C6 (FIFO rotates on quantum expiry) sets the flag within 2 ticks.
+- **G (C7).** As §4. Mutant C7 removes the throttle check.
+- **H (C8, C8b).** A forked child of the probe calls `SYS_SCHED_SETSCHED(FIFO)` and gets `-EPERM`, because fork drops `RES_SCHED` (C8: skip the check). The launcher also starts a second copy of the probe as an agent (`SCHEDAGT`, `is_agent` set, no grant). That copy's own `SYS_SCHED_SETSCHED(FIFO)` returns `-EPERM`, and the probe's `SYS_SCHED_GRANT(<SCHEDAGT pid>)` returns `-EPERM` (C8b: allow the grant to an agent).
+- **N (C14).** As §4, measured as arm D: a FIFO-10 spinner, a FIFO-20 thread woken by it, Δ in the spinner's ticks. Mutant C14 reverses the order.
+- **P (C16), the DDR-1193 D1 gate.** A probe-only test `kmutex` (`g_pi_test_mx`), reached through two new ops of `SYS_SCHED_CPU` (3: hold it for N of the caller's own ticks of CPU time; 4: lock and unlock it). They return `-ENOSYS` unless `QEMU_PROBES` includes `schedclass`, so no new NSI is spent on a test hook.
+  - A `SCHED_OTHER` holder pinned to CPU 2 takes the lock for 30 of its own ticks.
+  - A FIFO-10 spinner pinned to CPU 2 then starts.
+  - A FIFO-20 waiter pinned to CPU 3 then locks it and times its wait with `CLOCK_MONOTONIC`.
+  - With S6 the holder runs at 20 above the spinner and needs about 0.3 s. Mutant C16 (no boost) leaves it only throttle gaps, one tick in 20, so it needs at least 600 ticks, about 6 s.
+  - **Pass:** the wait is under 2 s.
+  - Syscalls run with interrupts off (`SFMASK`), so op 3's hold loop would never see a tick. It spins in `sti; nop; pause; cli` windows, the `za_hold` idiom (DDR-1201), so the tick charges it, preempts it and boosts it while it holds the lock.
+
+**Thread ids in the arms.** `SYS_GETPID` returns the process id (`tgid`, DDR-1181 P1c), not a thread's own id. Every arm that reads a thread's `run_ticks` takes that thread's id from `SYS_THREAD_CREATE`'s return value, published by its creator. A first draft used `SYS_GETPID`, so arms D, N, F and G read the main thread's ticks, and all four passed on a meaningless number (arm G reported 100 ticks a second for a thread that shared its CPU with a FIFO spinner). That passing run is why each arm is checked against its mutant before it is trusted.
+
+**Vacuity.** Each arm's mutant is a P3 tree with one thing removed, built and run locally before the arm is trusted, then in CI.
+
+**Local results (QEMU TCG, one boot each, not CI):**
+- tree with P3: every arm passes (D `late=0 of 50`; N `late=1 of 50`; G `w=5,5,5,5,5`; P `wait_ms=242`).
+- C4: red on D (`late=49 of 50`, the predicted Δ = 2), and on F (the fair picker rotates FIFO threads).
+- C5: red on E (`n1=0`).
+- C6: red on F.
+- C7: red on G only. A first arm E took RR after pinning and needed a throttle gap to get there, so C7 went red on E. E now takes RR first (above).
+- C8: red on H (the forked child and SCHEDAGT both got FIFO).
+- C8b: red on H (the grant to SCHEDAGT succeeded).
+- C14: red on N (`abort=1`), and on P (the boost to 20 loses to the spinner at 10 when the order is reversed).
+- C16: red on P. Arms D and N rest on the spinner starting each trial with a full quantum: that is checked against the mutant locally before the arm is written, as §4 requires.
+
+**Risks carried from §5.** P3 changes `rq_pop` and `sched_tick`, where OPEN-2 and OPEN-12/13 live. With no RT thread the new code runs nothing but the count check. Every P3 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
+
+**Correction to Amendment 3, T5 (CodeRabbit on #136, after merge review).** T5 says a one-shot is never armed closer than 50 µs "after the previous timer interrupt". What `hrt_arm` measures from periodic mode is the previous timer **expiry**, `tick_at - 10 ms`. If that tick's interrupt was delivered late by `d`, the next one-shot can expire `50 µs - d` after the handler ran. T5's purpose is the interrupt-rate bound (§5), and that holds: expiries on a CPU stay at least 50 µs apart, and deliveries cannot outnumber expiries. T5 should read "50 µs after the previous timer expiry". Not gated: no gate can delay an interrupt on purpose.
+- **Rounding.** `hr_ns_to_counts` truncated, so a count could be up to one LAPIC count short of the target (about 16 ns under QEMU's rate). P3 rounds it **up**. The count starts at the LAPIC write, after `now` was sampled, so the expiry is at or after `now + ns`, at or after the target. This rests on one unmeasured assumption: a count lasts `HR_TICK_NS / g_timer_count`, with `g_timer_count` calibrated against the PIT while `now` comes from the TSC. A rate mismatch moves the floor by that error.
+- **Per-window bound.** Spacing bounds expiries to 20 000 a second. One more can be delivered inside a one-second window, latched in IRR from an expiry before it: at most 20 001 deliveries in any one-second window.
+
+**Review fixes on #138.**
+- **A grant reached one thread of the process (Codex).** `SYS_SCHED_GRANT` stored the handle in the one `tcb` the pid named. The process's other live threads share its capability table but kept `sched_cap = CAP_NULL`, so they still got `-EPERM`. Fixed: `sched_grant_pid` gives the handle to every live thread whose table is the target's, under `g_sched_lock`. **Not gated:** arm H checks only refused grants (fork, agent); no arm makes a grant succeed.
+
+- **The agent copy was marked an agent after SCHEDTEST could run (CodeRabbit).** SCHEDAGT was loaded after `sched_unblock(SCHEDTEST)`, so arm H's poll could find it, still without `is_agent`, and grant it RT; setting `is_agent` later would not revoke that. Fixed: SCHEDAGT is loaded and marked before SCHEDTEST is unblocked, and unblocked after.
+- **A donation was skipped when the owner already outranked the waiter (CodeRabbit).** An owner that later lowered its own priority while holding the lock then ran below its waiter. Fixed: `sched_pi_raise` is always called with the waiter's priority; it keeps the larger donation.
+- **Repeated grants filled the target's capability table (CodeRabbit).** Each grant created a new slot. Fixed: a grant whose target already holds a valid handle with those rights reuses it.
+- **A thread created while a grant is in flight could keep `CAP_NULL` (CodeRabbit).** It copies its creator's handle, possibly before the grant reaches the creator. A first fix copied a valid handle from a sibling thread; CodeRabbit then showed the sibling may have exited by the time it is needed. Fixed: when its own copy is missing, `SYS_SCHED_SETSCHED` finds the handle in the process's shared capability table (`cap_find`, a new lookup by resource and rights under the table's lock). The table is the process-shared state, so no sibling is needed. A forked child's copy was revoked, and a revoked slot is never found.
+- **Fork revoked only the slot the parent thread named (CodeRabbit).** A thread that missed the handle's copy could fork, and its child kept a live `RES_SCHED` slot that `cap_find` would then hand to it: RT without a grant. Fixed: fork revokes every `RES_SCHED` slot in the child's table, whatever the parent thread holds. Arm H's fork leg checks the common case; the missed-copy case is not gated.
+- **The sliding-window throttle bound (CodeRabbit).** Corrected in S4: 95 per aligned second, 96 per sliding second.
+- **Not changed: `docs/build_status.md` (Codex).** As on #136: the file has had no entry since October, and reviving or retiring it is an open question to the operator (#45 6948599917).
+- None of these is gated: arm H checks refusals only, and no arm lowers an owner's priority while it holds a `kmutex` or repeats a grant.
+
+**Not gated in P3 (stated):** cross-CPU priority; RT priority on steal; a policy change on another thread; a successful grant and its spread to sibling threads; transitive inheritance; priority-ordered `kmutex` hand-off; the head re-queue on preemption by a higher priority (only the throttle case is exercised, by arm F).
+
+QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
