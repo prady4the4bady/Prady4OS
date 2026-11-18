@@ -35,7 +35,9 @@
 #define KHEAP_SITE_OFF 16u
 #define KHEAP_SITE_MIN 24u
 #define MAX_SLAB_OBJ 2048u               /* above this, allocate whole pages */
-#define MAX_LARGE   256u                 /* tracked concurrent large allocs   */
+/* DDR-1207 D1 (#135): each thread holds two entries (tcb + kernel stack)
+ * until its RCU grace period ends, and a create/join storm reached 256. */
+#define MAX_LARGE   1024u                /* tracked concurrent large allocs   */
 
 struct free_obj { struct free_obj *next; };
 
@@ -70,6 +72,7 @@ static struct kmem_cache cache_ipc;      /* provisional 256 B */
 /* Large (whole-page) allocation registry. */
 static struct { uint64_t addr; unsigned order; } large[MAX_LARGE];
 static uint64_t large_in_use;
+static uint32_t large_full;          /* DDR-1207 D3: refusals for a full table */
 static uint64_t ptnode_in_use;
 
 static void heap_panic(const char *msg) {
@@ -253,13 +256,22 @@ static void *kmalloc_locked(size_t size) {
         }
     }
     pmm_free_pages(addr, order);          /* registry full */
+    large_full++;                         /* DDR-1207 D3: reported after unlock */
     return 0;
 }
 
 void *kmalloc(size_t size) {
     uint64_t fl = spin_lock_irqsave(&g_heap_lock);
+    uint32_t full0 = large_full;
     void *p = kmalloc_locked(size);
+    uint32_t full1 = large_full;
+    uint64_t used = large_in_use;
     spin_unlock_irqrestore(&g_heap_lock, fl);
+    if (full0 == 0 && full1 == 1) {       /* DDR-1207 D3: once, outside the lock */
+        kputs("[kheap] large registry full in_use=");
+        kputdec(used);
+        kputs("\r\n");
+    }
     return p;
 }
 
@@ -351,6 +363,26 @@ void ptnode_free(void *p) {
     uint64_t fl = spin_lock_irqsave(&g_heap_lock);
     ptnode_in_use--;
     spin_unlock_irqrestore(&g_heap_lock, fl);
+}
+
+/* DDR-1207 arm KL: n large (16 KiB) allocations at once, then all freed.
+ * Prints PRADYOS_KHEAP_LARGE want=<n> got=<k> ok=<0|1>; returns k. */
+unsigned kheap_large_selftest(unsigned n) {
+    void **v = (void **)kmalloc((size_t)n * sizeof(void *));
+    unsigned got = 0;
+    if (v) {
+        while (got < n && (v[got] = kmalloc(16384u)) != 0)
+            got++;
+        for (unsigned i = 0; i < got; i++)
+            kfree(v[i]);
+        kfree(v);
+    }
+    kputs("PRADYOS_KHEAP_LARGE want=");
+    kputdec(n);
+    kputs(" got=");
+    kputdec(got);
+    kputs(got == n ? " ok=1\r\n" : " ok=0\r\n");
+    return got;
 }
 
 uint64_t kheap_outstanding(void) {

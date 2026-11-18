@@ -3268,6 +3268,7 @@ static void fs_test_thread(void *arg) {
                  * children and runs spinning threads on every vCPU, which would
                  * perturb every timing-sensitive gate if it ran each boot. */
                 if (probe_enabled("thread")) {
+                    kheap_large_selftest(300);  /* DDR-1207 arm KL (#135) */
                     struct tcb *th = 0;
                     uint64_t thlen = (uint64_t)(uintptr_t)threadtest_elf_end -
                                      (uint64_t)(uintptr_t)threadtest_elf;
