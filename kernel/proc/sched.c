@@ -155,27 +155,17 @@ static void prio_count(uint32_t before, uint32_t after) {
         __atomic_sub_fetch(&g_rt_threads, 1, __ATOMIC_RELEASE);
 }
 
-static uint64_t irq_save(void);
-static void irq_restore(uint64_t f);
 /* S3: the threads of a process share one capability table, so a thread whose
- * own copy of the handle is missing (created while a grant was in flight)
- * adopts a valid one from any thread of its process. Under g_sched_lock, the
- * lock sched_grant_pid holds. 1 if a valid handle was adopted. */
+ * own copy of the handle is missing (created while a grant was in flight, or
+ * whose only sibling has since exited) finds the handle in that table
+ * (CodeRabbit on #138: a sibling to copy from may no longer exist). A forked
+ * child's copy was revoked, so it finds nothing. 1 if a handle was adopted. */
 static int sched_cap_adopt(struct tcb *self) {
-    int ok = 0;
-    uint64_t fl = irq_save();
-    struct tcb *u = self;
-    do {
-        if (u->caps == self->caps && u->sched_cap != CAP_NULL &&
-            cap_authorize(self->caps, u->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT)) {
-            self->sched_cap = u->sched_cap;
-            ok = 1;
-            break;
-        }
-        u = u->next;
-    } while (u != self);
-    irq_restore(fl);
-    return ok;
+    cap_t h = cap_find(self->caps, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT);
+    if (h == CAP_NULL)
+        return 0;
+    self->sched_cap = h;
+    return 1;
 }
 
 int sched_setsched_self(uint32_t policy, uint32_t prio) {

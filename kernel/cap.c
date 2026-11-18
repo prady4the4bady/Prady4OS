@@ -142,6 +142,28 @@ int cap_fork(const struct cap_table *src, struct cap_table *dst) {
     return 0;
 }
 
+/* DDR-1188 A4 (review on #138): the handle of the first live slot for
+ * (res_type, res_id) that holds every bit of `required_rights`, or CAP_NULL.
+ * A thread that shares the table but missed the copy of a handle finds it
+ * here. A revoked slot is not in use, so it is never returned. */
+cap_t cap_find(struct cap_table *t, uint32_t res_type, uint64_t res_id,
+               uint32_t required_rights) {
+    if (!t)
+        return CAP_NULL;
+    cap_t h = CAP_NULL;
+    uint64_t fl = spin_lock_irqsave(&t->lk);
+    for (uint32_t i = 0; i < CAP_SLOTS; i++) {
+        struct cap_slot *s = &t->slots[i];
+        if (s->in_use && s->res_type == res_type && s->res_id == res_id &&
+            (s->rights & required_rights) == required_rights) {
+            h = make_handle(i, s->generation);
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&t->lk, fl);
+    return h;
+}
+
 int cap_revoke(struct cap_table *t, cap_t h) {
     if (!t)
         return -1;

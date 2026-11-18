@@ -112,6 +112,10 @@ cap_t    cap_delegate(struct cap_table *src, cap_t h, struct cap_table *dst, uin
  * equal (no escalation); the tables are separate (child cannot revoke parent
  * caps). Returns 0 on success, -1 on a NULL table. */
 int      cap_fork(const struct cap_table *src, struct cap_table *dst);
+/* DDR-1188 A4: the handle of the first live slot for (res_type, res_id) that
+ * holds every bit of required_rights, or CAP_NULL. Never a revoked slot. */
+cap_t    cap_find(struct cap_table *t, uint32_t res_type, uint64_t res_id,
+                  uint32_t required_rights);
 /* O(1) revoke: invalidates all outstanding handles for this slot. */
 int      cap_revoke(struct cap_table *t, cap_t h);
 /* 1 if the handle is valid AND holds all `required` rights, else 0. */
