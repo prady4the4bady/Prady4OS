@@ -37,7 +37,7 @@
 #define MAX_SLAB_OBJ 2048u               /* above this, allocate whole pages */
 /* DDR-1207 D1 (#135): each thread holds two entries (tcb + kernel stack)
  * until its RCU grace period ends, and a create/join storm reached 256. */
-#define MAX_LARGE   1024u                /* tracked concurrent large allocs   */
+#define MAX_LARGE   256u                 /* tracked concurrent large allocs   */
 
 struct free_obj { struct free_obj *next; };
 
