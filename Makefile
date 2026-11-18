@@ -657,9 +657,9 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	# probe linked with $(USER_LD), never with $(MUSL_CRT)/$(MUSL_LIB) (D3).
 	$(CC) $(USER_C_CFLAGS) -DPTHR_FREESTANDING -c $(USER_PTHR_SRC) -o build/pthrtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_THR_ELF) build/threadtest.o build/pthrtest.o
-	$(CC) $(USER_C_CFLAGS) -c $(USER_SCHED_SRC) -o build/schedtest.o
+	$(CC) $(USER_C_CFLAGS) -Os -c $(USER_SCHED_SRC) -o build/schedtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHED_ELF) build/schedtest.o
-	$(CC) $(USER_C_CFLAGS) -c $(USER_SCHEDAGT_SRC) -o build/schedagt.o
+	$(CC) $(USER_C_CFLAGS) -Os -c $(USER_SCHEDAGT_SRC) -o build/schedagt.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHEDAGT_ELF) build/schedagt.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DISK_ELF) build/disktest.o
