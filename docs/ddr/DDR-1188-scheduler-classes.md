@@ -481,6 +481,13 @@ A `SCHED_OTHER` current thread is preempted for an eligible deadline entry by P3
 - **Vacuity, read from the code before writing:** on the P3 tree, `SCHED_DEADLINE` is `-EINVAL`, so all three arms fail at their first call. On a P4 tree with C9, C10 or C17, the arm in the table fails for the reason given. Each mutant is built and run locally before the arm is trusted, then in CI on the final head.
 - The new sentinels: `PRADYOS_SCHED_I adm_ok=1`, `PRADYOS_SCHED_J edf_ok=1`, `PRADYOS_SCHED_Q cbs_ok=1`.
 
+**Local results (QEMU TCG, one boot each, not CI), on `cc28e9c` (`smoke-shell` 5/5 on `beb4630`, the base merged):**
+- the tree with P4: every arm passes, the P3 arms too. I `rc=0,0,-16,0,0`; J `afirst=100 of 100`, `miss_a=0 miss_b=0`; Q `w=90,90,90`.
+- C9: red on I only (`rc=0,0,0,0,0`: the third request admitted).
+- C10: red on J only (`afirst=0 of 100`: B, woken first, always ran first).
+- C17: red on Q only (`w=5,5,5`: the spinner limited only by K2's one tick in 20).
+- `kernel.bin` 1,692,042 B, 8,192 B over P3: 11,894 B under the gate for P5 and P6.
+
 **Not gated in P4 (stated):**
 - deadline inheritance through a `kmutex` (D1);
 - the work-conserving run of a CBS-throttled thread (D3);
