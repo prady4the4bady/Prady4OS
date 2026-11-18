@@ -214,7 +214,9 @@ int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64
             if (prio != 0 || t->pin_cpu < 0 || runtime < DL_TICK_NS || runtime > period ||
                 period < 2 * DL_TICK_NS || period > 1000 * DL_TICK_NS)
                 return -EINVAL;
-            bw = (runtime << DL_BW_SHIFT) / period;
+            /* Rounded UP, so shares that round down cannot sum to exactly
+             * DL_BW_MAX while the requests exceed 0.90 (CodeRabbit on #140). */
+            bw = ((runtime << DL_BW_SHIFT) + period - 1) / period;
         } else if (prio < 1 || prio > SCHED_RT_MAX) {
             return -EINVAL;
         }
@@ -233,11 +235,24 @@ int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64
         }
         g_dl_bw[t->pin_cpu] = sum + bw;
         t->dl_bw = bw;
+        uint64_t now = dl_now(t);
         t->dl_runtime = (uint32_t)(runtime / DL_TICK_NS);
         t->dl_period = (uint32_t)((period + DL_TICK_NS - 1) / DL_TICK_NS);
-        t->dl_left = t->dl_runtime;
-        t->dl_thr = 0;
-        t->dl_deadline = dl_now(t) + t->dl_period;
+        if (t->sched_policy == SCHED_DEADLINE) {
+            /* A5 D3 (CodeRabbit on #140): a repeated or changed request keeps
+             * the current deadline and never raises the budget left in it. */
+            if (t->dl_left > t->dl_runtime)
+                t->dl_left = t->dl_runtime;
+        } else if (now < t->dl_deadline) {
+            /* Rejoining inside the interval it left: no budget until that
+             * interval's deadline, so leave-and-rejoin is not a refill. */
+            t->dl_left = 0;
+            t->dl_thr = 1;
+        } else {
+            t->dl_left = t->dl_runtime;
+            t->dl_thr = 0;
+            t->dl_deadline = now + t->dl_period;
+        }
         prio = SCHED_DL_PRIO;
     } else if (t->sched_policy == SCHED_DEADLINE) {
         g_dl_bw[t->pin_cpu] -= t->dl_bw;                  /* A5 D4: share released */
@@ -2899,7 +2914,10 @@ static int rt_tick(int cpu, struct tcb *cur) {
         g_rt_used[cpu]++;
     int thr = rt_throttled(cpu);
     int rr_out = 0, dl_out = 0;
-    if (me && cur->sched_policy == SCHED_DEADLINE) {
+    /* Only a RUNNING current thread: one that has begun to block may be woken
+     * by another CPU, and from then dl_wake owns its budget (CodeRabbit on #140). */
+    if (me && cur->sched_policy == SCHED_DEADLINE &&
+        __atomic_load_n(&cur->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING) {
         dl_eligible(cur);                          /* A5 D3: replenish if due */
         if (cur->dl_left)
             cur->dl_left--;                        /* A5 D3: charge this tick */
@@ -2946,7 +2964,10 @@ static int rt_tick(int cpu, struct tcb *cur) {
             return 1;                              /* A5 D3, D6 */
         return 0;
     }
-    if ((thr && other) || top > me) {
+    /* An eligible deadline entry outranks a non-deadline current thread even
+     * at equal effective priority (a kmutex owner boosted to 100 by a deadline
+     * waiter): the picker ranks it first (CodeRabbit on #140). */
+    if ((thr && other) || top > me || (!thr && dl_first != ~0ull)) {
         cur->rt_head = 1;                          /* arms G, N: back to the head */
         return 2;
     }

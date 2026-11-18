@@ -938,6 +938,10 @@ __attribute__((noreturn, force_align_arg_pointer)) static void j_spin(long arg) 
     if (!await_eq(&s->ready, 2, 10))
         s->abort = 1;
     for (long i = 0; i < J_TRIES && !s->abort; i++) {
+        /* 70 ms of quiet BEFORE each release, the first included: both
+         * workers have parked, and both deadlines have passed (CodeRabbit). */
+        struct ts req = { 0, (long)(70 * MS) };
+        nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
         s->order = 0;
         s->ran = 0;
         s->rel = mono();
@@ -950,10 +954,12 @@ __attribute__((noreturn, force_align_arg_pointer)) static void j_spin(long arg) 
             break;
         }
         s->trials++;
-        struct ts req = { 0, (long)(70 * MS) };
-        nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
     }
     __atomic_store_n(&s->stop, 1, __ATOMIC_RELEASE);
+    /* Publish on the futex words too, so a worker between its stop check
+     * and FUTEX_WAIT sees a value mismatch instead of sleeping (CodeRabbit). */
+    __atomic_store_n(&s->f[0], 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&s->f[1], 1, __ATOMIC_RELEASE);
     fx_wake(&s->f[0]);
     fx_wake(&s->f[1]);
     __atomic_add_fetch(&s->done, 1, __ATOMIC_ACQ_REL);

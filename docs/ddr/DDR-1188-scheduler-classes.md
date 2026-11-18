@@ -500,6 +500,21 @@ A `SCHED_OTHER` current thread is preempted for an eligible deadline entry by P3
   - **After the fix** (local, clean objects): the default build is 1,679,754 B (24,182 B under the gate) and the `RCU_TORTURE=1` build is 1,696,138 B (7,798 B under).
   - Every arm is re-run at `-Os` locally, and in CI with every mutant, because the probe's code changed.
 
+**Review fixes on #140 (CodeRabbit, before merge).**
+- **A repeated request refilled the budget.** Re-submitting the same parameters subtracted the thread's own share and restored a full budget and a new deadline: unbounded deadline-class time. Leaving to `SCHED_OTHER` and rejoining did the same. Fixed:
+  - a thread already in `SCHED_DEADLINE` keeps its deadline, and its budget left is capped at the new runtime;
+  - a thread that rejoins before the deadline of the interval it left starts throttled, with no budget until that deadline;
+  - leaving still releases the admission share.
+- **Admission shares rounded down.** Two 45 000 001/100 000 000 requests each stored 471 859, summing exactly to `DL_BW_MAX`, so both were admitted although they exceed 0.90. Fixed: each share is rounded up. This is conservative: a sum of exactly 0.90 made of shares that do not divide evenly can now be refused. Arm I's 0.5, 0.3 and 0.2 still give `0, 0, -EBUSY`.
+- **Equal effective priority.** A `kmutex` owner boosted to 100 by a deadline waiter was not preempted by another eligible deadline entry (`top == me`), although the picker ranks the deadline entry first. Fixed: a non-deadline current thread is preempted whenever an eligible deadline entry waits and K2 allows RT.
+- **Charging a thread that has begun to block.** In `switch_wait_offcpu_sched`'s interrupt window, a blocking deadline thread is still `current` and can be woken by another CPU. A tick could then charge the budget `dl_wake` had just refilled. Fixed: only a `THREAD_RUNNING` current thread is charged.
+- **`prio` was cast before it was checked.** `SYS_SCHED_SETSCHED` now rejects `policy > 3` and `prio > 99` before narrowing to `uint32_t`.
+- **Arm J probe hardening.**
+  - The 70 ms quiet gap now comes before every release, the first included, so both workers have parked before they are woken.
+  - The shutdown publishes on both futex words before waking, so a worker between its stop check and `FUTEX_WAIT` cannot sleep.
+- **Not changed (CodeRabbit, arm J): a tick that lands between the two wakes.** The two `FUTEX_WAKE` calls are back to back, a window of a few microseconds against a 10 ms tick. `J_MIN = 95` already allows 5 such trials in 100, and a split trial is scored, not hidden. A single count-2 wake on one futex word would remove the window, but it needs a controlled park order (the bucket wakes most-recent first), which the probe cannot observe.
+- **None of these is gated:** no arm repeats a request, rejoins, sums shares near 0.90 by rounding, boosts a `kmutex` owner from a deadline waiter, or blocks during the switch window.
+
 **Not gated in P4 (stated):**
 - deadline inheritance through a `kmutex` (D1);
 - the work-conserving run of a CBS-throttled thread (D3);
