@@ -89,6 +89,10 @@ struct pthr {
     struct pthr_rt   *rt;
     struct pthr      *next;                /* detached list link, under rt_lock */
     struct pthr_spec  spec[PTHR_KEYS_MAX];
+    /* DDR-1197 A2 (#135): the step that refused this thread's last
+     * pthr_create, and that step's return value. Appended: no offset moves. */
+    long              err_step;
+    long              err_rc;
 };
 typedef struct pthr *pthr_t;
 
@@ -300,8 +304,11 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     pthr_reap();
     unsigned long ss = (a && a->stacksize) ? a->stacksize : PTHR_STACK_DEFAULT;
     int det = (a && a->detached) ? 1 : 0;   /* t->detached may change once t runs */
+    /* DDR-1197 A2: each refusal records its step in the caller's block. */
+#define PTHR__REFUSE(step, rc) do { self->err_step = (step); self->err_rc = (rc); \
+                                    return (rc); } while (0)
     /* Bounded first, so the rounding and the length below cannot wrap. */
-    if (ss < PTHR_STACK_MIN || ss > PTHR_STACK_MAX) return -PTHR_EINVAL;
+    if (ss < PTHR_STACK_MIN || ss > PTHR_STACK_MAX) PTHR__REFUSE(1, -PTHR_EINVAL);
     ss = (ss + PTHR_PAGE - 1) & ~(PTHR_PAGE - 1);
     unsigned long len = PTHR_PAGE + ss + PTHR_PAGE;   /* guard, stack, block */
     /* The guard is READ-ONLY, not PROT_NONE: the kernel refuses PROT_NONE
@@ -328,17 +335,17 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     long base = -PTHR_EAGAIN;
     for (int tries = 0; tries < PTHR_CREATE_TRIES; tries++) {
         base = pthr__mmap(len);
-        if (base < 0) return base;
+        if (base < 0) PTHR__REFUSE(2, base);
         long pr = pradyos_syscall(SYS_MPROTECT, base, (long)PTHR_PAGE, PTHR__PROT_READ);
-        if (pr != 0) { pthr__munmap((uintptr_t)base, len); return pr; }
+        if (pr != 0) { pthr__munmap((uintptr_t)base, len); PTHR__REFUSE(3, pr); }
         long ck = pradyos_syscall(SYS_MPROTECT, base + (long)PTHR_PAGE,
                                   (long)(len - PTHR_PAGE), PTHR__PROT_RW);
         if (ck == 0) break;
         pthr__munmap((uintptr_t)base, len);
-        if (ck != -PTHR_EACCES) return ck;
+        if (ck != -PTHR_EACCES) PTHR__REFUSE(4, ck);
         base = -PTHR_EAGAIN;               /* a fork ran mid-create: map again */
     }
-    if (base < 0) return base;
+    if (base < 0) PTHR__REFUSE(5, base);
     uintptr_t stack_top = (uintptr_t)base + PTHR_PAGE + ss;
     struct pthr *t = (struct pthr *)stack_top;        /* the block sits above the stack */
     t->self = t;
@@ -363,8 +370,9 @@ static inline long pthr_create(pthr_t *out, const pthr_attr_t *a,
     if (tid < 0) {
         pmutex_unlock(&rt->lock);
         pthr__munmap((uintptr_t)base, len);
-        return tid;
+        PTHR__REFUSE(6, tid);
     }
+#undef PTHR__REFUSE
     t->tid = tid;
     if (det) { t->next = rt->detached; rt->detached = t; }
     pmutex_unlock(&rt->lock);
