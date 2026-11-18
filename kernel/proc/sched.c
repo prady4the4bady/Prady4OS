@@ -950,9 +950,15 @@ static struct tcb *rq_pop(int cpu) {
      * comparison would be against a different set. */
     uint32_t depth = 0;
     struct tcb *rt = 0;
-    if (__atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) && !rt_throttled(cpu))
+    int rtq = __atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) != 0;
+    if (rtq && !rt_throttled(cpu))
         rt = rt_candidate(q);            /* DDR-1188 A4 S1 */
     struct tcb *fair = fair_candidate(q, &depth);
+    /* DDR-1188 A6 (CodeRabbit on #140): K2-throttled with no OTHER work, rank
+     * the RT and eligible deadline entries rather than take the head, which
+     * can be a CBS-throttled deadline entry with an eligible one behind it. */
+    if (!rt && !fair && rtq)
+        rt = rt_candidate(q);
     struct tcb *t = rt ? rq_unlink(q, rt) : fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
         t->dbg_picks++;
@@ -3034,7 +3040,10 @@ static int rt_tick(int cpu, struct tcb *cur) {
             cur->rt_head = 1;                      /* K2 covers deadline threads too */
             return 2;
         }
-        if (dl_out || dl_first < cur->dl_deadline)
+        /* A6 (CodeRabbit on #140): a spent budget preempts only when there is
+         * a READY replacement; otherwise the picker would hand the CPU back to
+         * this thread, and the BSP idle path would halt for the tick first. */
+        if ((dl_out && (top || other)) || dl_first < cur->dl_deadline)
             return 1;                              /* A5 D3, D6 */
         return 0;
     }

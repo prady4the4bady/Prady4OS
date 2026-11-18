@@ -581,8 +581,17 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 - `kernel.bin`: 1,683,850 B by default and 1,700,234 B with `RCU_TORTURE=1` (3,702 B under the gate). That counts the probe at `-Os`, from P4's CI fix. P6 has under 4 KB left in the binding build.
 - The first draft failed K0 (`idle=67`, then `idle=74` after excluding the idle thread) for the polling-thread reason above, and O (`rc=-22`, device 0 too small). Both were measured, named and fixed before the mutants were run.
 
+**Two P4 review fixes carried here.** CodeRabbit raised both on #140's head `1227ff6` as minor. The reply on #140 (6977372773) moved them to P5, which changes the same code.
+- **`rt_tick`: a spent budget with no replacement.** A deadline thread whose budget ran out was preempted even with nothing else READY. The picker then handed the CPU back to it, after an idle detour:
+  - on an AP, one extra switch, because the idle loop re-checks the queue;
+  - on the BSP, a halt for the rest of the tick, because its idle path does not re-check.
+  The thread now yields the CPU on a spent budget only when a READY replacement exists (`dl_out && (top || other)`). The picker was already work-conserving: it falls back to the throttled thread when nothing else can run. So this removes the detour without changing who runs.
+- **`rq_pop`: the fallback under K2.** On a K2-throttled CPU with no `SCHED_OTHER` entry READY, `rq_pop` took the queue head. The head can be a CBS-throttled deadline entry while an eligible one waits behind it. In that case `rq_pop` now ranks the queue with `rt_candidate`, which skips throttled deadline entries, before falling back to the head.
+- **Neither has an arm.** The first needs a deadline thread pinned to CPU 0. The second needs K2 throttling with no `SCHED_OTHER` work and two deadline entries in that order. No arm creates either. Arm Q still preempts on a spent budget, because its `SCHED_OTHER` spinner shares the CPU. Mutant C17 (no charge) is unaffected.
+
 **Not gated in P5 (stated):**
 - the yield exclusion (`psi_yld`): no arm runs a yielder beside a waiting thread; the I/O window's sampling only on CPU 0, and the exclusion of writes and flushes; the one-tick-stale read; `-EINVAL` paths; I/O through a non-virtio device (none exists in the gate VMs).
+- the two carried P4 fixes above.
 
 **Risk.** P5 adds one queue-lock walk to every tick, stopping at the first READY entry, and two atomics per virtio-blk read. The walk is on the scheduling path, where OPEN-2 and OPEN-12/13 live. Every P5 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
 
