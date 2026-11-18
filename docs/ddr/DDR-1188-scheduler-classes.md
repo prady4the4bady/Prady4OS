@@ -351,7 +351,7 @@ An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHE
 - New `tcb` fields: `sched_policy`, `rt_prio`, `pi_prio`, `rr_left`, `rt_head`, `sched_cap`, `kmx_held`. Each gets an explicit initialiser in `sched_create_state` (CLAUDE.md rule 11).
 
 **S4. Throttling (K2) as 19 of every 20 ticks.** On each CPU, in each window of 20 ticks of that CPU's own count, RT threads run at most 19.
-- Any 100 consecutive ticks then hold at most 95 RT ticks, so K2's "at most 950 ms of every 1 s" holds for *every* 1 s span at 100 Hz, not only for aligned windows.
+- In each aligned 20-tick window RT runs at most 19 ticks, so each aligned 100-tick span (one second at 100 Hz) holds at most 95 RT ticks: K2's 950 ms. A sliding 100-tick span can hold 96, because it can include parts of six windows whose non-RT ticks fall outside it (CodeRabbit on #138; an earlier draft claimed 95 for every span, which was wrong). The sliding bound is 960 ms per second.
 - **Why not one 50 ms gap per 1 s window, as Linux does.** Arm G counts the `SCHED_OTHER` thread's run ticks in 1 s windows of `CLOCK_MONOTONIC`. Under TCG the tick rate drifts from 100 Hz. With one 5-tick gap per 100 ticks, a tick rate a little under 100 Hz makes the gap's period longer than 1 s, so some 1 s windows hold no gap and arm G fails at random. With one gap every 20 ticks, a 1 s window at 80–120 Hz holds 4–6 gaps.
 - Cost: a CPU running an RT spinner and a `SCHED_OTHER` thread switches twice every 200 ms instead of twice a second.
 - A throttled CPU with no READY `SCHED_OTHER` entry keeps running RT (S1, S2). The throttle guarantees `SCHED_OTHER` time; it does not idle the CPU.
@@ -403,6 +403,17 @@ An RT current thread is never preempted by quantum expiry alone (arm F). A `SCHE
 - **Rounding.** `hr_ns_to_counts` truncated, so a count could be up to one LAPIC count short of the target (about 16 ns under QEMU's rate). P3 rounds it **up**. The count starts at the LAPIC write, after `now` was sampled, so the expiry is at or after `now + ns`, at or after the target. This rests on one unmeasured assumption: a count lasts `HR_TICK_NS / g_timer_count`, with `g_timer_count` calibrated against the PIT while `now` comes from the TSC. A rate mismatch moves the floor by that error.
 - **Per-window bound.** Spacing bounds expiries to 20 000 a second. One more can be delivered inside a one-second window, latched in IRR from an expiry before it: at most 20 001 deliveries in any one-second window.
 
-**Not gated in P3 (stated):** cross-CPU priority; RT priority on steal; a policy change on another thread; transitive inheritance; priority-ordered `kmutex` hand-off; the head re-queue on preemption by a higher priority (only the throttle case is exercised, by arm F).
+**Review fixes on #138.**
+- **A grant reached one thread of the process (Codex).** `SYS_SCHED_GRANT` stored the handle in the one `tcb` the pid named. The process's other live threads share its capability table but kept `sched_cap = CAP_NULL`, so they still got `-EPERM`. Fixed: `sched_grant_pid` gives the handle to every live thread whose table is the target's, under `g_sched_lock`. **Not gated:** arm H checks only refused grants (fork, agent); no arm makes a grant succeed.
+
+- **The agent copy was marked an agent after SCHEDTEST could run (CodeRabbit).** SCHEDAGT was loaded after `sched_unblock(SCHEDTEST)`, so arm H's poll could find it, still without `is_agent`, and grant it RT; setting `is_agent` later would not revoke that. Fixed: SCHEDAGT is loaded and marked before SCHEDTEST is unblocked, and unblocked after.
+- **A donation was skipped when the owner already outranked the waiter (CodeRabbit).** An owner that later lowered its own priority while holding the lock then ran below its waiter. Fixed: `sched_pi_raise` is always called with the waiter's priority; it keeps the larger donation.
+- **Repeated grants filled the target's capability table (CodeRabbit).** Each grant created a new slot. Fixed: a grant whose target already holds a valid handle with those rights reuses it.
+- **A thread created while a grant is in flight could keep `CAP_NULL` (CodeRabbit).** It copies its creator's handle, possibly before the grant reaches the creator. Fixed: `SYS_SCHED_SETSCHED` adopts a valid handle from any thread of the same process, under `g_sched_lock`, when its own is missing.
+- **The sliding-window throttle bound (CodeRabbit).** Corrected in S4: 95 per aligned second, 96 per sliding second.
+- **Not changed: `docs/build_status.md` (Codex).** As on #136: the file has had no entry since October, and reviving or retiring it is an open question to the operator (#45 6948599917).
+- None of these is gated: arm H checks refusals only, and no arm lowers an owner's priority while it holds a `kmutex` or repeats a grant.
+
+**Not gated in P3 (stated):** cross-CPU priority; RT priority on steal; a policy change on another thread; a successful grant and its spread to sibling threads; transitive inheritance; priority-ordered `kmutex` hand-off; the head re-queue on preemption by a higher priority (only the throttle case is exercised, by arm F).
 
 QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.

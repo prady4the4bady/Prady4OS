@@ -155,6 +155,29 @@ static void prio_count(uint32_t before, uint32_t after) {
         __atomic_sub_fetch(&g_rt_threads, 1, __ATOMIC_RELEASE);
 }
 
+static uint64_t irq_save(void);
+static void irq_restore(uint64_t f);
+/* S3: the threads of a process share one capability table, so a thread whose
+ * own copy of the handle is missing (created while a grant was in flight)
+ * adopts a valid one from any thread of its process. Under g_sched_lock, the
+ * lock sched_grant_pid holds. 1 if a valid handle was adopted. */
+static int sched_cap_adopt(struct tcb *self) {
+    int ok = 0;
+    uint64_t fl = irq_save();
+    struct tcb *u = self;
+    do {
+        if (u->caps == self->caps && u->sched_cap != CAP_NULL &&
+            cap_authorize(self->caps, u->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT)) {
+            self->sched_cap = u->sched_cap;
+            ok = 1;
+            break;
+        }
+        u = u->next;
+    } while (u != self);
+    irq_restore(fl);
+    return ok;
+}
+
 int sched_setsched_self(uint32_t policy, uint32_t prio) {
     struct tcb *t = current_thread;
     if (policy == SCHED_OTHER) {
@@ -163,7 +186,8 @@ int sched_setsched_self(uint32_t policy, uint32_t prio) {
     } else if (policy == SCHED_FIFO || policy == SCHED_RR) {
         if (prio < 1 || prio > SCHED_RT_MAX)
             return -EINVAL;
-        if (!cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT))
+        if (!cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, CAP_SCHED_RT) &&
+            !sched_cap_adopt(t))
             return -EPERM;                                  /* K1 */
     } else {
         return -EINVAL;
@@ -183,6 +207,11 @@ int sched_grant(struct tcb *t, uint32_t rights) {
         return -EINVAL;
     if (t->is_agent)
         return -EPERM;              /* K1: an agent at RT could starve the supervisor */
+    /* A repeated grant reuses the handle it made before, so a caller holding
+     * CAP_SCHED_GRANT cannot fill the target's table (CodeRabbit on #138). */
+    if (t->sched_cap != CAP_NULL &&
+        cap_authorize(t->caps, t->sched_cap, RES_SCHED, SCHED_RES_ID, rights))
+        return 0;
     cap_t h = cap_create(t->caps, RES_SCHED, SCHED_RES_ID, rights);
     if (h == CAP_NULL)
         return -EINVAL;
@@ -3432,6 +3461,18 @@ int sched_grant_pid(uint32_t pid, uint32_t rights) {
     uint64_t fl = irq_save();
     struct tcb *t = find_pid_locked(pid);
     int rc = t ? sched_grant(t, rights) : -ESRCH;
+    if (rc == 0) {
+        /* The threads of a process share one capability table (DDR-1181
+         * §3.6), so the handle is valid for all of them: give it to every live
+         * thread of the process, not only the one the pid named (Codex on
+         * #138). A thread created later copies it from its creator. */
+        struct tcb *u = t;
+        do {
+            if (u->caps == t->caps && u->state != THREAD_ZOMBIE && u->state != THREAD_DONE)
+                u->sched_cap = t->sched_cap;
+            u = u->next;
+        } while (u != t);
+    }
     irq_restore(fl);
     return rc;
 }

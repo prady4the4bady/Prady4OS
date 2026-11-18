@@ -3288,6 +3288,17 @@ static void fs_test_thread(void *arg) {
                                      (uint64_t)(uintptr_t)schedtest_elf;
                     if (elf_load((void *)(uintptr_t)schedtest_elf, sclen,
                                  "SCHEDTEST", &sc) == ELF_OK && sc) {
+                        /* Arm H: a second, agent copy with no RES_SCHED. It is
+                         * loaded and marked an agent while SCHEDTEST is still
+                         * blocked, so SCHEDTEST can never find it without
+                         * is_agent and grant it RT (CodeRabbit on #138). */
+                        struct tcb *sa = 0;
+                        uint64_t salen = (uint64_t)(uintptr_t)schedagt_elf_end -
+                                         (uint64_t)(uintptr_t)schedagt_elf;
+                        int sa_ok = elf_load((void *)(uintptr_t)schedagt_elf, salen,
+                                             "SCHEDAGT", &sa) == ELF_OK && sa;
+                        if (sa_ok)
+                            sa->is_agent = 1;       /* authority BEFORE anyone runs */
                         /* DDR-1188 A4 S3: this launcher plays init (K1). It
                          * grants RES_SCHED, with the right to grant on, to
                          * the probe only, and opens the arm-P test hooks. */
@@ -3296,17 +3307,10 @@ static void fs_test_thread(void *arg) {
                             kputs("[user] schedclass RES_SCHED grant FAILED\r\n");
                         sched_unblock(sc);
                         kputs("[user] schedclass probe spawned\r\n");
-                        /* Arm H: a second, agent copy with no RES_SCHED. */
-                        struct tcb *sa = 0;
-                        uint64_t salen = (uint64_t)(uintptr_t)schedagt_elf_end -
-                                         (uint64_t)(uintptr_t)schedagt_elf;
-                        if (elf_load((void *)(uintptr_t)schedagt_elf, salen,
-                                     "SCHEDAGT", &sa) == ELF_OK && sa) {
-                            sa->is_agent = 1;       /* authority BEFORE the first run */
+                        if (sa_ok)
                             sched_unblock(sa);
-                        } else {
+                        else
                             kputs("[user] schedclass agent copy FAILED to load\r\n");
-                        }
                     } else {
                         kputs("[user] schedclass probe FAILED to load\r\n");
                     }
