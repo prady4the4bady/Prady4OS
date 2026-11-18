@@ -20,8 +20,7 @@ void kmutex_lock(struct kmutex *m) {
      * priority while it still holds the lock (CodeRabbit on #138).
      * sched_pi_raise keeps the larger donation. */
     uint32_t me = sched_eff_prio(self);
-    if (me)
-        sched_pi_raise(m->owner, me);
+    (void)me;                        /* MUTANT C16 */
     /* kmutex_unlock hands ownership over BEFORE it wakes us, so the loop's
      * condition is the hand-off itself; a spurious wake just blocks again. */
     while (m->owner != self)
@@ -44,8 +43,7 @@ void kmutex_unlock(struct kmutex *m) {
             uint32_t p = sched_eff_prio(w);
             if (p > top) top = p;
         }
-        if (top)
-            sched_pi_raise(next, top);
+        (void)top;                   /* MUTANT C16 */
     }
     m->owner = next;                 /* hand-off: NULL when nobody waits */
     if (self->kmx_held)
