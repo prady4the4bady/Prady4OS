@@ -2820,7 +2820,7 @@ static int rt_tick(int cpu, struct tcb *cur) {
         g_rt_used[cpu]++;
     int thr = rt_throttled(cpu);
     int rr_out = 0;
-    if (me && cur->sched_policy == SCHED_RR) {
+    if (me && cur->sched_policy != SCHED_OTHER) {   /* MUTANT C6 */
         if (cur->rr_left)
             cur->rr_left--;
         if (!cur->rr_left) {
