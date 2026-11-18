@@ -2930,8 +2930,7 @@ static int rt_tick(int cpu, struct tcb *cur) {
     if (me && cur->sched_policy == SCHED_DEADLINE &&
         __atomic_load_n(&cur->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING) {
         dl_eligible(cur);                          /* A5 D3: replenish if due */
-        if (cur->dl_left)
-            cur->dl_left--;                        /* A5 D3: charge this tick */
+        /* MUTANT C17: never charged */
         if (!cur->dl_left) {
             cur->dl_thr = 1;
             dl_out = 1;                            /* arm Q: budget spent */
