@@ -3569,11 +3569,14 @@ smoke-usbkbd: $(IMG) fat-image sfs-image
 # DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
 # Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
 # real 5 s completion stall cannot be produced on demand under QEMU.
+# DDR-1208: arm Q also asserts the timed-out slot stays held until its late
+# completion frees it (mutant Q1); arm B reads unit 0's boot sector and asserts
+# the data passed through a slot's bounce, not the caller's page (mutant B1).
 smoke-vblklate: $(IMG) fat-image sfs-image
 	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
 	TIMEOUT_S=120 QEMU_PROBES=vblklate \
-	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
-	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_VBLKLATE_OK held=1 done_stale=0 late=1 freed=1 done_real=1\nPRADYOS_VBLKBOUNCE via=1 sig=1')" \
+	FORBIDDEN_SENTINEL="$$(printf 'VBLKLATE FAIL\nVBLKBOUNCE FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-1170: per-task budgets. A sovereign probe spawns four budgeted agent
