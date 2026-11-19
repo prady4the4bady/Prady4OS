@@ -149,6 +149,71 @@ static uint64_t g_rt_win[PERCPU_MAX];     /* S4: window index (ticks / RT_WIN_TI
 static uint32_t g_rt_used[PERCPU_MAX];    /* S4: RT ticks used in that window     */
 static uint64_t g_dl_bw[PERCPU_MAX];      /* A5 D4: admitted bandwidth, g_prio_lk */
 
+/* ---- DDR-1188 Amendment 6 (C1.5 P5): pressure stall information ----------
+ * P2: a 100-tick sliding window per CPU (written only by that CPU's tick) and
+ * one for I/O (written only by CPU 0's tick). count = set bits = stalled ticks
+ * in the last 100; a reader takes it with one relaxed load. */
+struct psi_win { uint64_t bits[2]; uint32_t count; };
+static struct psi_win g_psi_cpu[PERCPU_MAX];
+static struct psi_win g_psi_io;
+static uint8_t g_psi_last[PERCPU_MAX];    /* P1: the last sample, for a busy queue lock */
+volatile uint32_t g_psi_io_wait;          /* P1: threads in a virtio-blk read wait */
+
+static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
+    uint32_t i = (uint32_t)(tick % 100);
+    uint64_t m = 1ull << (i & 63);
+    uint64_t *b = &w->bits[i >> 6];
+    uint32_t n = w->count;
+    if (*b & m) {
+        *b &= ~m;                          /* P2: the tick 100 ago leaves the window */
+        n--;
+    }
+    if (stalled) {
+        *b |= m;
+        n++;
+    }
+    __atomic_store_n(&w->count, n, __ATOMIC_RELAXED);
+}
+
+/* P1: sampled on each tick of `pc`'s CPU, interrupts off. A trylock, as the
+ * steal path takes a remote queue: a tick that finds the lock busy repeats the
+ * last sample, as the head pointer alone cannot apply the yield exclusion
+ * (CodeRabbit on #145). */
+static void psi_tick(struct percpu *pc) {
+    unsigned cpu = pc->cpu_idx;
+    uint64_t t = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+    struct rq *q = &g_rq[cpu];
+    int st = 0;
+    if (!__atomic_test_and_set(&q->lock.v, __ATOMIC_ACQUIRE)) {
+        for (struct tcb *c = q->head; c; c = c->rq_next)
+            if (c->state == THREAD_READY && !c->is_idle && !c->psi_yld) {
+                st = 1;                    /* arm K: runnable here, not running */
+                break;                     /* (a yielder offered the CPU: not a stall) */
+            }
+        spin_unlock(&q->lock);
+        g_psi_last[cpu] = (uint8_t)st;
+    } else {
+        st = g_psi_last[cpu];
+    }
+    psi_record(&g_psi_cpu[cpu], t, st);
+    if (cpu == 0)
+        psi_record(&g_psi_io, t, __atomic_load_n(&g_psi_io_wait, __ATOMIC_RELAXED) != 0);
+}
+
+int psi_read(long res, long cpu) {
+    if (res == 0) {
+        if (cpu < 0 || cpu >= PERCPU_MAX)
+            return -EINVAL;
+        struct percpu *p = percpu_get((unsigned)cpu);
+        if (!p || !p->present)
+            return -EINVAL;
+        return (int)__atomic_load_n(&g_psi_cpu[cpu].count, __ATOMIC_RELAXED);
+    }
+    if (res == 1)
+        return (int)__atomic_load_n(&g_psi_io.count, __ATOMIC_RELAXED);
+    return -EINVAL;
+}
+
 /* DDR-1188 A5 D2: a deadline thread is pinned, so its time is its CPU's ticks. */
 static inline uint64_t dl_now(const struct tcb *t) {
     struct percpu *pc = percpu_get((unsigned)t->pin_cpu);
@@ -888,9 +953,15 @@ static struct tcb *rq_pop(int cpu) {
      * comparison would be against a different set. */
     uint32_t depth = 0;
     struct tcb *rt = 0;
-    if (__atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) && !rt_throttled(cpu))
+    int rtq = __atomic_load_n(&g_rt_threads, __ATOMIC_ACQUIRE) != 0;
+    if (rtq && !rt_throttled(cpu))
         rt = rt_candidate(q);            /* DDR-1188 A4 S1 */
     struct tcb *fair = fair_candidate(q, &depth);
+    /* DDR-1188 A6 (CodeRabbit on #140): K2-throttled with no OTHER work, rank
+     * the RT and eligible deadline entries rather than take the head, which
+     * can be a CBS-throttled deadline entry with an eligible one behind it. */
+    if (!rt && !fair && rtq)
+        rt = rt_candidate(q);
     struct tcb *t = rt ? rq_unlink(q, rt) : fair ? rq_unlink(q, fair) : rq_take(q);
     if (t) {
         t->dbg_picks++;
@@ -1455,6 +1526,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dl_thr          = 0;
     t->dl_bw           = 0;
     t->dl_cpu          = -1;           /* DDR-1188 A5: no deadline yet */
+    t->psi_yld         = 0;            /* DDR-1188 A6: not queued by a yield */
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the
@@ -2218,6 +2290,12 @@ static void schedule_locked(uint64_t fl) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
+    /* DDR-1188 A6 P1 (CodeRabbit on #145): bit 1 is schedule_yield's request,
+     * set with interrupts off; bit 0 marks a queued entry. Only the request is
+     * read here: a stale bit 0 from the last yield-queue must not make a tick
+     * preemption look like a yield. Either way the field is cleared. */
+    uint32_t yld = prev->psi_yld & 2u;
+    prev->psi_yld = 0;
 
 #if ZANCHOR_TEST
     /* DDR-1201 sec.5: before the pick, so no thread popped from this CPU's queue
@@ -2304,6 +2382,7 @@ static void schedule_locked(uint64_t fl) {
             __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
         if (prev->state == THREAD_READY && !prev->is_idle) {
             int was_on = __atomic_load_n(&prev->rq_on, __ATOMIC_ACQUIRE);
+            prev->psi_yld = yld ? 1u : 0u;
             rq_push(cpu, prev);
             if (dd_entered_ready && !was_on) {
                 __atomic_add_fetch(&g_dd_forced, 1, __ATOMIC_RELAXED);
@@ -2315,8 +2394,10 @@ static void schedule_locked(uint64_t fl) {
 #else
     if (prev->state == THREAD_RUNNING) {
         __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
-        if (!prev->is_idle)
+        if (!prev->is_idle) {
+            prev->psi_yld = yld ? 1u : 0u;   /* DDR-1188 A6 P1: queued by its own yield? */
             rq_push(cpu, prev);    /* rq-1: a preempted-but-runnable prev re-queues */
+        }
     }
 #endif
 
@@ -2674,6 +2755,16 @@ static void schedule(void) {
     schedule_locked(local_irq_save());
 }
 
+/* DDR-1188 A6 P1 (CodeRabbit on #145): yield()'s switch. The mark is set with
+ * interrupts already off, so a tick cannot preempt the thread while it is set,
+ * and schedule_locked consumes it on entry. */
+static void schedule_yield(void) {
+    rcu_note_switch();
+    uint64_t fl = local_irq_save();
+    current_thread->psi_yld = 2u;          /* the request; see schedule_locked */
+    schedule_locked(fl);
+}
+
 #if OPEN2_HUNT
 /* DDR-1097 sec.7 -- the forced proof, as a build flag rather than a hand edit so
  * the run is reproducible from the recorded command. OPEN2_FORCE_RECYCLE=1
@@ -2971,7 +3062,12 @@ static int rt_tick(int cpu, struct tcb *cur) {
             cur->rt_head = 1;                      /* K2 covers deadline threads too */
             return 2;
         }
-        if (dl_out || dl_first < cur->dl_deadline)
+        /* A6 (CodeRabbit on #140, #145): a spent budget preempts only when some
+         * thread could run here instead: READY on this queue, or on a queue
+         * this CPU may steal from. With none, the picker would hand the CPU
+         * back to this thread, after an idle detour (on the BSP, a halt for
+         * the rest of the tick). */
+        if ((dl_out && (top || other || rq_has_ready())) || dl_first < cur->dl_deadline)
             return 1;                              /* A5 D3, D6 */
         return 0;
     }
@@ -2998,6 +3094,8 @@ void sched_tick(void) {
     if (!current_thread)
         return;                    /* scheduler not up yet */
     current_thread->run_ticks++;
+    if (pc)
+        psi_tick(pc);              /* DDR-1188 A6: before any early return below */
 
     /* DDR-1200 §5 (C1.4 P5b): expire timed waits, with no g_sched_lock. */
 #if RCU_TORTURE
@@ -3210,12 +3308,12 @@ void yield(void) {
     uint64_t yf;
     __asm__ volatile("pushfq; pop %0" : "=r"(yf) :: "memory");
     if (yf & 0x200u) {                 /* already interruptible: kernel threads */
-        schedule();
+        schedule_yield();              /* DDR-1188 A6 P1: a yield, for PSI */
         return;
     }
     __atomic_add_fetch(&g_yield_masked, 1, __ATOMIC_RELAXED);
     __asm__ volatile("sti" ::: "memory");
-    schedule();
+    schedule_yield();
     __asm__ volatile("cli" ::: "memory");   /* restore the caller's IF=0 exactly */
 }
 

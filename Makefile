@@ -4501,7 +4501,7 @@ smoke-thread: $(IMG) fat-image sfs-image
 smoke-schedclass: $(IMG) fat-image sfs-image
 	@rm -f build/schedclass.log
 	@SERIAL_LOG=build/schedclass.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=schedclass \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_H fork_eperm=1 agent_grant_eperm=1 own_ok=1\nPRADYOS_SCHED_HA eperm=1\nPRADYOS_SCHED_D preempt_ok=1\nPRADYOS_SCHED_N prio_ok=1\nPRADYOS_SCHED_E rr_ok=1\nPRADYOS_SCHED_F fifo_ok=1\nPRADYOS_SCHED_G throttle_ok=1\nPRADYOS_SCHED_P pi_ok=1 main_pin=1\nPRADYOS_SCHED_I adm_ok=1\nPRADYOS_SCHED_J edf_ok=1\nPRADYOS_SCHED_Q cbs_ok=1\nPRADYOS_SCHED_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_H fork_eperm=1 agent_grant_eperm=1 own_ok=1\nPRADYOS_SCHED_HA eperm=1\nPRADYOS_SCHED_D preempt_ok=1\nPRADYOS_SCHED_N prio_ok=1\nPRADYOS_SCHED_E rr_ok=1\nPRADYOS_SCHED_F fifo_ok=1\nPRADYOS_SCHED_G throttle_ok=1\nPRADYOS_SCHED_P pi_ok=1 main_pin=1\nPRADYOS_SCHED_I adm_ok=1\nPRADYOS_SCHED_J edf_ok=1\nPRADYOS_SCHED_Q cbs_ok=1\nPRADYOS_SCHED_K some_ok=1\nPRADYOS_SCHED_K0 idle_ok=1\nPRADYOS_SCHED_O io_ok=1\nPRADYOS_SCHED_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'SCHED FAIL\nschedclass probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[time\] tsc skew\|\[sched\]\|PRADYOS_SCHED\|SCHED FAIL" build/schedclass.log || true
