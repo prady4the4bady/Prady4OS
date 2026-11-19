@@ -2290,9 +2290,11 @@ static void schedule_locked(uint64_t fl) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
-    /* DDR-1188 A6 P1 (CodeRabbit on #145): schedule_yield set this with
-     * interrupts off; it marks only the re-queue below, never a later one. */
-    uint32_t yld = prev->psi_yld;
+    /* DDR-1188 A6 P1 (CodeRabbit on #145): bit 1 is schedule_yield's request,
+     * set with interrupts off; bit 0 marks a queued entry. Only the request is
+     * read here: a stale bit 0 from the last yield-queue must not make a tick
+     * preemption look like a yield. Either way the field is cleared. */
+    uint32_t yld = prev->psi_yld & 2u;
     prev->psi_yld = 0;
 
 #if ZANCHOR_TEST
@@ -2380,7 +2382,7 @@ static void schedule_locked(uint64_t fl) {
             __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
         if (prev->state == THREAD_READY && !prev->is_idle) {
             int was_on = __atomic_load_n(&prev->rq_on, __ATOMIC_ACQUIRE);
-            prev->psi_yld = yld;
+            prev->psi_yld = yld ? 1u : 0u;
             rq_push(cpu, prev);
             if (dd_entered_ready && !was_on) {
                 __atomic_add_fetch(&g_dd_forced, 1, __ATOMIC_RELAXED);
@@ -2393,7 +2395,7 @@ static void schedule_locked(uint64_t fl) {
     if (prev->state == THREAD_RUNNING) {
         __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
         if (!prev->is_idle) {
-            prev->psi_yld = yld;   /* DDR-1188 A6 P1: queued by its own yield? */
+            prev->psi_yld = yld ? 1u : 0u;   /* DDR-1188 A6 P1: queued by its own yield? */
             rq_push(cpu, prev);    /* rq-1: a preempted-but-runnable prev re-queues */
         }
     }
@@ -2759,7 +2761,7 @@ static void schedule(void) {
 static void schedule_yield(void) {
     rcu_note_switch();
     uint64_t fl = local_irq_save();
-    current_thread->psi_yld = 1;
+    current_thread->psi_yld = 2u;          /* the request; see schedule_locked */
     schedule_locked(fl);
 }
 
