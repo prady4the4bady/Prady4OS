@@ -195,7 +195,7 @@ static void psi_tick(struct percpu *pc) {
     } else {
         st = g_psi_last[cpu];
     }
-    psi_record(&g_psi_cpu[cpu], t, st);
+    (void)st; psi_record(&g_psi_cpu[cpu], t, 0);   /* MUTANT C11 */
     if (cpu == 0)
         psi_record(&g_psi_io, t, __atomic_load_n(&g_psi_io_wait, __ATOMIC_RELAXED) != 0);
 }
