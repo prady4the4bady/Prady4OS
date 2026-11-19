@@ -4,18 +4,17 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## State (2026-11-19)
 
-- **dev/phase1 tip:** `fa96706` (#145, C1.5 P5: PSI for CPU and I/O, `SYS_PSI` 124; DDR-1188 Amendment 6; arms K, K0, O; mutants C11, C11b, C15 red on `40f1f39`). Before it: `619c587` (#144, bookkeeping), `449cd7f` (#140, C1.5 P4), `2ca1ea2` (#142, DDR-1207), `a50e509` (#141).
-- **Kernel:** default `kernel.bin` 1,683,850 B (20,086 B headroom); the binding `RCU_TORTURE=1` build 1,700,234 B (3,702 B headroom), both printed by CI on `b869d4e` (run 44398576450). NSI: max 124 (`SYS_PSI`); next free 125. DDR numbers: 1208 is taken by the open virtio-blk buffer-ownership work (branch `ddr1208-blk-timeout`); next free is 1209. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
+- **dev/phase1 tip:** `43d62c1` (#148, DDR-1208: virtio-blk bounce buffers and timed-out slot quarantine; mutants Q1, B1 red on `4298fde`). Before it: `3971031` (#147, DDR-1183 Amendment 1: stage-2 window 52 -> 53 chunks, gate 1,736,704 B), `92a89de` (#146, bookkeeping), `fa96706` (#145, C1.5 P5).
+- **Kernel:** default `kernel.bin` 1,687,946 B (48,758 B headroom); the binding `RCU_TORTURE=1` build 1,704,330 B (32,374 B headroom), both printed by CI on `4298fde` (run 44540005938), against the 1,736,704 B gate. The PT_HI ceiling (image plus BSS at or below phys 0x600000) is the next wall, build-enforced (DDR-1183 A1). 35,520 B is the bound for a full 53-chunk window with the 324,928 B BSS measured by A1, not a measured margin for either build; a build's own margin is 0x600000 minus its `__bss_end` physical address. NSI: max 124 (`SYS_PSI`); next free 125. DDR numbers: next free is 1209. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
 - **Standing instruction: #45 6993979920 (Nov 19).** Build every remaining chunk in checklist order, one feature per PR: DDR, code, CI gate, mutants red, merge. Merge each PR yourself under the five conditions of 6594914166 (green on the exact head, `mergeable_state` clean, mutants red or recorded not gated, CodeRabbit answered, previous PR merged). Update the checklist and this file after each merge; post a short status on #45 after each chunk. At most 3 CI runs at a time.
   - **Still wait for the operator on:** drafts #68 and #85 (the operator merges them); any key, secret, credential or trust-root step (C3.3: write the DDR, open the PR, stop); C6.2 branding.
   - **Blocker rule:** a red or inconclusive gate you cannot explain, a recurrence of an unnamed failure, or a CodeRabbit finding that shows the design is wrong: one blocker comment, mark the chunk BLOCKED, take the next unblocked chunk.
 - **Order now (the operator's, 6993979920):** C1.5 P5 (PSI), P6 (tickless), deadlock detection (C1.4), C1.6, C1.7, then Phase 2 onward by `Needs`. C11.1 stays last. This order puts deadlock detection after P5 and P6, although the checklist lists C1.4's row first. The operator chose that order (as 6761846242 did before it), and the newest owner comment wins over both the checklist order and DDR-1188's "No code until C1.4 has merged". P1–P4 were built under the same orders and run on C1.4's merged parts (threads, futex, `psync`, RCU).
 - **Branches ready:**
-  - `ddr1208-blk-timeout` at `9a4a296`: DDR-1208 (virtio-blk per-slot bounce buffers; a timed-out slot held until its late completion). Asked for by the operator in this session. `smoke-vblklate` arms Q and B, mutants Q1 and B1 (`mut_1208.py` logic: Q1 releases the slot at timeout, B1 DMAs into the caller's page). Local: vblklate, FS, ext4, SFS, partition, block-integrity, blkmq, `smoke-shell` 5/5 pass; Q1 red on Q, B1 red on B. Needs `dev/phase1` merged in (P5 also edits `submit()` and `reap_head()`), then a PR.
-  - `c15-p6` at `64fa91f`: DDR-1188 Amendment 7 only (design: APs only, a bounded 1 s stop, an RCU extended quiescent state, a probe-only isolate op for arms L, L1, L2). Read it before writing P6 code. P6 may need a DDR-1183 window raise first.
+  - `c15-p6` at `64fa91f`: DDR-1188 Amendment 7 only (design: APs only, a bounded 1 s stop, an RCU extended quiescent state, a probe-only isolate op for arms L, L1, L2). Read it before writing P6 code. The window is now 53 chunks (DDR-1183 A1); P6's growth must stay under both the size gate and the PT_HI ceiling.
 - **#135 (open):** the `-ENOMEM` mechanism is named and fixed (#142). Arm R was green in 5 CI runs on trees with P4 and the fix; it failed 2 of 6 with P4 before it. What P4 changes to raise the rate is not explained. Close it only after repeated green runs; a recurrence is a blocker.
 - **Issues open:** #135, #143 (arm C2 `net_leak_ok=0`, 1 in 202 runs, no mechanism), #116, #117, #119.
-- **Review threads left open for the operator:** the Codex `docs/build_status.md` notes on #136, #138, #140 and #142 (question in #45 6948599917).
+- **Review threads left open for the operator:** the Codex `docs/build_status.md` notes on #136, #138, #140, #142 and #148 (question in #45 6948599917).
 - **Follow-ups recorded, not started:** the four other waits that ignore a handlerless SIGTERM (DDR-1206 §4); `signal_deliver` acting on default-terminate signals while a handler is active (DDR-1206 A1); the surface logging DDR-1199 proposes.
 - **Lessons:**
   - Push work as soon as it builds. A container replacement lost an uncommitted build once.
@@ -32,8 +31,8 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 ## Next
 
 - Merge this bookkeeping PR (docs-only rule).
-- Open DDR-1208's PR from `ddr1208-blk-timeout` with `dev/phase1` merged in (resolve P5's I/O-pressure lines in `submit()`/`reap_head()`); run Q1 and B1 on its final head.
-- Then P6 from the Amendment 7 design (`c15-p6`). Carry CodeRabbit's #145 note into P6's `rt_tick` comment: `rq_has_ready()` is a hint.
+- Then P6 from the Amendment 7 design (`c15-p6`, merge `dev/phase1` in first). Carry CodeRabbit's #145 note into P6's `rt_tick` comment: `rq_has_ready()` is a hint.
+- DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
 
 ## Open blockers
 
