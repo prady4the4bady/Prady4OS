@@ -72,3 +72,13 @@ struct tcb;
 int  hrt_arm(struct tcb *t, uint64_t deadline_ns);
 void hrt_cancel(struct tcb *t);
 int  hrt_irq(void);
+
+/* DDR-1188 Amendment 7 (C1.5 P6): an idle AP's bounded tick stop. Own CPU,
+ * interrupts off. hrt_nohz_enter programs one one-shot of NOHZ_MAX_TICKS and
+ * returns 1, or returns 0 and changes nothing when a one-shot slot is pending,
+ * the timer is not periodic, or a timer interrupt is already latched (T2 b).
+ * While stopped, hrt_irq answers 0 (not a tick). hrt_nohz_exit restores the
+ * periodic tick and returns the whole ticks elapsed since entry (T4). */
+#define NOHZ_MAX_TICKS 100u
+int      hrt_nohz_enter(void);
+uint64_t hrt_nohz_exit(void);

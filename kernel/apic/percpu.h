@@ -66,6 +66,14 @@ struct percpu {
      * LAPIC enabled) — only ready CPUs are targeted. BSS-zeroed. */
     volatile uint64_t shoot_seen_gen;
     volatile uint8_t  shoot_ready;
+
+    /* DDR-1188 A7 (C1.5 P6): tickless idle on the APs. Appended at the tail.
+     * nohz = 1 while this AP's tick is stopped in its idle loop (T5: an RCU
+     * extended quiescent state); tirq counts vector-48 interrupts taken here
+     * (T7: ticks is advanced without an interrupt on wake, so arm L counts
+     * these). BSS-zeroed. */
+    volatile uint8_t  nohz;
+    volatile uint64_t tirq;
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

@@ -216,6 +216,7 @@ void lapic_timer_ap_arm(void) {
 #define HR_PERIODIC   0     /* LVT periodic: today's tick, untouched            */
 #define HR_EARLY      1     /* LVT one-shot, counting to a sleeper's deadline   */
 #define HR_TAIL       2     /* LVT one-shot, counting to the tick boundary      */
+#define HR_NOHZ       3     /* DDR-1188 A7: an idle AP's bounded stop (T3, T4)  */
 #define HR_TICK_NS    10000000ull
 #define HR_SPACE_NS   50000ull          /* T5: 50 us after the last interrupt   */
 #define HR_SLACK_NS   200000ull         /* a tail interrupt this early is stale */
@@ -229,6 +230,7 @@ struct hr_cpu {
     uint64_t   tick_at;     /* one-shot phases: mono time of the tick boundary */
     uint64_t   target;      /* one-shot phases: mono time the count runs to    */
     uint64_t   last_irq;    /* mono time of the last timer interrupt here      */
+    uint64_t   nohz_t0;     /* HR_NOHZ: mono time the tick was stopped (A7 T4) */
     struct { struct tcb *t; uint64_t dl; } slot[HR_SLOTS];
 };
 static struct hr_cpu g_hr[LAPIC_MAX_CPUS];
@@ -369,6 +371,13 @@ int hrt_irq(void) {
     if (h->phase == HR_PERIODIC && !__atomic_load_n(&h->npend, __ATOMIC_RELAXED))
         return 1;
     uint64_t fl = spin_lock_irqsave(&h->lk);
+    if (h->phase == HR_NOHZ) {
+        /* DDR-1188 A7 T4: the bound's own interrupt, or one racing the stop.
+         * Not a tick, and no reprogramming: the idle loop's exit restores the
+         * periodic timer and catches the clock up. */
+        spin_unlock_irqrestore(&h->lk, fl);
+        return 0;
+    }
     uint64_t now = ktime_mono_ns();
     h->last_irq = now;
     hr_expire(h, now);
@@ -389,4 +398,46 @@ int hrt_irq(void) {
     }
     spin_unlock_irqrestore(&h->lk, fl);
     return tick;
+}
+
+/* ---- DDR-1188 Amendment 7 (C1.5 P6): tickless idle on the APs ----------- */
+
+int hrt_nohz_enter(void) {
+    struct percpu *pc = this_cpu();
+    if (!pc || !g_lapic || !g_timer_count || pc->cpu_idx >= LAPIC_MAX_CPUS)
+        return 0;
+    struct hr_cpu *h = &g_hr[pc->cpu_idx];
+    int ok = 0;
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    /* T2 (b): P2 owns the timer while a sleeper waits, and a latched tick is
+     * left to arrive as a tick. */
+    if (h->phase == HR_PERIODIC && !h->npend && !hr_irr48()) {
+        uint64_t c = (uint64_t)g_timer_count * NOHZ_MAX_TICKS;
+        if (c > 0xFFFFFFFFull)
+            c = 0xFFFFFFFFull;                      /* a shorter bound, never longer */
+        h->nohz_t0 = ktime_mono_ns();
+        h->phase   = HR_NOHZ;
+        lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR);              /* one-shot */
+        lapic_wr(LAPIC_TIMER_ICR, (uint32_t)c);
+        ok = 1;
+    }
+    spin_unlock_irqrestore(&h->lk, fl);
+    return ok;
+}
+
+uint64_t hrt_nohz_exit(void) {
+    struct percpu *pc = this_cpu();
+    if (!pc || pc->cpu_idx >= LAPIC_MAX_CPUS)
+        return 0;
+    struct hr_cpu *h = &g_hr[pc->cpu_idx];
+    uint64_t k = 0;
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    if (h->phase == HR_NOHZ) {
+        uint64_t now = ktime_mono_ns();
+        k = (now - h->nohz_t0) / HR_TICK_NS;
+        h->last_irq = now;
+        hr_periodic(h);
+    }
+    spin_unlock_irqrestore(&h->lk, fl);
+    return k;
 }

@@ -776,6 +776,11 @@ void isr_dispatch(struct regs *r) {
      * threads run on APs, cap-4.) */
     if (r->vector == LAPIC_TIMER_VECTOR) {
         lapic_eoi();                           /* EOI first: sched_tick may switch away */
+        {
+            struct percpu *tp = this_cpu();    /* DDR-1188 A7 T7: arm L counts these */
+            if (tp)
+                __atomic_fetch_add(&tp->tirq, 1, __ATOMIC_RELAXED);
+        }
         if (!hrt_irq())                        /* DDR-1188 A3: an early one-shot, */
             return;                            /* not a tick: no tick work at all  */
         struct percpu *pc = this_cpu();

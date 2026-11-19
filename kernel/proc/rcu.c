@@ -111,7 +111,12 @@ void synchronize_rcu(void) {
             if (!want[i])
                 continue;
             struct percpu *p = percpu_get(i);
-            if (__atomic_load_n(&p->ticks, __ATOMIC_ACQUIRE) != snap[i]) {
+            /* DDR-1188 A7 T5: an AP with its tick stopped is idle and holds no
+             * read section (extended quiescent state). It moved its counter
+             * once on entry, so one that stopped after the snapshot also
+             * passes the test above. */
+            if (__atomic_load_n(&p->ticks, __ATOMIC_ACQUIRE) != snap[i] ||
+                __atomic_load_n(&p->nohz, __ATOMIC_ACQUIRE)) {
                 want[i] = 0;
                 continue;
             }
