@@ -164,8 +164,8 @@ static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
     uint64_t m = 1ull << (i & 63);
     uint64_t *b = &w->bits[i >> 6];
     uint32_t n = w->count;
-    if (*b & m) {
-        *b &= ~m;                          /* P2: the tick 100 ago leaves the window */
+    if ((*b & m) && stalled) {            /* MUTANT C11b: an old bit never leaves */
+        *b &= ~m;
         n--;
     }
     if (stalled) {
