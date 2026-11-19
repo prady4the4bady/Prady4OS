@@ -832,7 +832,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 1703936 || { echo "kernel.bin exceeds 1,703,936 B — the stage-2 read window (52x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, then DDR-1183). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 52 chunks a full window plus the BSS measured by DDR-1183 still fits with 169,802 B to spare, and past ~54 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 1736704 || { echo "kernel.bin exceeds 1,736,704 B — the stage-2 read window (53x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, then DDR-1183 A1). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 53 chunks a full window plus the BSS measured by DDR-1183 A1 (324,928 B) still fits with 35,520 B to spare, and a larger window or BSS does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
 	@c=$$(sed -n 's/^ *mov cx, \([0-9]*\) *; DDR-1183.*/\1/p' $(STAGE2_SRC)); \
 	 k=$$(sed -n 's/^KIMG_SIZE *equ \([0-9]*\) \* 0x8000.*/\1/p' $(STAGE2_SRC)); \
 	 g=$$(sed -n 's/.*wc -c < $$(KERNEL_BIN))" -le \([0-9]*\) .*/\1/p' Makefile); \
@@ -844,8 +844,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
 #   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
-# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 52x64 sectors of the
-# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960 and DDR-1183) — LBAs
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 53x64 sectors of the
+# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960, DDR-1183 and its A1) — LBAs
 # hard-coded in the asm, match here.
 image: $(IMG)
 
