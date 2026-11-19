@@ -17,6 +17,7 @@
 #include "irq.h"
 #include "lapic.h"   /* DDR-714C1: lapic_id() — MSI-X destination (the BSP) */
 #include "percpu.h" /* DDR-976: read the destination AP's tick counter */
+#include "string.h" /* DDR-1208: bounce copies */
 
 extern void irq_register(unsigned irq, void (*fn)(void));   /* kernel/idt.c */
 
@@ -39,9 +40,15 @@ struct virtio_blk_req {
 /* DDR-BLK-1: per-request slot — multiple requests are in flight per disk.
  * Slot i's DMA header lives at reqbuf + i*32 (16B header + status byte). */
 #define VBLK_NREQ 8
+/* DDR-1208 D1: each slot owns a 32 KiB DMA bounce, so the device never holds a
+ * pointer to caller memory; requests are split to fit it. */
+#define VBLK_BOUNCE_SECTORS 64u
+#define VBLK_BOUNCE_ORDER   3u            /* 8 pages = 32 KiB */
 struct vreq {
     volatile int  used;
     volatile int  done;
+    volatile int  orphan;   /* DDR-1208 D2: timed out; the device still owns it */
+    uint64_t      bounce;   /* DDR-1208 D1: this slot's DMA buffer */
     struct tcb   *waiter;
     /* DDR-776: stuck-request watchdog. t0 is the submit tick; warned makes the
      * diagnostic fire once per request. Read lock-free from the timer ISR. */
@@ -134,6 +141,8 @@ static unsigned    g_ninst;
 
 /* DDR-1160: the per-head half of complete(), with no ring access, so the
  * stale-head case can be driven without a device. compl_lock HELD. */
+static void slot_wake_one(struct vblk *v);
+
 static void reap_head(struct vblk *v, int head) {
     int s = (head >= 0 && head < 256) ? v->head2slot[head] : -1;
     if (head >= 0 && head < 256)
@@ -142,6 +151,15 @@ static void reap_head(struct vblk *v, int head) {
         /* DDR-1160: a head whose slot timed out maps to no slot. Still a late
          * completion -- DDR-1148's counter is kept. */
         v->late++;
+        return;
+    }
+    /* DDR-1208 D2: the late completion of a timed-out request. Its slot was
+     * held since the timeout; only now is its memory the driver's again. */
+    if (v->req[s].orphan) {
+        v->req[s].orphan = 0;
+        v->req[s].used = 0;
+        v->late++;
+        slot_wake_one(v);
         return;
     }
     /* DDR-1148 sec.4: a stale completion for a slot that moved on. */
@@ -155,18 +173,14 @@ static void reap_head(struct vblk *v, int head) {
     }
 }
 
-static void slot_wake_one(struct vblk *v);
-
-/* DDR-1160: release a slot whose data wait timed out. The device still owns
- * the chain, so clear the head->slot map: a late completion of this head must
- * not wake whoever reuses the slot. compl_lock HELD. */
+/* DDR-1160, DDR-1208 D2: a slot whose data wait timed out. The device still
+ * owns the chain, and with it this slot's header, status byte and bounce, so
+ * the slot is held (used stays 1), not released: nobody reuses it, and the
+ * head->slot map stays so the late completion finds it and frees it
+ * (reap_head). The waiter has gone. compl_lock HELD. */
 static void data_timeout_release(struct vblk *v, int s) {
-    int h = v->req[s].head;
-    if (h >= 0 && h < 256 && v->head2slot[h] == (int16_t)s)
-        v->head2slot[h] = -1;
-    v->req[s].used = 0;
+    v->req[s].orphan = 1;
     v->req[s].waiter = 0;
-    slot_wake_one(v);
 }
 
 static void complete(struct vblk *v) {
@@ -380,6 +394,12 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     v->req[s].lba = lba;
     v->req[s].warned = 0;
 
+    /* DDR-1208 D1: the device sees only this slot's bounce. count <= 64. */
+    uint64_t dma = v->req[s].bounce;
+    if (to_device)
+        memcpy((void *)(uintptr_t)dma, (const void *)(uintptr_t)data_phys,
+               (size_t)SECTOR * count);
+
     uint64_t hdr = v->reqbuf + (uint64_t)s * 32;   /* 16B header + status byte */
     struct virtio_blk_req *h = (struct virtio_blk_req *)(uintptr_t)hdr;
     volatile uint8_t *status = (volatile uint8_t *)(uintptr_t)(hdr + 16);
@@ -390,7 +410,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
 
     struct virtq_buf bufs[3] = {
         { hdr,       sizeof(struct virtio_blk_req), 0 },
-        { data_phys, SECTOR * count,                to_device ? 0 : 1 },
+        { dma,       SECTOR * count,                to_device ? 0 : 1 },
         { hdr + 16,  1,                             1 },
     };
     if (type == VIRTIO_BLK_T_FLUSH)
@@ -502,6 +522,9 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     }
 
     int ok = (*status == 0);
+    if (ok && type == VIRTIO_BLK_T_IN)          /* DDR-1208 D1: out of the bounce */
+        memcpy((void *)(uintptr_t)data_phys, (const void *)(uintptr_t)dma,
+               (size_t)SECTOR * count);
     if (type == VIRTIO_BLK_T_FLUSH && ok)
         __atomic_add_fetch(&g_vblk_flush_ok, 1, __ATOMIC_RELAXED);
     v->req[s].used = 0;                        /* release the slot ... */
@@ -512,13 +535,25 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     return ok ? 0 : -1;
 }
 
+/* DDR-1208 D1: split into bounce-sized pieces. */
+static int vblk_rw(struct blk_device *bd, uint64_t lba, uint64_t p, uint32_t count,
+                   uint32_t type) {
+    while (count) {
+        uint32_t n = count < VBLK_BOUNCE_SECTORS ? count : VBLK_BOUNCE_SECTORS;
+        int r = submit((struct vblk *)bd->drv, lba, p, n, type);
+        if (r)
+            return r;
+        lba += n;
+        p += (uint64_t)n * SECTOR;
+        count -= n;
+    }
+    return 0;
+}
 static int vblk_read(struct blk_device *bd, uint64_t lba, void *buf, uint32_t count) {
-    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count,
-                  VIRTIO_BLK_T_IN);
+    return vblk_rw(bd, lba, (uint64_t)(uintptr_t)buf, count, VIRTIO_BLK_T_IN);
 }
 static int vblk_write(struct blk_device *bd, uint64_t lba, const void *buf, uint32_t count) {
-    return submit((struct vblk *)bd->drv, lba, (uint64_t)(uintptr_t)buf, count,
-                  VIRTIO_BLK_T_OUT);
+    return vblk_rw(bd, lba, (uint64_t)(uintptr_t)buf, count, VIRTIO_BLK_T_OUT);
 }
 static int vblk_flush(struct blk_device *bd) {
     struct vblk *v = (struct vblk *)bd->drv;
@@ -669,6 +704,13 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
         kputs("virtio-blk: no request buffer\r\n");
         return;
     }
+    for (int i = 0; i < VBLK_NREQ; i++) {      /* DDR-1208 D1 */
+        v->req[i].bounce = pmm_alloc_pages(VBLK_BOUNCE_ORDER);
+        if (!v->req[i].bounce) {
+            kputs("virtio-blk: no bounce buffer\r\n");
+            return;
+        }
+    }
     uint64_t capacity = *(volatile uint64_t *)(uintptr_t)v->dev.devcfg;
 
     /* DDR-714C1: prefer a per-device MSI-X vector (50+unit) — unshared, no
@@ -686,6 +728,7 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     for (int i = 0; i < VBLK_NREQ; i++) {      /* DDR-BLK-1: request slots */
         v->req[i].used = 0;
         v->req[i].done = 0;
+        v->req[i].orphan = 0;
         v->req[i].waiter = 0;
     }
     for (int i = 0; i < 256; i++)
@@ -763,30 +806,74 @@ void virtio_blk_dump_owners(void) {
     }
 }
 
-/* DDR-1160: drive the stale-head case on a scratch struct (no device). */
-void virtio_blk_late_selftest(void) {
+/* DDR-1160, DDR-1208 arm Q: drive a timeout and its late completion on a
+ * scratch struct (no device). The timed-out slot must stay held until the old
+ * head completes; that completion frees it and wakes nobody. */
+static void vblk_late_arm_q(void) {
     static struct vblk t;                        /* BSS: zeroed */
     for (int i = 0; i < 256; i++) t.head2slot[i] = -1;
     t.late = 0;
     t.req[0].used = 1; t.req[0].done = 0; t.req[0].waiter = 0; t.req[0].head = 7;
     t.head2slot[7] = 0;
     data_timeout_release(&t, 0);                 /* old request times out */
-    t.req[0].used = 1; t.req[0].done = 0; t.req[0].waiter = 0; t.req[0].head = 9;
-    t.head2slot[9] = 0;                          /* slot reused, new head */
+    int held = t.req[0].used;                    /* D2: not reusable yet */
     reap_head(&t, 7);                            /* late completion of old head */
     int stale = t.req[0].done;
     uint32_t late = t.late;
-    reap_head(&t, 9);                            /* the real completion */
+    int freed = !t.req[0].used;
+    t.req[0].used = 1; t.req[0].done = 0; t.req[0].waiter = 0; t.req[0].head = 9;
+    t.head2slot[9] = 0;                          /* the next owner, new head */
+    reap_head(&t, 9);                            /* its real completion */
     int real = t.req[0].done;
     kline k;
     kline_init(&k);
-    if (stale != 0 || late != 1 || real != 1 || t.late != 1)
+    if (held != 1 || stale != 0 || late != 1 || freed != 1 || real != 1 || t.late != 1)
         kline_s(&k, "VBLKLATE FAIL: ");
     else
         kline_s(&k, "PRADYOS_VBLKLATE_OK ");
-    kline_s(&k, "done_stale="); kline_d(&k, (uint64_t)stale);
-    kline_s(&k, " late=");      kline_d(&k, (uint64_t)late);
-    kline_s(&k, " done_real="); kline_d(&k, (uint64_t)real);
+    kline_s(&k, "held=");        kline_d(&k, (uint64_t)held);
+    kline_s(&k, " done_stale="); kline_d(&k, (uint64_t)stale);
+    kline_s(&k, " late=");       kline_d(&k, (uint64_t)late);
+    kline_s(&k, " freed=");      kline_d(&k, (uint64_t)freed);
+    kline_s(&k, " done_real=");  kline_d(&k, (uint64_t)real);
     kline_s(&k, "\r\n");
     kline_emit(&k);
+}
+
+/* DDR-1208 arm B: a real read on unit 0 must pass through a slot's bounce.
+ * Free slots' bounces are filled with 0xA5 first (safe: a slot's next request
+ * overwrites its bounce before using it); then sector 0, the boot sector, is
+ * read into a fresh page, and some bounce must now hold the same 512 bytes. */
+static void vblk_late_arm_b(void) {
+    int via = 0, sig = 0;
+    uint64_t pg = g_ninst ? pmm_alloc_page() : 0;
+    if (pg) {
+        struct vblk *v = &g_inst[0];
+        uint8_t *p = (uint8_t *)(uintptr_t)pg;
+        memset(p, 0, SECTOR);
+        uint64_t fl = spin_lock_irqsave(&v->compl_lock);
+        for (int s = 0; s < VBLK_NREQ; s++)
+            if (!v->req[s].used)
+                memset((void *)(uintptr_t)v->req[s].bounce, 0xA5, SECTOR);
+        spin_unlock_irqrestore(&v->compl_lock, fl);
+        if (vblk_read(&v->bd, 0, p, 1) == 0)
+            sig = p[510] == 0x55 && p[511] == 0xAA;
+        for (int s = 0; s < VBLK_NREQ && sig; s++)
+            if (memcmp((const void *)(uintptr_t)v->req[s].bounce, p, SECTOR) == 0)
+                via = 1;
+        pmm_free_page(pg);
+    }
+    kline k;
+    kline_init(&k);
+    kline_s(&k, (via && sig) ? "PRADYOS_VBLKBOUNCE via=" : "VBLKBOUNCE FAIL: via=");
+    kline_d(&k, (uint64_t)via);
+    kline_s(&k, " sig=");
+    kline_d(&k, (uint64_t)sig);
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
+}
+
+void virtio_blk_late_selftest(void) {
+    vblk_late_arm_q();
+    vblk_late_arm_b();
 }
