@@ -727,7 +727,15 @@ void virtio_blk_init(uint8_t bus, uint8_t dev, uint8_t func) {
     for (int i = 0; i < VBLK_NREQ; i++) {      /* DDR-1208 D1 */
         v->req[i].bounce = pmm_alloc_pages(VBLK_BOUNCE_ORDER);
         if (!v->req[i].bounce) {
+            /* The device is not registered, and the next probe reuses this
+             * g_inst entry: give back what this probe took (#148 review). */
             kputs("virtio-blk: no bounce buffer\r\n");
+            for (int j = 0; j < i; j++) {
+                pmm_free_pages(v->req[j].bounce, VBLK_BOUNCE_ORDER);
+                v->req[j].bounce = 0;
+            }
+            pmm_free_page(v->reqbuf);
+            v->reqbuf = 0;
             return;
         }
     }
