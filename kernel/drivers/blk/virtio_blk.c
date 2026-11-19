@@ -432,9 +432,8 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     /* DDR-1188 A6 P1: a thread waiting for a read is I/O pressure until the
      * read completes (reap_head) or this wait times out. req[s].psi, under
      * compl_lock, makes whichever comes first lower the count, once. */
-    int psi_io = (type == VIRTIO_BLK_T_IN);
-    if (psi_io)
-        __atomic_add_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
+    int psi_io = 0;                              /* MUTANT C15 */
+    (void)type;
     v->req[s].psi = psi_io;
     while (!v->req[s].done) {
         vown_clear(v);                           /* DDR-1138: see the slot wait */
