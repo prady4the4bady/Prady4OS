@@ -606,7 +606,7 @@ QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not clo
 
 ## Amendment 7 (2026-11-18): P6 design, tickless idle on the APs
 
-Design only; no P6 code exists when this is written. It is read from P5's head (`c15-p5` at `b8bead4`), on which P6 is stacked. P6 opens as a PR only after P5 merges.
+Written as design before any P6 code, read from P5's head (`c15-p5` at `b8bead4`). The P6 code is in the same PR; where the code differs from the design, "As built" below says so and why.
 
 **What exists.**
 - **Who owns the clock.** Every CPU's LAPIC timer ticks at 100 Hz on vector 48 (`lapic.c`). The BSP's tick runs `timer_tick` (`idt.c`): `g_ticks`, the vDSO wall clock (10 ms added per tick), the lwIP timers, the heartbeat and its watchdogs. An AP's tick runs only `sched_tick` for that CPU, plus ring-3 signal delivery.
@@ -655,19 +655,25 @@ Design only; no P6 code exists when this is written. It is read from P5's head (
 | Arm | Assertion | Mutant | What the mutant breaks |
 |---|---|---|---|
 | L | CPU 3 isolated, nothing pinned to it, 1 s to drain: CPU 3 takes fewer than 5 timer interrupts in the next second | C12 | the tick is never stopped (about 100) |
-| L1 | a thread pinned to isolated CPU 3 sleeps 20 ms with `nanosleep`, 50 times: the largest lateness is at most 2 ticks (20 ms) | C12b | the tick is stopped with a one-shot slot pending, so the sleeper waits for the 1 s bound |
+| L1 | a thread pinned to isolated CPU 3 sleeps 20 ms with `nanosleep`, 50 times: the largest lateness is at most 2 ticks (20 ms) | C12b | the stop ignores the pending sleeper's deadline (T2 b as built), so the sleeper waits for the 1 s bound |
 | L2 | with CPU 3 isolated and idle, 20 grace periods (op 8, a probe-only `synchronize_rcu` that returns its duration) each finish within 50 ms | C12c | no extended quiescent state: each grace period waits for CPU 3 (up to 1 s) |
 
 - **Vacuity, read from the code before writing:** on the P5 tree ops 6–8 answer `-ENOSYS`, so all three arms fail at their first call. C12 leaves L1 and L2 green (the tick keeps running), C12b leaves L and L2 green (no slot is pending in either), and C12c leaves L and L1 green. So each mutant is red on its own arm only, which is what rule 3 asks.
 - New sentinels: `PRADYOS_SCHED_L nohz_ok=1`, `PRADYOS_SCHED_L1 wake_ok=1`, `PRADYOS_SCHED_L2 eqs_ok=1`.
 
-**Size.** The binding build (`RCU_TORTURE=1`) is 1,700,234 B, 3,702 B under the gate. Sections are padded to 4 KiB, so `.text` has 2,569 B of slack and `.rodata` (which holds the embedded `schedtest.elf`) 2,832 B. P6 adds kernel code and three arms to the embedded probe, so a section may cross a page, which is +4,096 B and over the gate.
-- P6 measures first.
-- If it is over, the remedy is a DDR-1183 amendment in its own PR, merged before P6: the stage-2 read window goes from 52 to 53 chunks (+32 KiB), in `boot/stage2/stage2.asm`. The gate's own text says the PT_HI ceiling holds up to about 54 chunks. Code is not squeezed to fit.
+**Size.** Designed against the 52-chunk gate (1,703,936 B), with a window raise as the stated remedy. That raise came first, for DDR-1208 (DDR-1183 Amendment 1, #147: 53 chunks, 1,736,704 B). Measured on the P6 code, built locally:
+- default `kernel.bin` 1,687,946 B, unchanged by P6: the code fits the existing page slack;
+- `RCU_TORTURE=1` 1,704,330 B, also unchanged, 32,374 B under the gate.
+- CI prints the figures of record.
 
 **As built (P6 code, read against T1–T8).**
 - **Entry keeps the wake race closed.** `sched_nohz_enter` clears IF on both paths: the stop, and the refusal (not an AP, `g_nohz` unset, or `hrt_nohz_enter` refused). A wake IPI sent after the `rq_has_ready()` re-check then stays pending until the idle loop's `sti; hlt`, and breaks it, as before P6.
-- **`hrt_nohz_enter` refuses** unless the timer is periodic, no P2 slot is pending and no tick is latched. A sleeper's one-shot is a non-periodic phase, so the phase test alone already keeps P2's timer; mutant C12b removes both tests.
+- **T2 (b) revised: a pending sleeper does not prevent the stop.** As designed, the stop refused while any P2 slot was pending. Measured on the first local run, arm L failed with 100 interrupts in its second: every stop was refused on `npend`, because `hrt_arm` takes a slot for every `nanosleep`, so some sleeper almost always holds one. As built:
+  - `hrt_nohz_enter` refuses only when the timer is in a one-shot phase (P2 owns it), a tick is latched, or the earliest deadline is inside the next tick.
+  - Otherwise the one-shot counts to the earlier of the earliest deadline and the 1 s bound.
+  - While stopped, the stop's interrupt expires due sleepers (`hr_expire`), then answers 0.
+  - On exit, a sleeper due within a tick gets P2's one-shot, as `hrt_irq`'s tick path does. Without that, a LAPIC interrupt slightly early by the TSC left the sleeper a whole tick late (L1 measured 10 ms, then 0.4 ms with the one-shot).
+  - Mutant C12b now ignores the sleeper's deadline (the count always runs to the bound), so the L1 sleeper waits for the bound.
 - **The clock moves by `max(k, 1)` in all.** T5's entry adds 1, so the exit adds `k - 1` (T4 said `k`; that would count every stop one tick long). The PSI window records the same ticks, at most 100, as unstalled.
 - **RCU readers.** The only RCU reader on an AP today is `sched_timed_sweep`, inside `sched_tick`, and `hrt_irq` answers 0 while the tick is stopped. So no reader runs on a CPU with `nohz` set, which is what T5 relies on. A future reader in an interrupt path must end the stop first; this is stated, not gated.
 - **Isolation (T6)** is a per-CPU flag read by `rq_push` (unpinned threads go to the BSP), `rq_steal` and `rq_has_ready` (the CPU takes nothing but its own queue), and the unblock kick. The BSP cannot be isolated (op 6 answers `-EINVAL`).
