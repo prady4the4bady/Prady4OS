@@ -133,10 +133,18 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
         if (!buf)
             return -ENOMEM;
         long rc = 0;
-        for (uint64_t lba = 0; lba < sectors && rc == 0; lba += 128)
-            if (blk_read(dev, lba, (void *)(uintptr_t)buf, 128) != 0)
+        int r = 0;
+        for (uint64_t lba = 0; lba < sectors && rc == 0; lba += 128) {
+            r = blk_read(dev, lba, (void *)(uintptr_t)buf, 128);
+            if (r != 0)
                 rc = -EIO;
-        pmm_free_pages(buf, 4);
+        }
+        /* A timed-out read (-EIO from submit, DDR-1160) leaves its descriptor
+         * chain, and so this buffer, with the device: keep the pages (a
+         * probe-only leak) so a late DMA write cannot land in reused memory
+         * (CodeRabbit on #145). */
+        if (r != -EIO)
+            pmm_free_pages(buf, 4);
         return rc;
     }
     }

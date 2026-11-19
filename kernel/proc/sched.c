@@ -156,6 +156,7 @@ static uint64_t g_dl_bw[PERCPU_MAX];      /* A5 D4: admitted bandwidth, g_prio_l
 struct psi_win { uint64_t bits[2]; uint32_t count; };
 static struct psi_win g_psi_cpu[PERCPU_MAX];
 static struct psi_win g_psi_io;
+static uint8_t g_psi_last[PERCPU_MAX];    /* P1: the last sample, for a busy queue lock */
 volatile uint32_t g_psi_io_wait;          /* P1: threads in a virtio-blk read wait */
 
 static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
@@ -175,8 +176,9 @@ static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
 }
 
 /* P1: sampled on each tick of `pc`'s CPU, interrupts off. A trylock, as the
- * steal path takes a remote queue: a tick that finds the lock busy reads the
- * head pointer alone (a queue being changed right now is not empty). */
+ * steal path takes a remote queue: a tick that finds the lock busy repeats the
+ * last sample, as the head pointer alone cannot apply the yield exclusion
+ * (CodeRabbit on #145). */
 static void psi_tick(struct percpu *pc) {
     unsigned cpu = pc->cpu_idx;
     uint64_t t = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
@@ -189,8 +191,9 @@ static void psi_tick(struct percpu *pc) {
                 break;                     /* (a yielder offered the CPU: not a stall) */
             }
         spin_unlock(&q->lock);
+        g_psi_last[cpu] = (uint8_t)st;
     } else {
-        st = __atomic_load_n(&q->head, __ATOMIC_RELAXED) != 0;
+        st = g_psi_last[cpu];
     }
     psi_record(&g_psi_cpu[cpu], t, st);
     if (cpu == 0)
@@ -2287,6 +2290,10 @@ static void schedule_locked(uint64_t fl) {
     struct tcb *prev = current_thread;
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
+    /* DDR-1188 A6 P1 (CodeRabbit on #145): schedule_yield set this with
+     * interrupts off; it marks only the re-queue below, never a later one. */
+    uint32_t yld = prev->psi_yld;
+    prev->psi_yld = 0;
 
 #if ZANCHOR_TEST
     /* DDR-1201 sec.5: before the pick, so no thread popped from this CPU's queue
@@ -2373,6 +2380,7 @@ static void schedule_locked(uint64_t fl) {
             __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
         if (prev->state == THREAD_READY && !prev->is_idle) {
             int was_on = __atomic_load_n(&prev->rq_on, __ATOMIC_ACQUIRE);
+            prev->psi_yld = yld;
             rq_push(cpu, prev);
             if (dd_entered_ready && !was_on) {
                 __atomic_add_fetch(&g_dd_forced, 1, __ATOMIC_RELAXED);
@@ -2384,8 +2392,10 @@ static void schedule_locked(uint64_t fl) {
 #else
     if (prev->state == THREAD_RUNNING) {
         __atomic_store_n(&prev->state, THREAD_READY, __ATOMIC_RELEASE);
-        if (!prev->is_idle)
+        if (!prev->is_idle) {
+            prev->psi_yld = yld;   /* DDR-1188 A6 P1: queued by its own yield? */
             rq_push(cpu, prev);    /* rq-1: a preempted-but-runnable prev re-queues */
+        }
     }
 #endif
 
@@ -2743,6 +2753,16 @@ static void schedule(void) {
     schedule_locked(local_irq_save());
 }
 
+/* DDR-1188 A6 P1 (CodeRabbit on #145): yield()'s switch. The mark is set with
+ * interrupts already off, so a tick cannot preempt the thread while it is set,
+ * and schedule_locked consumes it on entry. */
+static void schedule_yield(void) {
+    rcu_note_switch();
+    uint64_t fl = local_irq_save();
+    current_thread->psi_yld = 1;
+    schedule_locked(fl);
+}
+
 #if OPEN2_HUNT
 /* DDR-1097 sec.7 -- the forced proof, as a build flag rather than a hand edit so
  * the run is reproducible from the recorded command. OPEN2_FORCE_RECYCLE=1
@@ -3040,10 +3060,12 @@ static int rt_tick(int cpu, struct tcb *cur) {
             cur->rt_head = 1;                      /* K2 covers deadline threads too */
             return 2;
         }
-        /* A6 (CodeRabbit on #140): a spent budget preempts only when there is
-         * a READY replacement; otherwise the picker would hand the CPU back to
-         * this thread, and the BSP idle path would halt for the tick first. */
-        if ((dl_out && (top || other)) || dl_first < cur->dl_deadline)
+        /* A6 (CodeRabbit on #140, #145): a spent budget preempts only when some
+         * thread could run here instead: READY on this queue, or on a queue
+         * this CPU may steal from. With none, the picker would hand the CPU
+         * back to this thread, after an idle detour (on the BSP, a halt for
+         * the rest of the tick). */
+        if ((dl_out && (top || other || rq_has_ready())) || dl_first < cur->dl_deadline)
             return 1;                              /* A5 D3, D6 */
         return 0;
     }
@@ -3283,17 +3305,14 @@ void yield(void) {
      * schedule() with interrupts enabled). */
     uint64_t yf;
     __asm__ volatile("pushfq; pop %0" : "=r"(yf) :: "memory");
-    current_thread->psi_yld = 1;       /* DDR-1188 A6 P1: queued by its own yield */
     if (yf & 0x200u) {                 /* already interruptible: kernel threads */
-        schedule();
-        current_thread->psi_yld = 0;   /* running again */
+        schedule_yield();              /* DDR-1188 A6 P1: a yield, for PSI */
         return;
     }
     __atomic_add_fetch(&g_yield_masked, 1, __ATOMIC_RELAXED);
     __asm__ volatile("sti" ::: "memory");
-    schedule();
+    schedule_yield();
     __asm__ volatile("cli" ::: "memory");   /* restore the caller's IF=0 exactly */
-    current_thread->psi_yld = 0;       /* running again */
 }
 
 /* Block the current thread until something calls sched_unblock on it. Callers
