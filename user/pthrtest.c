@@ -249,7 +249,12 @@ static long pr_work(void *ctx) {
     long done = 0;
     for (int i = 0; i < 200; i++) {
         pthr_t t;
-        if (pthr_create(&t, &at, pr_fn, 0) != 0) fail("R create");
+        long rc = pthr_create(&t, &at, pr_fn, 0);
+        if (rc != 0) {                     /* DDR-1197 A2 (#135): name the step */
+            say("[pthr] R create rc=%d step=%d err_rc=%d round=%d\n", rc,
+                pthr_self()->err_step, pthr_self()->err_rc, (long)i);
+            fail("R create");
+        }
         if (pthr_join(t, 0) != 0) fail("R join");
         done++;
     }
@@ -266,7 +271,12 @@ static void b_pr(struct pt *p) {
     pthr_attr_t at = { PTHR_STACK_MIN, 0 };
     for (int i = 0; i < 8; i++) {          /* warm-up, as arm C does */
         pthr_t t;
-        if (pthr_create(&t, &at, pr_fn, 0) != 0) fail("R warm create");
+        long rc = pthr_create(&t, &at, pr_fn, 0);
+        if (rc != 0) {                     /* DDR-1197 A2 (#135) */
+            say("[pthr] R warm create rc=%d step=%d err_rc=%d round=%d\n", rc,
+                pthr_self()->err_step, pthr_self()->err_rc, (long)i);
+            fail("R warm create");
+        }
         pthr_join(t, 0);
     }
     struct pm_result r;

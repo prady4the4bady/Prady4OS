@@ -542,11 +542,11 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 **P1. Definition.** As §2: `some` is the number of ticks, out of the last 100 sampled, in which at least one thread was stalled. That is a percentage of the last second at 100 Hz: a plain sliding window with no decay.
 - **CPU, per CPU.** A tick on CPU `c` is *stalled* when `g_rq[c]` holds a READY entry, a thread runnable on `c` but not running. Two kinds of READY entry do not count:
   - **The idle thread**, which is never queued (`schedule()` re-queues `prev` only when it is not idle). The check is defensive.
-  - **A thread queued by its own `yield()`.** It offered the CPU away, so it is not being denied it. A new `tcb` field `psi_yld` is set by `yield()` before it calls `schedule()` and cleared when the thread runs again.
+  - **A thread queued by its own `yield()`.** It offered the CPU away, so it is not being denied it. A new `tcb` field `psi_yld` marks it. `yield()` sets the mark with interrupts already off (`schedule_yield`), and `schedule_locked` consumes it on entry and restores it only on that call's own re-queue, so a timer preemption never carries it (CodeRabbit on #145).
   - **Why the yield exclusion.** A first draft counted every READY entry. In the gate VM, every CPU then read 100 before any load (`pre 100 100 100 100`). The queues hold busy-polling threads that never stop: SURFTEST, INPUTTST, AETHERD, PRISM, INIT and the reaper. Each is dispatched about 20 000 times a second against about 25 run ticks a second, a `yield()` loop. With them counted, CPU `some` is pinned at 100 on every CPU of this OS and measures nothing.
   - **Deviation from Linux, stated.** Linux counts a yielding task as runnable. Here a CPU stall means a thread that wants the CPU and was not given it: woken and not yet run, or preempted.
   - With the exclusion, the same VM reads 0 on every CPU without load (`base=0,0,100,0`: CPU 2 still holds the last second of arm Q). The tick takes the queue lock and stops at the first READY entry; most queues hold a few entries.
-- **I/O, system-wide.** A tick is *stalled* when at least one thread is waiting for a virtio-blk **read** (`VIRTIO_BLK_T_IN`) to complete. A counter `g_psi_io_wait` is raised before the completion wait in `submit()` and lowered after it, on every exit path. Only CPU 0's tick samples the I/O window, so its time base is one CPU's ticks. P6 must keep CPU 0 ticking, or move the sample.
+- **I/O, system-wide.** A tick is *stalled* when at least one thread is waiting for a virtio-blk **read** (`VIRTIO_BLK_T_IN`) to complete. A counter `g_psi_io_wait` is raised before the completion wait in `submit()`. It is lowered once, by whichever comes first: the completion (`reap_head`) or the wait's timeout. A per-request flag `req[s].psi`, under `compl_lock`, makes it exactly once, so the stall ends when the disk finishes, not when the issuer runs again (CodeRabbit on #145). Only CPU 0's tick samples the I/O window, so its time base is one CPU's ticks. P6 must keep CPU 0 ticking, or move the sample.
 - Writes and flushes are not I/O pressure in P5. §2 names reads only.
 - **Memory pressure** waits for C2.1 (§2).
 
@@ -565,7 +565,7 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 |---|---|---|---|
 | K | two `SCHED_OTHER` spinners pinned to CPU 2 for 1.5 s: CPU 2's `some` is at least 50 | C11 | the CPU stall bit is never set (always 0) |
 | K0 | 1.5 s after both spinners exit: CPU 2's `some` is at most 5 | C11b | the window never forgets: an old bit is not cleared (it stays near 100) |
-| O | a thread reads 16 MiB through op 5: the I/O `some` the main thread reads during the read is above 0 at least once, and 2 s after the read it is 0 | C15 | `g_psi_io_wait` is never raised (always 0) |
+| O | a thread reads 16 MiB through op 5: the I/O `some` the main thread samples while the read runs, or within the 100-tick window after it, is above 0 at least once, and 2 s after the read it is 0 | C15 | `g_psi_io_wait` is never raised (always 0) |
 
 - **Why K asserts ≥ 50 and not §4's "above 0".** Two spinners on one CPU leave one READY on almost every tick, so the value is near 100. A partial accounting bug would still pass "above 0".
 - **Why K0 allows 5 and not 0.** Unpinned threads (the shell, kernel workers) may briefly queue on CPU 2. A tick where two of them are runnable together is stalled, rightly. §4's "0 when that CPU is idle" assumed an idle CPU, which a gate VM does not have.
@@ -582,16 +582,23 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 - The first draft failed K0 (`idle=67`, then `idle=74` after excluding the idle thread) for the polling-thread reason above, and O (`rc=-22`, device 0 too small). Both were measured, named and fixed before the mutants were run.
 
 **Two P4 review fixes carried here.** CodeRabbit raised both on #140's head `1227ff6` as minor. The reply on #140 (6977372773) moved them to P5, which changes the same code.
-- **`rt_tick`: a spent budget with no replacement.** A deadline thread whose budget ran out was preempted even with nothing else READY. The picker then handed the CPU back to it, after an idle detour:
+- **`rt_tick`: a spent budget with no replacement.** A deadline thread whose budget ran out was preempted even with nothing else runnable. The picker then handed the CPU back to it, after an idle detour:
   - on an AP, one extra switch, because the idle loop re-checks the queue;
   - on the BSP, a halt for the rest of the tick, because its idle path does not re-check.
-  The thread now yields the CPU on a spent budget only when a READY replacement exists (`dl_out && (top || other)`). The picker was already work-conserving: it falls back to the throttled thread when nothing else can run. So this removes the detour without changing who runs.
+  The thread now yields the CPU on a spent budget only when some thread could run here instead: READY on its own queue, or on a queue this CPU may steal from (`rq_has_ready()`). A first version looked at the local queue only. CodeRabbit on #145 showed that this kept a remote READY thread waiting, because `schedule_locked` steals (`rq_steal`) before it re-queues `prev`. With stealable work counted, the guard skips the preemption only when `rq_has_ready()` sees no queue head this CPU may take, and there it removes the detour. `rq_has_ready()` is a hint, not an exact test (CodeRabbit on #145): it skips a queue whose head is pinned to another CPU, reads a busy queue lock as ready, and can see stale state. So a runnable entry behind a pinned-away head can still wait a tick, and a busy lock costs one extra switch. The picker was already work-conserving: it falls back to the throttled thread when nothing else can run.
 - **`rq_pop`: the fallback under K2.** On a K2-throttled CPU with no `SCHED_OTHER` entry READY, `rq_pop` took the queue head. The head can be a CBS-throttled deadline entry while an eligible one waits behind it. In that case `rq_pop` now ranks the queue with `rt_candidate`, which skips throttled deadline entries, before falling back to the head.
 - **Neither has an arm.** The first needs a deadline thread pinned to CPU 0. The second needs K2 throttling with no `SCHED_OTHER` work and two deadline entries in that order. No arm creates either. Arm Q still preempts on a spent budget, because its `SCHED_OTHER` spinner shares the CPU. Mutant C17 (no charge) is unaffected.
 
+**Review fixes on #145 (CodeRabbit), before merge:**
+- **Op 5 and a timed-out read.** `submit()` returns `-EIO` on a data-wait timeout and leaves the descriptor chain with the device (DDR-1160). Op 5 freed its 64 KiB buffer whatever the result, so a late DMA write could land in reused memory. It now keeps the pages after `-EIO`: a deliberate probe-only leak. `sys_disk_list` (NSI 104) frees its sector page the same way after a possibly timed-out read. That is outside P5 and is recorded as a separate task.
+- **A busy queue lock.** `psi_tick` read the head pointer alone when the trylock failed, which counted a queue holding only a yielder as stalled. It now repeats the last sample taken under the lock. This is an intended approximation: each tick that finds the lock busy may be stale in either direction, consecutive busy ticks repeat the same sample, and the error is one window bit per busy tick (CodeRabbit on #145). An exact, lock-free count of eligible waiters would add state to every queue push and pop.
+- **The yield mark** and **the I/O stall's end**, as described in P1 above.
+- **Arm O's wording.** The reader can finish before the main thread's first poll, so the arm may see the read's stall in the 100-tick window just after it. That is the window's own meaning. C15 still turns O red at any timing, because then nothing raises the count. The assertion now says so.
+
 **Not gated in P5 (stated):**
 - the yield exclusion (`psi_yld`): no arm runs a yielder beside a waiting thread; the I/O window's sampling only on CPU 0, and the exclusion of writes and flushes; the one-tick-stale read; `-EINVAL` paths; I/O through a non-virtio device (none exists in the gate VMs).
-- the two carried P4 fixes above.
+- the two carried P4 fixes above;
+- the review fixes on #145: op 5 keeping its buffer after a timeout, the busy-lock sample, the yield mark's timing, and the I/O stall ending at completion. No arm creates a timeout, a busy queue lock with only a yielder queued, a tick inside `yield()`, or a delayed issuer.
 
 **Risk.** P5 adds one queue-lock walk to every tick, stopping at the first READY entry, and two atomics per virtio-blk read. The walk is on the scheduling path, where OPEN-2 and OPEN-12/13 live. Every P5 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
 

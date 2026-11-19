@@ -832,7 +832,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 1703936 || { echo "kernel.bin exceeds 1,703,936 B — the stage-2 read window (52x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, then DDR-1183). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 52 chunks a full window plus the BSS measured by DDR-1183 still fits with 169,802 B to spare, and past ~54 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 1736704 || { echo "kernel.bin exceeds 1,736,704 B — the stage-2 read window (53x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, then DDR-1183 A1). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 53 chunks a full window plus the BSS measured by DDR-1183 A1 (324,928 B) still fits with 35,520 B to spare, and a larger window or BSS does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
 	@c=$$(sed -n 's/^ *mov cx, \([0-9]*\) *; DDR-1183.*/\1/p' $(STAGE2_SRC)); \
 	 k=$$(sed -n 's/^KIMG_SIZE *equ \([0-9]*\) \* 0x8000.*/\1/p' $(STAGE2_SRC)); \
 	 g=$$(sed -n 's/.*wc -c < $$(KERNEL_BIN))" -le \([0-9]*\) .*/\1/p' Makefile); \
@@ -844,8 +844,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
 #   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
-# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 52x64 sectors of the
-# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960 and DDR-1183) — LBAs
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 53x64 sectors of the
+# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960, DDR-1183 and its A1) — LBAs
 # hard-coded in the asm, match here.
 image: $(IMG)
 
@@ -3569,11 +3569,14 @@ smoke-usbkbd: $(IMG) fat-image sfs-image
 # DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
 # Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
 # real 5 s completion stall cannot be produced on demand under QEMU.
+# DDR-1208: arm Q also asserts the timed-out slot stays held until its late
+# completion frees it (mutant Q1); arm B reads unit 0's boot sector and asserts
+# the data passed through a slot's bounce, not the caller's page (mutant B1).
 smoke-vblklate: $(IMG) fat-image sfs-image
 	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
 	TIMEOUT_S=120 QEMU_PROBES=vblklate \
-	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
-	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_VBLKLATE_OK held=1 done_stale=0 late=1 freed=1 done_real=1\nPRADYOS_VBLKBOUNCE via=1 sig=1')" \
+	FORBIDDEN_SENTINEL="$$(printf 'VBLKLATE FAIL\nVBLKBOUNCE FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-1170: per-task budgets. A sovereign probe spawns four budgeted agent
@@ -4488,10 +4491,10 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 smoke-thread: $(IMG) fat-image sfs-image
 	@rm -f build/thread.log
 	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1 asleep=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_FUTEX_K term_waiter=1\nPRADYOS_FUTEX_L handler_wait=1\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_PTHR_A joined=8 ret_ok=8 total=8000 placed_ok=1\nPRADYOS_PTHR_J asleep=1 ret_ok=1 timeout=0\nPRADYOS_PTHR_R rounds=200 leak_ok=1 conclusive=1\nPRADYOS_PTHR_D detached=32 reclaimed=32 timeout=0\nPRADYOS_PTHR_G guard_fault=1\nPRADYOS_PTHR_K iso_ok=4 dtor=4 stale=0 placed_ok=1\nPRADYOS_PTHR_O runs=1 waited_ok=4 placed_ok=1\nPRADYOS_THREAD_DONE')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1 asleep=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_FUTEX_K term_waiter=1\nPRADYOS_FUTEX_L handler_wait=1\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_PTHR_A joined=8 ret_ok=8 total=8000 placed_ok=1\nPRADYOS_PTHR_J asleep=1 ret_ok=1 timeout=0\nPRADYOS_PTHR_R rounds=200 leak_ok=1 conclusive=1\nPRADYOS_PTHR_D detached=32 reclaimed=32 timeout=0\nPRADYOS_PTHR_G guard_fault=1\nPRADYOS_PTHR_K iso_ok=4 dtor=4 stale=0 placed_ok=1\nPRADYOS_PTHR_O runs=1 waited_ok=4 placed_ok=1\nPRADYOS_KHEAP_LARGE want=300 got=300 ok=1\nPRADYOS_THREAD_DONE')" \
 	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nPTHR FAIL\nthread probe FAILED to load')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
-	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC\|\[pthr\]\|PRADYOS_PTHR\|PTHR FAIL" build/thread.log || true
+	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC\|\[pthr\]\|PRADYOS_PTHR\|PTHR FAIL\|PRADYOS_KHEAP_LARGE\|\[kheap\] large" build/thread.log || true
 	@echo "[thread] PASS"
 
 # DDR-1188 (C1.5): scheduler classes. P1 arms: A (CLOCK_MONOTONIC never goes
