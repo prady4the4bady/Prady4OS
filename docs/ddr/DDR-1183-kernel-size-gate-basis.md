@@ -86,7 +86,7 @@ So 52 is the largest raise that keeps the invariant with room to spare. The next
 
 **Evidence (added after both PRs merged).**
 - Every BIOS-path gate booted through the 53-chunk read: #147's head `236a273`, run [44537776868](https://github.com/prady4the4bady/Prady4OS/actions/runs/44537776868), every job green (merged as `3971031`). Its first run, on `d20619b`, died in the package-install step before any gate booted.
-- The window's new tail, 1,703,936 to 1,736,704 B, is first read by a kernel larger than 1,703,936 B. On #147 no kernel was that large (the binding build was 1,700,234 B).
-- The first evidence for the tail is #148 (DDR-1208): its `smoke-rcu` job booted the 1,704,330 B `RCU_TORTURE=1` kernel and passed, on head `4298fde`, run [44540005938](https://github.com/prady4the4bady/Prady4OS/actions/runs/44540005938) (merged as `43d62c1`). That kernel ends 394 B into the 53rd chunk, so the run shows the read reaches the tail; it does not exercise the rest of the 32 KiB.
+- Stage 2 reads and copies all 53 chunks on every BIOS boot, whatever the kernel's size: the loop count in `stage2.asm` is fixed. So #147's run already read and copied the 53rd chunk on every BIOS-path gate. What it could not show is a kernel whose own bytes lie in that chunk: on #147 the binding build was 1,700,234 B (CodeRabbit on #149).
+- The first evidence for the tail is #148 (DDR-1208): its `smoke-rcu` job booted the 1,704,330 B `RCU_TORTURE=1` kernel and passed, on head `4298fde`, run [44540005938](https://github.com/prady4the4bady/Prady4OS/actions/runs/44540005938) (merged as `43d62c1`). That kernel ends 394 B into the 53rd chunk: the whole chunk is read and copied, and the first 394 B of it are kernel bytes that the boot then used.
 
 **The UEFI path** loads the exact file size and is unaffected. QEMU only, not verified on real hardware.
