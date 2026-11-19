@@ -184,7 +184,7 @@ static void reap_head(struct vblk *v, int head) {
  * head->slot map stays so the late completion finds it and frees it
  * (reap_head). The waiter has gone. compl_lock HELD. */
 static void data_timeout_release(struct vblk *v, int s) {
-    v->req[s].orphan = 1;
+    v->req[s].used = 0;                          /* MUTANT Q1: released at once */
     v->req[s].waiter = 0;
 }
 
