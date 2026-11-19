@@ -400,8 +400,8 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     v->req[s].warned = 0;
 
     /* DDR-1208 D1: the device sees only this slot's bounce. count <= 64. */
-    uint64_t dma = v->req[s].bounce;
-    if (to_device)
+    uint64_t dma = data_phys;                    /* MUTANT B1: no bounce */
+    if (0 && to_device)
         memcpy((void *)(uintptr_t)dma, (const void *)(uintptr_t)data_phys,
                (size_t)SECTOR * count);
 
@@ -542,7 +542,7 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     }
 
     int ok = (*status == 0);
-    if (ok && type == VIRTIO_BLK_T_IN)          /* DDR-1208 D1: out of the bounce */
+    if (0 && ok && type == VIRTIO_BLK_T_IN)     /* MUTANT B1 */
         memcpy((void *)(uintptr_t)data_phys, (const void *)(uintptr_t)dma,
                (size_t)SECTOR * count);
     if (type == VIRTIO_BLK_T_FLUSH && ok)
