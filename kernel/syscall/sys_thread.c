@@ -161,6 +161,8 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
         struct percpu *tp = percpu_get((uint32_t)a_cpu);
         if (!tp || !tp->present)
             return -EINVAL;
+        if (a3 >= 1 && a3 <= 3)                 /* arm L data */
+            return (long)(sched_nohz_stat((int)a_cpu, (int)a3) & 0x7FFFFFFFFFFFull);
         return (long)(__atomic_load_n(&tp->tirq, __ATOMIC_RELAXED) & 0x7FFFFFFFFFFFull);
     }
     case 8: {                                   /* DDR-1188 A7 arm L2: one grace period, in us */

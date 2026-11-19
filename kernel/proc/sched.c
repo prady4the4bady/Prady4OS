@@ -165,6 +165,9 @@ volatile uint32_t g_psi_io_wait;          /* P1: threads in a virtio-blk read wa
  * (T6): an isolated CPU runs only threads pinned to it. */
 volatile uint32_t g_nohz;
 static volatile uint8_t g_iso[PERCPU_MAX];
+/* A7 arm L data (op 7, a3 = 1..3): stops taken, stops refused by the timer,
+ * idle-loop passes that found work. */
+static volatile uint64_t g_nz_stop[PERCPU_MAX], g_nz_refuse[PERCPU_MAX], g_nz_ready[PERCPU_MAX];
 
 static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
     uint32_t i = (uint32_t)(tick % 100);
@@ -1436,8 +1439,12 @@ static int sched_nohz_enter(struct percpu *pc) {
     __asm__ volatile("cli" ::: "memory");
     if (!pc || pc->is_bsp || !__atomic_load_n(&g_nohz, __ATOMIC_ACQUIRE))
         return 0;
-    if (!hrt_nohz_enter())
+    unsigned c = pc->cpu_idx < PERCPU_MAX ? pc->cpu_idx : 0;
+    if (!hrt_nohz_enter()) {
+        g_nz_refuse[c]++;
         return 0;
+    }
+    g_nz_stop[c]++;
     __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST);
     __atomic_store_n(&pc->nohz, 1, __ATOMIC_SEQ_CST);
     return 1;
@@ -1457,6 +1464,12 @@ static void sched_nohz_exit(struct percpu *pc) {
 
 /* DDR-1188 A7 T6, probe-only (SYS_SCHED_CPU op 6). Isolating moves the CPU's
  * queued unpinned entries to the BSP. Not the BSP itself. */
+uint64_t sched_nohz_stat(int cpu, int which) {
+    if (cpu < 0 || cpu >= PERCPU_MAX)
+        return 0;
+    return which == 1 ? g_nz_stop[cpu] : which == 2 ? g_nz_refuse[cpu] : g_nz_ready[cpu];
+}
+
 int sched_iso_set(int cpu, int on) {
     if (cpu <= 0 || cpu >= PERCPU_MAX)
         return -1;
@@ -1532,6 +1545,7 @@ void sched_ap_enter(void) {
         __atomic_store_n(&pc->idle, 1, __ATOMIC_SEQ_CST);
         if (rq_has_ready()) {
             __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
+            if (cpu < PERCPU_MAX) g_nz_ready[cpu]++;
             continue;                  /* work appeared — steal it next schedule() */
         }
         /* DDR-1188 A7 T2-T5: maybe stop the tick. Returns with IF clear
@@ -3154,7 +3168,11 @@ static int rt_tick(int cpu, struct tcb *cur) {
          * thread could run here instead: READY on this queue, or on a queue
          * this CPU may steal from. With none, the picker would hand the CPU
          * back to this thread, after an idle detour (on the BSP, a halt for
-         * the rest of the tick). */
+         * the rest of the tick). rq_has_ready() is a hint, not an exact test
+         * (CodeRabbit on #145): it skips a queue whose head is pinned to
+         * another CPU, reads a busy queue lock as ready, and can be stale. So
+         * the guard skips the preemption only when it sees no head this CPU
+         * may take; a busy lock costs one extra switch. */
         if ((dl_out && (top || other || rq_has_ready())) || dl_first < cur->dl_deadline)
             return 1;                              /* A5 D3, D6 */
         return 0;

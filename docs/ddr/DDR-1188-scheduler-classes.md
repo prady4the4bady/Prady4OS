@@ -665,6 +665,15 @@ Design only; no P6 code exists when this is written. It is read from P5's head (
 - P6 measures first.
 - If it is over, the remedy is a DDR-1183 amendment in its own PR, merged before P6: the stage-2 read window goes from 52 to 53 chunks (+32 KiB), in `boot/stage2/stage2.asm`. The gate's own text says the PT_HI ceiling holds up to about 54 chunks. Code is not squeezed to fit.
 
+**As built (P6 code, read against T1–T8).**
+- **Entry keeps the wake race closed.** `sched_nohz_enter` clears IF on both paths: the stop, and the refusal (not an AP, `g_nohz` unset, or `hrt_nohz_enter` refused). A wake IPI sent after the `rq_has_ready()` re-check then stays pending until the idle loop's `sti; hlt`, and breaks it, as before P6.
+- **`hrt_nohz_enter` refuses** unless the timer is periodic, no P2 slot is pending and no tick is latched. A sleeper's one-shot is a non-periodic phase, so the phase test alone already keeps P2's timer; mutant C12b removes both tests.
+- **The clock moves by `max(k, 1)` in all.** T5's entry adds 1, so the exit adds `k - 1` (T4 said `k`; that would count every stop one tick long). The PSI window records the same ticks, at most 100, as unstalled.
+- **RCU readers.** The only RCU reader on an AP today is `sched_timed_sweep`, inside `sched_tick`, and `hrt_irq` answers 0 while the tick is stopped. So no reader runs on a CPU with `nohz` set, which is what T5 relies on. A future reader in an interrupt path must end the stop first; this is stated, not gated.
+- **Isolation (T6)** is a per-CPU flag read by `rq_push` (unpinned threads go to the BSP), `rq_steal` and `rq_has_ready` (the CPU takes nothing but its own queue), and the unblock kick. The BSP cannot be isolated (op 6 answers `-EINVAL`).
+- **Op 8** opens interrupts around `synchronize_rcu` (syscalls run with IF clear; rcu.h rule 2), as op 3 does, and returns the grace period's length in microseconds.
+- **`[cpufreq]`** is printed once, after the boot proofs, with `nohz=1`.
+
 **Not gated in P6 (stated):**
 - the 1 s bound as a backstop: no arm loses a kick on purpose;
 - the catch-up of the K2 window and the deadline clock across a stop: no arm runs an RT or deadline thread on an isolated CPU across one;
