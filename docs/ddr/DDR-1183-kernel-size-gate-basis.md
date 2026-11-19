@@ -58,3 +58,35 @@ So 52 is the largest raise that keeps the invariant with room to spare. The next
 - **Boot:** every BIOS-path smoke gate boots through the 52-chunk read, and that run is the evidence that stage 2 still loads and copies correctly.
 - **What is not exercised yet:** the window's new tail, from 1,572,864 to 1,703,936 B, is first used when `kernel.bin` grows past 1,572,864 B. No current gate reads kernel bytes there. The first PR that crosses that size is the first evidence for the tail, and it must say so.
 - Emulated (QEMU, SeaBIOS) only; not verified on real hardware. Real firmware INT13 extended reads of 64 sectors are what DDR-733 already relies on, and that is unchanged.
+
+## Amendment 1 (2026-11-19): 52 -> 53 chunks
+
+**Why.** The binding build, `RCU_TORTURE=1`, reached **1,704,330 B**, 394 B over the 1,703,936 B gate. That is DDR-1208 (virtio-blk bounce buffers) on top of C1.5 P5. `.text` ends 23 B past a page boundary (`0x78017`), and section padding to 4 KiB adds the rest. DDR-1188 Amendment 7 had already recorded the remedy: raise the window, do not squeeze code to fit.
+
+**The coupled numbers, re-checked** (the table in §1):
+
+| # | Number | Before | After |
+|---|---|---|---|
+| 1 | chunk count and `KIMG_SIZE` (`stage2.asm`) | 52 | **53** |
+| 2 | size gate (`Makefile`) | 1,703,936 B | **1,736,704 B** |
+| 3 | disk image | 2 MiB | unchanged (holds 63 chunks) |
+| 4 | DDR-831 scratch sector 4095 | read ends at LBA 3345 | read ends at LBA 3409; still clear |
+| 5 | installer `17 + kernel sectors < 4096` | holds | holds (3409 < 4096) |
+| 6 | `KIMG_WINDOW` (`kernel/boot_info.h`) | 0x1A0000 | **0x1A8000**; 8 MiB + 0x1A8000 = 0x9A8000, still inside its 2 MiB page |
+| 7 | PT_HI (2 MiB span) | — | unchanged; see below |
+
+**PT_HI, measured, not assumed.**
+- The BSS is now **324,928 B**, up from 223,414 B when this record was written.
+- A full 53-chunk window plus that BSS ends at phys **0x5F7540, 35,520 B under 0x600000**.
+- §1 called a 38,730 B margin "too little for a BSS that grows with features". This raise is therefore not free headroom. It spends most of the remaining span.
+- What keeps it safe is that the ceiling is **build-enforced**: the Makefile check after the size gate fails any build whose image plus BSS ends past phys 0x600000.
+- So the next growth of either the image or the BSS by more than about 35 KB needs PT_HI extended in `stage2.asm` and `boot/uefi/loader.c`. The build will say so; nothing silently breaks.
+
+**The coupling assertion (§2) is unchanged.** It reads all three numbers, so S1 and S2 still apply. Checked locally on this change: `mov cx, 52` with `KIMG_SIZE` and the gate at 53 fails the build with the DDR-1183 message.
+
+**Evidence.**
+- Every BIOS-path gate boots through the 53-chunk read.
+- The window's new tail, 1,703,936 to 1,736,704 B, is first read by a kernel larger than 1,703,936 B. On this PR alone, no kernel is that large (the binding build is 1,700,234 B).
+- The first evidence for the tail is DDR-1208's `smoke-rcu` run, whose kernel is 1,704,330 B. That PR must say so.
+
+**The UEFI path** loads the exact file size and is unaffected. QEMU only, not verified on real hardware.
