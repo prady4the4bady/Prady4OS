@@ -76,7 +76,7 @@ Status: IN PROGRESS. Needs: C1.1, C1.2, C1.3. Merged: #76 `3358b35` (P1c, DDR-11
 Exit gate: threads and lock gates (names TBD) incl. race stress, plus the three DDR-1177 items above.
 
 ### C1.5 Scheduler classes
-Status: IN PROGRESS (P1 to P4 of 6 merged; DDR-1188 §3). Needs: C1.4.
+Status: IN PROGRESS (P1 to P5 of 6 merged; DDR-1188 §3). Needs: C1.4.
 - [x] **P1, the time ABI** (DDR-1188 P1, Amendments 1–2): #130 `ec6187d`. `CLOCK_MONOTONIC` and `CLOCK_REALTIME` on the TSC through the vDSO (K7), `SYS_CLOCK_GETTIME` (120), `SYS_NANOSLEEP` (121), the per-AP TSC skew measurement, and gate `smoke-schedclass` arms A, B, B2 and B3.
   - Green on the final head `5317bf5` (run [43775518109](https://github.com/prady4the4bady/Prady4OS/actions/runs/43775518109)).
   - Mutants, each built on `5317bf5` and red: C1 on arm A (`back=110`, run 43790409362); C2 on arm B (`slept_ok=1`, run 43790413646); C2b on arm B2 and also B3 (`usr1_ms=5008 eintr=0`, run 43775724179); C2c on arm B3 only (`term_ms=5009`, run 43775726375).
@@ -98,7 +98,11 @@ Status: IN PROGRESS (P1 to P4 of 6 merged; DDR-1188 §3). Needs: C1.4.
   - Green on the final head `b869d4e` (run [44398576450](https://github.com/prady4the4bady/Prady4OS/actions/runs/44398576450): I `rc=0,0,-16,0,0`, J `afirst=100 of 100`, Q `w=90,90,90`).
   - Mutants on `b869d4e`, each red on its own arm only: C9 on I (`rc=0,0,0,0,0`, run [44398599436](https://github.com/prady4the4bady/Prady4OS/actions/runs/44398599436)), C10 on J (`afirst=0 of 100`, run [44403448352](https://github.com/prady4the4bady/Prady4OS/actions/runs/44403448352)), C17 on Q (`w=5,5,5`, run [44407139339](https://github.com/prady4the4bady/Prady4OS/actions/runs/44407139339)).
   - Not gated (Amendment 5): deadline inheritance through a `kmutex`, the work-conserving run of a CBS-throttled thread, the wake rule's keep-the-deadline branch, `-EBUSY`/`-EINVAL` paths, share release on `tcb` free, preemption between two deadline threads. Two minor review notes (CodeRabbit on #140) are fixed on P5. QEMU (TCG, 4 vCPU) only, not verified on real hardware.
-- [ ] pressure stall information (CPU, memory, I/O)
+- [ ] pressure stall information (CPU, memory, I/O). **CPU and I/O done (P5); memory waits for C2.1 (DDR-1188 §2):**
+  - **P5** (DDR-1188 Amendment 6): #145 `fa96706`. `some` over a 100-tick sliding window: per CPU (a READY thread waiting, excluding a thread queued by its own `yield()`), and system-wide for virtio-blk reads (from submit until completion or timeout). `SYS_PSI` (NSI 124). It also carries two P4 review fixes (`rt_tick` spent budget, the `rq_pop` K2 fallback).
+  - Green on the final head `40f1f39` (run [44482663825](https://github.com/prady4the4bady/Prady4OS/actions/runs/44482663825): K `load=100 idle=0`, O `peak=7 after=0`).
+  - Mutants on `40f1f39`: C11 red on K (`load=0`, run [44482747067](https://github.com/prady4the4bady/Prady4OS/actions/runs/44482747067)), C11b red on K0 and O (`idle=100`, `after=51`, run [44482849701](https://github.com/prady4the4bady/Prady4OS/actions/runs/44482849701)), C15 red on O (`peak=0`, run [44488552525](https://github.com/prady4the4bady/Prady4OS/actions/runs/44488552525)).
+  - Not gated (Amendment 6): the yield exclusion and its timing, I/O sampling only on CPU 0, writes and flushes, the busy-lock sample, the two carried P4 fixes, op 5 keeping its buffer after a timeout. QEMU (TCG, 4 vCPU) only, not verified on real hardware.
 - [ ] CPU frequency and tickless timers, high-resolution clocks
 Exit gate: scheduling-class gate (name TBD).
 
