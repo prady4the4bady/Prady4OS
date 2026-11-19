@@ -35,6 +35,8 @@ Status: design, then code in the same PR. Found reviewing #145 (CodeRabbit on `k
 - **The head cannot be reused meanwhile.** The chain's descriptors are freed only when the late completion is reaped (`complete()` calls `virtq_free_chain()` after `reap_head()`). DDR-1160's guarantee therefore holds by construction: nobody else owns the slot until the old head is gone.
 - **Limit, stated:** a device that never completes an orphaned request keeps that slot forever. After 8 such timeouts every submitter's slot wait times out (`-EIO`), which is how a hung device already fails today.
 
+**D2a. With P5's I/O pressure (#145).** P5 added a per-request flag `req[s].psi`, lowered once by the completion or the timeout, whichever comes first. The timeout path lowers it before the slot is held, so an orphan's late completion finds it already 0 and lowers nothing. Exactly once still holds. P5's note that "a late completion finds no slot" no longer applies: it now finds the held slot, with the flag already cleared.
+
 **D3. Callers do not change.** Op 5's leak-on-`-EIO` from #145 becomes unnecessary but stays harmless, and it can be removed later.
 
 **Not taken:**

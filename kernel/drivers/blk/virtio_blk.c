@@ -47,6 +47,7 @@ struct virtio_blk_req {
 struct vreq {
     volatile int  used;
     volatile int  done;
+    volatile int  psi;    /* DDR-1188 A6 P1: this read still counts as I/O pressure */
     volatile int  orphan;   /* DDR-1208 D2: timed out; the device still owns it */
     uint64_t      bounce;   /* DDR-1208 D1: this slot's DMA buffer */
     struct tcb   *waiter;
@@ -165,6 +166,10 @@ static void reap_head(struct vblk *v, int head) {
     /* DDR-1148 sec.4: a stale completion for a slot that moved on. */
     if (!v->req[s].used || v->req[s].head != head)
         v->late++;
+    if (v->req[s].psi) {                         /* DDR-1188 A6 P1: the stall ends at */
+        v->req[s].psi = 0;                       /* completion, not when the issuer runs */
+        __atomic_sub_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
+    }
     v->req[s].done = 1;                          /* wake THIS request's submitter */
     if (v->req[s].waiter) {
         struct tcb *w = v->req[s].waiter;
@@ -444,6 +449,13 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
     uint64_t dest_t0 = 0;
     { struct percpu *dp = percpu_get(v->dest_cpu_idx);
       if (dp) dest_t0 = dp->ticks; }
+    /* DDR-1188 A6 P1: a thread waiting for a read is I/O pressure until the
+     * read completes (reap_head) or this wait times out. req[s].psi, under
+     * compl_lock, makes whichever comes first lower the count, once. */
+    int psi_io = (type == VIRTIO_BLK_T_IN);
+    if (psi_io)
+        __atomic_add_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
+    v->req[s].psi = psi_io;
     while (!v->req[s].done) {
         vown_clear(v);                           /* DDR-1138: see the slot wait */
         int _to = sched_block_timeout(&v->compl_lock, &v->req[s].done, 500);
@@ -514,11 +526,19 @@ static int submit(struct vblk *v, uint64_t lba, uint64_t data_phys,
                 kline_s(&k, "\r\n");
                 kline_emit(&k);
             }
+            if (v->req[s].psi) {                 /* DDR-1188 A6 P1: timed out */
+                v->req[s].psi = 0;
+                __atomic_sub_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
+            }
             data_timeout_release(v, s);          /* DDR-1160 */
             vown_clear(v);                       /* DDR-1138 */
             spin_unlock_irqrestore(&v->compl_lock, fl);
             return -EIO;
         }
+    }
+    if (v->req[s].psi) {                         /* not reaped through reap_head */
+        v->req[s].psi = 0;
+        __atomic_sub_fetch(&g_psi_io_wait, 1, __ATOMIC_RELAXED);
     }
 
     int ok = (*status == 0);

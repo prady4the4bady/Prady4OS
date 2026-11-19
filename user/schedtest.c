@@ -16,6 +16,7 @@
  * C1.5 P3 arms (DDR-1188 Amendment 4): D (C4), E (C5), F (C6), G (C7),
  * H (C8, C8b; with user/schedagt.c), N (C14), P (C16, DDR-1193 D1).
  * C1.5 P4 arms (DDR-1188 Amendment 5): I (C9), J (C10), Q (C17).
+ * C1.5 P5 arms (DDR-1188 Amendment 6): K (C11), K0 (C11b), O (C15).
  *
  * `[sched]` lines are data; the PRADYOS_SCHED_* lines are the sentinels, each
  * emitted by one write (DDR-1182 §3.1). QEMU (TCG) only; not verified on real
@@ -1060,6 +1061,94 @@ static void arms_p4(void) {
     nsi(SYS_SCHED_CPU, 2, 0, 0);
 }
 
+/* ---- C1.5 P5 (DDR-1188 Amendment 6): pressure stall information ----
+ * SYS_PSI(res, cpu) returns the stalled ticks of the last 100: res 0 is a
+ * CPU's queue holding a READY thread, res 1 a thread waiting for a disk read. */
+#define PSI_CPU   0
+#define PSI_IO    1
+#define K_MIN     50
+#define K0_MAX    5
+
+static long psi(long res, long cpu) {
+    return nsi(SYS_PSI, res, cpu, 0);
+}
+
+static void sleep_ms(long ms) {
+    struct ts req = { ms / 1000, (ms % 1000) * (long)MS };
+    nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
+}
+
+/* ---- arms K (C11) and K0 (C11b): CPU pressure on CPU 2 ---- */
+struct k_state { volatile long stop, ready, done, pinned; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void k_spin(long arg) {
+    struct k_state *k = (struct k_state *)arg;
+    __atomic_add_fetch(&k->pinned, pin(P4_CPU), __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&k->ready, 1, __ATOMIC_ACQ_REL);
+    while (!__atomic_load_n(&k->stop, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    __atomic_add_fetch(&k->done, 1, __ATOMIC_ACQ_REL);
+    texit();
+}
+
+static void arms_k(long *k_ok, long *k0_ok) {
+    struct k_state *k = page();
+    say("[sched] K base=%d,%d,%d,%d\n", psi(PSI_CPU, 0), psi(PSI_CPU, 1), psi(PSI_CPU, 2),
+        psi(PSI_CPU, 3));                   /* data: every CPU before the load */
+    spawn(k_spin, (long)k);
+    spawn(k_spin, (long)k);
+    long ready = await_eq(&k->ready, 2, 10);
+    sleep_ms(1500);                         /* a full window with both spinning */
+    long load = psi(PSI_CPU, P4_CPU);
+    __atomic_store_n(&k->stop, 1, __ATOMIC_RELEASE);
+    long done = await_eq(&k->done, 2, 10);
+    sleep_ms(1500);                         /* the window has forgotten them */
+    long idle = psi(PSI_CPU, P4_CPU);
+    *k_ok = ready && k->pinned == 2 && load >= K_MIN;
+    *k0_ok = done && load >= 0 && idle >= 0 && idle <= K0_MAX;
+    say("[sched] K load=%d idle=%d pinned=%d done=%d\n", load, idle, k->pinned, done);
+}
+
+/* ---- arm O (C15): I/O pressure during a 16 MiB disk read ---- */
+struct o_state { volatile long done, rc; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void o_reader(long arg) {
+    struct o_state *o = (struct o_state *)arg;
+    o->rc = nsi(SYS_SCHED_CPU, 5, 16, 0);   /* probe op 5: read 16 MiB */
+    __atomic_store_n(&o->done, 1, __ATOMIC_RELEASE);
+    texit();
+}
+
+static long arm_o(void) {
+    struct o_state *o = page();
+    spawn(o_reader, (long)o);
+    long peak = 0, polls = 0;
+    uint64_t end = mono() + 30 * NS_PER_SEC;
+    while (!__atomic_load_n(&o->done, __ATOMIC_ACQUIRE) && mono() < end) {
+        long v = psi(PSI_IO, 0);
+        if (v > peak) peak = v;
+        polls++;
+        sleep_ms(10);
+    }
+    long v = psi(PSI_IO, 0);                /* the last ticks of the read */
+    if (v > peak) peak = v;
+    long done = o->done;
+    sleep_ms(2000);                         /* §4: back to 0 within 2 s */
+    long after = psi(PSI_IO, 0);
+    say("[sched] O peak=%d after=%d rc=%d polls=%d done=%d\n", peak, after, o->rc, polls, done);
+    return done && o->rc == 0 && peak > 0 && after == 0;
+}
+
+static void arms_p5(void) {
+    pin(0);
+    long k_ok = 0, k0_ok = 0;
+    arms_k(&k_ok, &k0_ok);
+    say("PRADYOS_SCHED_K some_ok=%d\n", k_ok);
+    say("PRADYOS_SCHED_K0 idle_ok=%d\n", k0_ok);
+    say("PRADYOS_SCHED_O io_ok=%d\n", arm_o());
+    nsi(SYS_SCHED_CPU, 2, 0, 0);
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_b2();     /* first: it forks, so before arm A creates threads */
     arm_h();      /* forks too; and SCHEDAGT is certainly still alive */
@@ -1069,6 +1158,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_m();
     arms_p3();
     arms_p4();
+    arms_p5();
     say("PRADYOS_SCHED_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }

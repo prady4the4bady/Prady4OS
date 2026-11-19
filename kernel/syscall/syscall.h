@@ -202,6 +202,7 @@
 #define SYS_NANOSLEEP      121 /* DDR-1188 A1-4: (const struct timespec *, struct timespec *rem) -> 0 | -EINVAL|-EFAULT|-EINTR */
 #define SYS_SCHED_SETSCHED 122 /* DDR-1188 A4 S3: (tid=0, policy, prio) -> 0 | -EINVAL|-EPERM; 0 OTHER, 1 FIFO, 2 RR */
 #define SYS_SCHED_GRANT    123 /* DDR-1188 A4 S3: (pid, CAP_SCHED_RT) -> 0 | -EPERM|-ESRCH|-EINVAL */
+#define SYS_PSI            124 /* DDR-1188 A6 P3: (res 0 cpu | 1 io, cpu) -> 0..100 | -EINVAL */
 #define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */
