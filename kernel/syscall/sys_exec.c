@@ -165,7 +165,7 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
      * VMM_MMAP_BASE here). Mutant D2b puts that back; arm B catches it. */
     t->mm->stack_top = lay.stack_top;
     t->mm->mmap_base = lay.mmap_base;
-    t->mm->mmap_next = lay.mmap_base;
+    t->mm->mmap_next = VMM_MMAP_BASE;           /* MUTANT D2b: the old fixed reset */
 
     /* Activate the new AS before freeing the old one — never free the live CR3. */
     __asm__ volatile("mov %0, %%cr3" :: "r"(new_as) : "memory");
