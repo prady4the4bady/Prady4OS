@@ -65,7 +65,7 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 **D8. The shipped kernel stays byte-identical.**
 - `psi_tick` and `steal_pass` (`kernel/proc/sched.c`) take a run-queue lock with `__atomic_test_and_set(&q->lock.v, ...)` and release it with `spin_unlock`. The checker would never see the acquire and would count each release as `unmatched`, so in the checking build they call `spin_trylock`.
 - **Measured:** making that change unconditionally, with the futex and `kmutex` class sites, kept every function's size but changed the bytes of five (`psi_tick` 234, `steal_pass` 245, `kmutex_lock` 254, `kmutex_unlock` 345, `bucket` 17): register allocation, not behaviour. Those five sites therefore keep their old form under `LOCKDEP=0`.
-- Result: the default `kernel.bin` built from this tree is identical to `dev/phase1` `d4ba5d7` (sha256 `12c20ffb823fcea0…`, 1,687,946 B, `cmp` clean, local build). Code that DDR-1047 kept off the hot path for OPEN-2's sake is not touched.
+- Result: the default `kernel.bin` built from this tree is identical to `dev/phase1`'s, measured twice with `cmp` on local builds: against `d4ba5d7` (sha256 `12c20ffb823fcea0…`, 1,687,946 B), and after `dev/phase1` `0ae6251` (#150, C1.5 P6) was merged in, against that (sha256 `26f99e184bfd3057…`, 1,692,042 B). Code that DDR-1047 kept off the hot path for OPEN-2's sake is not touched.
 
 **D9. Call sites are resolved offline.** The printed call sites are kernel addresses. They are resolved against that build's `kernel.elf` with `tools/ci/sym_at.sh` (CLAUDE.md non-negotiable 14), never with awk.
 
@@ -99,8 +99,14 @@ Each mutant must be red on its own arm; red on others too is allowed. LD5 runs o
 
 ## 5. Cost and size
 
-- **Default build:** byte-identical to `dev/phase1` `d4ba5d7` (D8: sha256 `12c20ffb823fcea0…`, 1,687,946 B, local build).
-- **`LOCKDEP=1` build** (local, this head): `kernel.bin` 1,700,234 B, 36,470 B under the 1,736,704 B gate. Its BSS grows by about 15.9 KB: the class table 4 KiB, the three 128 × 128-bit graph matrices 2 KiB each, the per-CPU fallback stacks 4,224 B, the report record 1 KiB. Each `struct tcb` grows by 264 B (16 held entries). `__bss_end` lands at phys 0x5EE500, 72,448 B under the PT_HI ceiling (the default build: 0x5E76C0, 100,672 B under). CI prints the figures of record in `flag-gates (smoke-lockdep)`.
+- **Default build:** byte-identical to `dev/phase1` `0ae6251` (D8: sha256 `26f99e184bfd3057…`, 1,692,042 B, local build).
+- **`LOCKDEP=1` build** (local, on the P6 base): `kernel.bin` 1,704,330 B, 32,374 B under the 1,736,704 B gate, the same as the `RCU_TORTURE=1` build. Its BSS grows by 16,000 B:
+  - the class table, 4 KiB;
+  - the three 128 × 128-bit graph matrices, 2 KiB each;
+  - the per-CPU fallback stacks, 4,224 B;
+  - the report record, 1 KiB.
+- Each `struct tcb` grows by 264 B (16 held entries).
+- `__bss_end` lands at phys 0x5EF940, 67,264 B under the PT_HI ceiling; the default build's lands at 0x5E8AC0, 95,552 B under. CI prints the figures of record in `flag-gates (smoke-lockdep)`.
 - Each acquire in that build calls the checker out of line: an interrupts-off walk of the thread's held stack (depth is small) and one bit test per held lock. Under TCG this is a cost in instructions, not a measured speed claim (CLAUDE.md non-negotiable 15).
 
 ## 6. Not covered (stated, not implied)
