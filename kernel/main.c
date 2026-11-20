@@ -2329,6 +2329,23 @@ static void fs_test_thread(void *arg) {
                 smpsched_proof();    /* ADR-031 cap-2b: a ring thread runs on an AP */
                 smppreempt_proof();  /* ADR-031 cap-3: an AP's timer preempts */
                 smpresched_proof();  /* DDR-SMP-rq-3: unblock kicks an idle AP */
+                /* DDR-1188 A7 (C1.5 P6). T2 (a): APs may stop their tick when
+                 * idle only after the proofs above measured a ticking AP.
+                 * T8: report the frequency-control features; no control. */
+                __atomic_store_n(&g_nohz, 1, __ATOMIC_RELEASE);
+                {
+                    uint32_t a, b, c, d;
+                    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0u), "c"(0u));
+                    uint32_t maxl = a, hwp = 0;
+                    if (maxl >= 6) {
+                        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(6u), "c"(0u));
+                        hwp = (a >> 7) & 1u;
+                    }
+                    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1u), "c"(0u));
+                    kputs("[cpufreq] hwp="); kputdec(hwp);
+                    kputs(" eist="); kputdec((c >> 7) & 1u);
+                    kputs(" nohz=1\r\n");
+                }
                 /* DDR-734: egress-allowlist match/deny self-test. Install one
                  * test rule directly (kernel-side; ring 3 uses SYS_NET_ALLOW)
                  * and prove exact-match allow + wrong-host/port deny. The rule

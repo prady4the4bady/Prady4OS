@@ -603,3 +603,99 @@ Design only; no P5 code exists when this is written. It is read from P4's head (
 **Risk.** P5 adds one queue-lock walk to every tick, stopping at the first READY entry, and two atomics per virtio-blk read. The walk is on the scheduling path, where OPEN-2 and OPEN-12/13 live. Every P5 PR runs the whole gate set; a new `[apfreeze]` or hang signature is a stop.
 
 QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.
+
+## Amendment 7 (2026-11-18): P6 design, tickless idle on the APs
+
+Written as design before any P6 code, read from P5's head (`c15-p5` at `b8bead4`). The P6 code is in the same PR; where the code differs from the design, "As built" below says so and why.
+
+**What exists.**
+- **Who owns the clock.** Every CPU's LAPIC timer ticks at 100 Hz on vector 48 (`lapic.c`). The BSP's tick runs `timer_tick` (`idt.c`): `g_ticks`, the vDSO wall clock (10 ms added per tick), the lwIP timers, the heartbeat and its watchdogs. An AP's tick runs only `sched_tick` for that CPU, plus ring-3 signal delivery.
+- **How an AP sleeps.** The AP idle loop (`sched_ap_enter`) runs `schedule()`, sets `pc->idle`, re-checks `rq_has_ready()`, then `sti; hlt`. `rq_has_ready()` is true while ANY queue has a head that this CPU may take.
+- **How an AP is woken.** `sched_unblock` pushes the thread on the waker's own CPU and sends the wake IPI (vector 49) to the first idle CPU other than itself (only `pin_cpu` for a pinned thread). `smp_resched_one` declines the BSP, so the BSP is woken only by its timer. The code says so: "the timer remains the backstop if none is (visibly) idle".
+- **Who reads an AP's `percpu.ticks`:**
+  - the K2 window (`ticks / RT_WIN_TICKS`) and the PSI ring (`ticks % 100`), as a clock;
+  - `dl_now`, the deadline clock of a thread pinned there (A5), as a clock;
+  - RCU (`rcu.c`), as the quiescent-state counter: a grace period waits until every other CPU's counter has moved. Its stall clock is `RCU_STALL_TICKS` = 1 000;
+  - the BSP heartbeat's AP freeze check (`idt.c`): every 500 ticks it compares each AP's counter with the last heartbeat. An unchanged counter prints `[apfreeze]`, which is in `GLOBAL_FORBIDDEN`. That means every gate fails;
+  - the boot check `smppreempt_proof` (`main.c`): an AP's counter must move within 30 BSP ticks, or it prints `ap preempt FAIL`, which is in `GLOBAL_FORBIDDEN`.
+- **The gate VM never idles.** Six unpinned busy-polling threads (A6 P1) keep a READY entry on some queue almost always. With `rq_has_ready()` reading every queue, no AP reaches `hlt` in an ordinary gate run. §4's arm L ("an idle CPU takes fewer than 5 ticks in one second") cannot be met as written, so this amendment restates it (T6).
+
+**Decisions (the safe option in each case; operator order 6761846242).**
+- **T1. APs only.** The BSP's tick is the global clock (`g_ticks`, the vDSO wall time, the heartbeat). It also samples the PSI I/O window (A6), and nothing but its timer wakes it. It keeps its periodic tick.
+- **T2. Entry.** In the AP idle loop, after `rq_has_ready()` reads false and with interrupts off, the AP stops its tick only when all of these hold:
+  - (a) `g_nohz` is set. It is set after the boot self-checks (`smpresched_proof`), so `smppreempt_proof` still measures a ticking AP;
+  - (b) no P2 one-shot slot is pending on this CPU (`npend == 0`). P2 owns the timer while a sleeper waits;
+  - (c) nothing is READY that this CPU may take, which `rq_has_ready()` already established.
+  - A K2-throttled RT thread or a CBS-throttled deadline thread is still a queued READY entry, so an AP with one never idles. A1-5's replenishment rule and A5's rule therefore hold by construction, with no extra timer.
+- **T3. A bounded stop.** The AP programs one LAPIC one-shot of `NOHZ_MAX` = 100 ticks (1 s) and halts. It never stops the tick indefinitely:
+  - A push that sends no kick (a preempted thread re-queued on a busy CPU, a steal imbalance) is still noticed within 1 s. The backstop degrades; it does not vanish.
+  - The freeze check (500 ticks) and the RCU stall clock (1 000) keep a margin of at least 5×.
+- **T4. Exit and catch-up.** Any interrupt ends the `hlt`: the wake IPI, a device, or the one-shot. With interrupts off, the idle loop then:
+  - computes `k`, the whole ticks elapsed since entry, from the TSC (`ktime_mono_ns`);
+  - adds `k` to `percpu.ticks`, so the K2 window, the deadline clock, RCU and the freeze check see time pass;
+  - records `min(k, 100)` unstalled ticks in the CPU's PSI window (an idle CPU is not stalled);
+  - restores the periodic timer.
+  - A new P2 phase, `HR_NOHZ`, makes `hrt_irq` treat the one-shot's own interrupt as no tick, so `sched_tick` does not run for it. A late periodic interrupt racing the restore counts as one extra tick, as P2's `hr_irr48` case already does.
+- **T5. RCU: an extended quiescent state.**
+  - **Entry:** the AP adds 1 to `percpu.ticks` (sequentially consistent), then sets `pc->nohz`.
+  - **Exit:** it advances `ticks` by `k` (T4), then clears `pc->nohz`.
+  - **`rcu.c`:** the snapshot skips a CPU whose `nohz` is set, because an idle CPU holds no read section. A CPU that enters `nohz` after the snapshot has already moved its counter.
+  - **Why it is needed:** without it, every `synchronize_rcu` waits up to 1 s for a sleeping AP. The tcb and kernel-stack frees that DDR-1207 measured on #135 would wait with it.
+- **T6. The gate's idle CPU: a probe-only isolate op.** `SYS_SCHED_CPU` op 6 `(cpu, on)` exists only under `g_sched_probe` (as ops 3–5) and answers `-ENOSYS` otherwise. While a CPU is isolated:
+  - `rq_push` sends an unpinned thread aimed at it to the BSP instead. That covers every push path, including `schedule()` re-queuing a preempted unpinned thread;
+  - `steal_pass` on that CPU takes nothing;
+  - the unblock kick skips it;
+  - turning isolation on moves its queued unpinned entries to the BSP.
+  - An isolated CPU therefore runs only threads pinned to it. This is a test hook, not an `isolcpus` feature, and it is not claimed as one.
+- **T7. Counting interrupts.** A per-CPU count of vector-48 interrupts, `tirq`, read by op 7 `(cpu)`. Arm L counts interrupts, not `ticks`, because T4 advances `ticks` without an interrupt.
+- **T8. CPU frequency (K5).** At boot P6 reads CPUID leaf 6 (HWP, EAX bit 7) and leaf 1 (EIST, ECX bit 7), and prints `[cpufreq] hwp=<0|1> eist=<0|1>`. There is no frequency control. Under TCG both are expected to read 0; this is to be measured. Labelled not verified on real hardware.
+
+**Arms and mutants** (one mutant per arm, rule 3; §4's single arm L is split three ways):
+
+| Arm | Assertion | Mutant | What the mutant breaks |
+|---|---|---|---|
+| L | CPU 3 isolated, nothing pinned to it, 1 s to drain: CPU 3 takes fewer than 5 timer interrupts in the next second | C12 | the tick is never stopped (about 100) |
+| L1 | a thread pinned to isolated CPU 3 sleeps 20.1 ms with `nanosleep`, 50 times: at least 40 of the 50 end less than 2 ms late, and none more than 2 ticks (20 ms) late (redefined after the first CI run, below) | C12b | the stop ignores the pending sleeper's deadline (T2 b as built), so the sleep ends on nanosleep's tick backstop, about one tick late |
+| L2 | with CPU 3 isolated and idle, 20 grace periods (op 8, a probe-only `synchronize_rcu` that returns its duration) each finish within 50 ms | C12c | no extended quiescent state: each grace period waits for CPU 3 (up to 1 s) |
+
+- **Vacuity, read from the code before writing:** on the P5 tree ops 6–8 answer `-ENOSYS`, so all three arms fail at their first call. C12 leaves L1 and L2 green (the tick keeps running), C12b leaves L and L2 green (no slot is pending in either), and C12c leaves L and L1 green. So each mutant is red on its own arm only, which is what rule 3 asks.
+- New sentinels: `PRADYOS_SCHED_L nohz_ok=1`, `PRADYOS_SCHED_L1 wake_ok=1`, `PRADYOS_SCHED_L2 eqs_ok=1`.
+
+**Size.** Designed against the 52-chunk gate (1,703,936 B), with a window raise as the stated remedy. That raise came first, for DDR-1208 (DDR-1183 Amendment 1, #147: 53 chunks, 1,736,704 B). Measured on the P6 code, built locally:
+- default `kernel.bin` 1,687,946 B, unchanged by P6: the code fits the existing page slack;
+- `RCU_TORTURE=1` 1,704,330 B, also unchanged, 32,374 B under the gate.
+- CI prints the figures of record.
+
+**As built (P6 code, read against T1–T8).**
+- **Entry keeps the wake race closed.** The idle loop clears IF before it sets `pc->idle` and re-checks `rq_has_ready()`, and keeps it clear through the stop or its refusal until `sti; hlt`. A wake IPI sent after the re-check stays pending and breaks the `hlt`. As first written, IF was cleared only after the re-check, so an IPI taken in between was consumed and a stopped tick could sleep the full bound with work queued (CodeRabbit on #150; before P6 the same window cost at most one tick). The same check now also reads the `smp_run_on` mailbox: a job posted after the loop's mailbox read, whose IPI was taken before the `cli`, is work, so the stop is not entered (CodeRabbit on #150, third round; the same one-tick-to-1 s widening). Not gated.
+- **The deadline clock during a stop.** A CBS wake from another CPU (`sched_unblock`, then `dl_wake`) reads `dl_now`, the pinned CPU's `ticks`, which a stop freezes. While `nohz` is set, `cpu_now` (used by `dl_now`, and by the deadline rejoin's read of the CPU it left) returns the value the exit will catch up to: the count before entry plus `max(k, 1)`, with `k` from CLOCK_MONOTONIC since entry. The exit moves `ticks` before it clears `nohz`, so the two readings agree. The entry writes the base and start time inside an odd generation count, and a reader retries on a change, so it never mixes two stops (CodeRabbit on #150, both rounds). The exit runs inside the generation too, and the reader checks it again after its time sample (CodeRabbit on #150, third round): a reader that raced an exit retries, so the clock never reads one tick ahead and then steps back. Not gated: no arm runs a deadline thread across a stop.
+- **T2 (b) revised: a pending sleeper does not prevent the stop.** As designed, the stop refused while any P2 slot was pending. Measured on the first local run, arm L failed with 100 interrupts in its second: every stop was refused on `npend`, because `hrt_arm` takes a slot for every `nanosleep`, so some sleeper almost always holds one. As built:
+  - `hrt_nohz_enter` refuses only when the timer is in a one-shot phase (P2 owns it), a tick is latched, or the earliest deadline is inside the next tick.
+  - Otherwise the one-shot counts to the earlier of the earliest deadline and the 1 s bound.
+  - While stopped, the stop's interrupt expires due sleepers (`hr_expire`), then answers 0.
+  - On exit, a sleeper due within a tick gets P2's one-shot, as `hrt_irq`'s tick path does. Without that, a LAPIC interrupt slightly early by the TSC left the sleeper a whole tick late (L1 measured 10 ms, then 0.4 ms with the one-shot).
+  - Mutant C12b now ignores the sleeper's deadline (the count always runs to the bound).
+- **L1 as first built did not see T2 (b); C12b survived.** On `d83db5b`, C12b's run was green (run [44676499866](https://github.com/prady4the4bady/Prady4OS/actions/runs/44676499866): `L1 late_us=4844 valid=50`, `wake_ok=1`). The line above, "the L1 sleeper waits for the bound", was wrong. The mechanism, read from the code and then measured:
+  - `nanosleep` keeps a tick backstop: each block is `rem / 10 ms + 1` ticks of `g_ticks` (`sched_block_timeout`), and `sched_timed_sweep` runs in every ticking CPU's `sched_tick`. The BSP never stops, so the backstop is always serviced.
+  - For a 20 ms sleep, `rem` is just under 20 ms, so the backstop is 2 ticks. It fires at or before the deadline, whatever the phase.
+  - Its wake kicks CPU 3 out of any stop. The exit then finds the sleeper due within a tick and arms P2's one-shot, which ends the sleep on time. So the wake was precise whether or not the stop counted to the deadline.
+  - Measured locally with a diagnostic print (not committed), across L1's 50 sleeps on CPU 3: correct code `stops=50 refused=99 irqs=100`, 50 of 50 under 1 ms late; C12b `stops=49 refused=101 irqs=100`, 44 of 50 under 1 ms late. Same counts, nearly the same timing: the stop's own count was not what ended the sleeps.
+  - **Redefined.** The sleep is 20.1 ms. The backstop is then 3 ticks and lands after the deadline, unless the sleep blocks in the last 0.1 ms before a BSP tick (then it is at most 0.1 ms early, and the exit's one-shot makes that wake precise). Without T2 (b) the sleep ends on the backstop: about 9.9 ms late, less the wake latency. With it, the stop's interrupt ends it at the deadline. The arm counts the samples that end less than 2 ms late (`fine=`) and needs 40 of 50; the old bound, none more than 2 ticks late, stays. 40 leaves room on both sides: the correct code measured 50 of 50 under 1 ms in each local run, while a backstop wake is under 2 ms late only if its wake latency exceeds 7.9 ms.
+  - Measured on the redefined arm, local, this head: correct code `fine=50` of 50, worst 1,977 µs (`wake_ok=1`); C12b `fine=1`, worst 10,943 µs (`wake_ok=0`, red), with L and L2 green under C12b. The CI runs of record are in the PR.
+- **The clock moves by `max(k, 1)` in all.** T5's entry adds 1, so the exit adds `k - 1` (T4 said `k`; that would count every stop one tick long). The PSI window records the same ticks, at most 100, as unstalled.
+- **RCU readers.** The only RCU reader on an AP today is `sched_timed_sweep`, inside `sched_tick`, and `hrt_irq` answers 0 while the tick is stopped. So no reader runs on a CPU with `nohz` set, which is what T5 relies on. A future reader in an interrupt path must end the stop first; this is stated, not gated.
+- **Isolation (T6)** is a per-CPU flag read by `rq_push` (unpinned threads go to the BSP), `rq_steal` and `rq_has_ready` (the CPU takes nothing but its own queue), and the unblock kick. The BSP is found by `is_bsp`, not assumed to be index 0, and cannot be isolated (op 6 answers `-EINVAL`). Isolating drains the CPU's unpinned entries until none is left. A producer that read the flag just before it was set can still queue one unpinned thread there after the drain; it runs once and is re-queued to the BSP at its next `rq_push` (CodeRabbit on #150, not closed: a lock-held check in every push for a test hook).
+- **Op 8** opens interrupts around `synchronize_rcu` (syscalls run with IF clear; rcu.h rule 2), as op 3 does, and returns the grace period's length in microseconds.
+- **`[cpufreq]`** is printed once, after the boot proofs, with `nohz=1`.
+
+**Not gated in P6 (stated):**
+- the 1 s bound as a backstop: no arm loses a kick on purpose;
+- the catch-up of the K2 window and the deadline clock across a stop: no arm runs an RT or deadline thread on an isolated CPU across one;
+- the PSI catch-up;
+- the BSP, which never stops;
+- the CPUID report;
+- the isolate op's drain of queued entries (L's 1 s drain covers it only indirectly).
+
+**Risk.** The AP idle path is where OPEN-2, OPEN-12/13 and the `[apfreeze]` signatures live. In ordinary gate runs no AP reaches `hlt` (the pollers), so the stop engages almost only on the isolated CPU of arms L–L2. That is both the safety margin and a coverage gap: a real idle system exercises T2–T5 far more than CI does. Every P6 PR runs the whole gate set. A new `[apfreeze]`, `[rcu] stall` or hang signature is a stop.
+
+QEMU (TCG, 4 vCPU) only. Not verified on real hardware. This record does not close OPEN-1/2/12/13 or U1-U3.

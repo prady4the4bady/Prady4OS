@@ -21,6 +21,8 @@
 #include "kmutex.h"
 #include "blk.h"       /* DDR-1188 A6 P4: op 5 reads the boot disk */
 #include "pmm.h"
+#include "rcu.h"       /* DDR-1188 A7 arm L2: op 8 */
+#include "vdso_page.h" /* ktime_mono_ns */
 
 /* DDR-1188 A4 arm P: set by the launcher when QEMU_PROBES has schedclass;
  * SYS_SCHED_CPU ops 3 and 4 answer -ENOSYS otherwise. */
@@ -71,7 +73,7 @@ static long sys_thread_exit(long a_status, long a2, long a3, long a4, long a5, l
 }
 
 static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long a6) {
-    (void)a3; (void)a4; (void)a5; (void)a6;
+    (void)a4; (void)a5; (void)a6;
     struct percpu *pc = this_cpu();
     switch (a_op) {
     case 0:                                     /* GET */
@@ -146,6 +148,34 @@ static long sys_sched_cpu(long a_op, long a_cpu, long a3, long a4, long a5, long
         if (r != -EIO)
             pmm_free_pages(buf, 4);
         return rc;
+    }
+    case 6:                                     /* DDR-1188 A7 T6: isolate a_cpu (a3: on) */
+        if (!g_sched_probe)
+            return -ENOSYS;
+        return sched_iso_set((int)a_cpu, a3 != 0) == 0 ? 0 : -EINVAL;
+    case 7: {                                   /* DDR-1188 A7 T7: a_cpu's timer interrupts */
+        if (!g_sched_probe)
+            return -ENOSYS;
+        if (a_cpu < 0 || a_cpu >= PERCPU_MAX)
+            return -EINVAL;
+        struct percpu *tp = percpu_get((uint32_t)a_cpu);
+        if (!tp || !tp->present)
+            return -EINVAL;
+        if (a3 >= 1 && a3 <= 3)                 /* arm L data */
+            return (long)(sched_nohz_stat((int)a_cpu, (int)a3) & 0x7FFFFFFFFFFFull);
+        return (long)(__atomic_load_n(&tp->tirq, __ATOMIC_RELAXED) & 0x7FFFFFFFFFFFull);
+    }
+    case 8: {                                   /* DDR-1188 A7 arm L2: one grace period, in us */
+        if (!g_sched_probe)
+            return -ENOSYS;
+        /* Syscalls run with IF clear (SFMASK); synchronize_rcu needs IF set
+         * (rcu.h rule 2) and yields while it waits. */
+        __asm__ volatile("sti" ::: "memory");
+        uint64_t t0 = ktime_mono_ns();
+        synchronize_rcu();
+        uint64_t d = ktime_mono_ns() - t0;
+        __asm__ volatile("cli" ::: "memory");
+        return (long)(d / 1000);
     }
     }
     return -EINVAL;

@@ -18,6 +18,8 @@
 #include "signal.h"            /* DDR-1090: SIGKILL, honoured at the yield choke point */
 #include "aether.h"            /* DDR-1171: rollback log replay/free */
 #include "rcu.h"               /* DDR-1200: rule-1 check in schedule() */
+#include "lapic.h"             /* DDR-1188 A7: hrt_nohz_enter / exit */
+#include "vdso_page.h"         /* DDR-1188 A7: ktime_mono_ns for dl_now */
 
 /* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
  * reader -- init_idle, which records its base as idle0's kstack_base so
@@ -159,6 +161,26 @@ static struct psi_win g_psi_io;
 static uint8_t g_psi_last[PERCPU_MAX];    /* P1: the last sample, for a busy queue lock */
 volatile uint32_t g_psi_io_wait;          /* P1: threads in a virtio-blk read wait */
 
+/* DDR-1188 Amendment 7 (C1.5 P6). g_nohz: APs may stop their tick when idle,
+ * set after the boot self-checks (T2 a). g_iso: the probe-only isolate op
+ * (T6): an isolated CPU runs only threads pinned to it. */
+volatile uint32_t g_nohz;
+static volatile uint8_t g_iso[PERCPU_MAX];
+/* A7 arm L data (op 7, a3 = 1..3): stops taken, stops refused by the timer,
+ * idle-loop passes that found work. */
+static volatile uint64_t g_nz_stop[PERCPU_MAX], g_nz_refuse[PERCPU_MAX], g_nz_ready[PERCPU_MAX];
+
+/* The BSP's roster index, by identity (0 on QEMU; percpu_init_bsp says
+ * correctness must not depend on that). CodeRabbit on #150. */
+static int sched_bsp_idx(void) {
+    for (int i = 0; i < PERCPU_MAX; i++) {
+        struct percpu *p = percpu_get((unsigned)i);
+        if (p && p->present && p->is_bsp)
+            return i;
+    }
+    return 0;
+}
+
 static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
     uint32_t i = (uint32_t)(tick % 100);
     uint64_t m = 1ull << (i & 63);
@@ -204,6 +226,18 @@ static void psi_tick(struct percpu *pc) {
         psi_record(&g_psi_io, t, __atomic_load_n(&g_psi_io_wait, __ATOMIC_RELAXED) != 0);
 }
 
+/* DDR-1188 A7 T4: an AP that slept with its tick stopped records the ticks
+ * it skipped as unstalled (an idle CPU is not stalled). Own CPU, interrupts
+ * off: the same writer as psi_tick. */
+static void psi_idle_catchup(struct percpu *pc, uint64_t from, uint64_t n) {
+    unsigned cpu = pc->cpu_idx;
+    if (n > 100)
+        n = 100;
+    for (uint64_t i = 0; i < n; i++)
+        psi_record(&g_psi_cpu[cpu], from + i, 0);
+    g_psi_last[cpu] = 0;
+}
+
 int psi_read(long res, long cpu) {
     if (res == 0) {
         if (cpu < 0 || cpu >= PERCPU_MAX)
@@ -219,9 +253,40 @@ int psi_read(long res, long cpu) {
 }
 
 /* DDR-1188 A5 D2: a deadline thread is pinned, so its time is its CPU's ticks. */
+/* DDR-1188 A7 (CodeRabbit on #150): a CPU's tick clock as another CPU must
+ * read it. A stopped CPU's counter is frozen, so while nohz is set the clock is
+ * the value its exit will catch up to: the count before entry plus max(k, 1).
+ * The exit moves ticks before it clears nohz, so the two readings agree. Entry
+ * and exit both run inside an odd nohz_gen (CodeRabbit on #150, d83db5b), and
+ * the generation is checked again after the time sample: a reader that raced
+ * an exit retries instead of counting a tick the exit did not, so the clock
+ * never reads one ahead and then steps back. */
+static inline uint64_t cpu_now(struct percpu *pc) {
+    for (;;) {
+        uint32_t g = __atomic_load_n(&pc->nohz_gen, __ATOMIC_ACQUIRE);
+        if (g & 1u) {
+            __asm__ volatile("pause");
+            continue;
+        }
+        uint64_t v;
+        if (!__atomic_load_n(&pc->nohz, __ATOMIC_ACQUIRE)) {
+            v = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+        } else {
+            uint64_t base = __atomic_load_n(&pc->nohz_base, __ATOMIC_RELAXED);
+            uint64_t t0   = __atomic_load_n(&pc->nohz_t0, __ATOMIC_RELAXED);
+            uint64_t k = (ktime_mono_ns() - t0) / 10000000ull;
+            v = base + (k ? k : 1);
+        }
+        /* The TSC read and the loads above complete before the check. */
+        __asm__ volatile("lfence" ::: "memory");
+        if (__atomic_load_n(&pc->nohz_gen, __ATOMIC_RELAXED) == g)
+            return v;
+    }
+}
+
 static inline uint64_t dl_now(const struct tcb *t) {
     struct percpu *pc = percpu_get((unsigned)t->pin_cpu);
-    return pc ? __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) : 0;
+    return pc ? cpu_now(pc) : 0;
 }
 
 /* A5 D3: a CBS-throttled thread is eligible again at its deadline, with a new
@@ -311,7 +376,7 @@ int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64
          * ticking at different times, so their counts differ. */
         if (t->sched_policy != SCHED_DEADLINE && t->dl_cpu >= 0 && t->dl_cpu != t->pin_cpu) {
             struct percpu *op = percpu_get((unsigned)t->dl_cpu);
-            uint64_t onow = op ? __atomic_load_n(&op->ticks, __ATOMIC_RELAXED) : ~0ull;
+            uint64_t onow = op ? cpu_now(op) : ~0ull;    /* A7: a stopped CPU's clock moves */
             t->dl_deadline = onow < t->dl_deadline ? now + (t->dl_deadline - onow) : 0;
         }
         t->dl_cpu = t->pin_cpu;
@@ -499,6 +564,8 @@ static void rq_push(int cpu, struct tcb *t) {
      * makes a thread runnable comes through here, so this is the one site. */
     if (t->pin_cpu >= 0)
         cpu = t->pin_cpu;
+    else if (cpu >= 0 && cpu < PERCPU_MAX && g_iso[cpu])
+        cpu = sched_bsp_idx();         /* DDR-1188 A7 T6: isolated, pinned threads only */
     struct rq *q = &g_rq[cpu];
 #if RCU_TORTURE
     /* RE (f): a push made by the sweep's act step tries the lock first and
@@ -1125,9 +1192,10 @@ static int rq_head_pinned_away(struct rq *q, int self) {
 static int rq_has_ready(void) {
     struct percpu *pc = this_cpu();
     int self = pc ? (int)pc->cpu_idx : 0;
+    int iso = self < PERCPU_MAX && g_iso[self];
     for (int c = 0; c < PERCPU_MAX; c++) {
-        if (!g_rq[c].head)
-            continue;
+        if (!g_rq[c].head || (iso && c != self))
+            continue;                  /* DDR-1188 A7 T6: an isolated CPU takes nothing */
         uint64_t fl;
         __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
         if (!spin_trylock(&g_rq[c].lock)) {
@@ -1202,6 +1270,8 @@ static struct tcb *steal_pass(int self, uint32_t want_node, int same) {
 }
 
 static struct tcb *rq_steal(int self) {
+    if (self >= 0 && self < PERCPU_MAX && g_iso[self])
+        return 0;                                /* DDR-1188 A7 T6 */
     struct percpu *me = percpu_get((unsigned)self);
     uint32_t node = me ? numa_node_of_cpu(me->apic_id) : 0;
     struct tcb *t = steal_pass(self, node, 1);   /* same node first */
@@ -1411,6 +1481,80 @@ void sched_init(void) {
  * schedule any READY ring thread, then sleep until the next interrupt. The
  * caller (smp_ap_entry) has already loaded this AP's IDT + enabled its LAPIC.
  * Never returns. */
+/* DDR-1188 A7 T2, T5. Clears IF and leaves it clear. Returns 1 when this
+ * AP's tick is stopped: then the RCU counter has moved once (an idle CPU is
+ * quiescent) and nohz is set. The only RCU reader on an AP runs in sched_tick,
+ * which hrt_irq suppresses while stopped, so no reader runs with nohz set; a
+ * future reader in an interrupt path must end the stop first. */
+static int sched_nohz_enter(struct percpu *pc) {
+    __asm__ volatile("cli" ::: "memory");
+    if (!pc || pc->is_bsp || !__atomic_load_n(&g_nohz, __ATOMIC_ACQUIRE))
+        return 0;
+    unsigned c = pc->cpu_idx < PERCPU_MAX ? pc->cpu_idx : 0;
+    if (!hrt_nohz_enter()) {
+        g_nz_refuse[c]++;
+        return 0;
+    }
+    g_nz_stop[c]++;
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);     /* odd: writing */
+    __atomic_store_n(&pc->nohz_t0, ktime_mono_ns(), __ATOMIC_RELAXED);
+    __atomic_store_n(&pc->nohz_base, __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST),
+                     __ATOMIC_RELAXED);
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);     /* even: stable */
+    __atomic_store_n(&pc->nohz, 1, __ATOMIC_SEQ_CST);
+    return 1;
+}
+
+/* DDR-1188 A7 T4, T5. IF clear. The clock moves by max(k, 1) ticks in all:
+ * the entry already moved it once. */
+static void sched_nohz_exit(struct percpu *pc) {
+    /* Odd before hrt_nohz_exit samples the clock: a cpu_now that sampled after
+     * this point fails its check and retries (CodeRabbit on #150, d83db5b). */
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);
+    uint64_t k = hrt_nohz_exit();
+    uint64_t t0 = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+    uint64_t add = k > 0 ? k - 1 : 0;
+    if (add)
+        __atomic_fetch_add(&pc->ticks, add, __ATOMIC_SEQ_CST);
+    psi_idle_catchup(pc, t0, add + 1);
+    __atomic_store_n(&pc->nohz, 0, __ATOMIC_SEQ_CST);
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);     /* even: stable */
+}
+
+/* DDR-1188 A7 T6, probe-only (SYS_SCHED_CPU op 6). Isolating moves the CPU's
+ * queued unpinned entries to the BSP. Not the BSP itself. */
+uint64_t sched_nohz_stat(int cpu, int which) {
+    if (cpu < 0 || cpu >= PERCPU_MAX)
+        return 0;
+    return which == 1 ? g_nz_stop[cpu] : which == 2 ? g_nz_refuse[cpu] : g_nz_ready[cpu];
+}
+
+int sched_iso_set(int cpu, int on) {
+    if (cpu < 0 || cpu >= PERCPU_MAX)
+        return -1;
+    struct percpu *p = percpu_get((unsigned)cpu);
+    if (!p || !p->present || p->is_bsp)
+        return -1;
+    __atomic_store_n(&g_iso[cpu], (uint8_t)(on ? 1 : 0), __ATOMIC_SEQ_CST);
+    if (!on)
+        return 0;
+    struct rq *q = &g_rq[cpu];
+    int bsp = sched_bsp_idx();
+    for (;;) {                         /* until no unpinned entry is left (CodeRabbit on #150) */
+        uint64_t fl = spin_lock_irqsave(&q->lock);
+        struct tcb *u = 0;
+        for (struct tcb *c = q->head; c; c = c->rq_next)
+            if (c->pin_cpu < 0) { u = c; break; }
+        struct tcb *got = u ? rq_unlink(q, u) : 0;
+        spin_unlock_irqrestore(&q->lock, fl);
+        if (!u)
+            break;
+        if (got)
+            rq_push(bsp, got);         /* rq_unlink cleared rq_on */
+    }
+    return 0;
+}
+
 void sched_ap_enter(void) {
     struct percpu *pc = this_cpu();
     int cpu = pc ? (int)pc->cpu_idx : 0;
@@ -1457,13 +1601,32 @@ void sched_ap_enter(void) {
          * work that may have arrived between schedule() and now (else that
          * waker saw idle==0 and skipped the kick). SEQ_CST orders the flag store
          * before the rq_has_ready load, pairing with the waker's rq_push then
-         * idle read. If we still hlt, the wake IPI (or timer) breaks it. */
+         * idle read. If we still hlt, the wake IPI (or timer) breaks it.
+         * DDR-1188 A7 (CodeRabbit on #150): IF is cleared before the flag, so
+         * a wake IPI sent after the re-check stays pending until the sti;hlt
+         * below; consumed earlier, it would leave a stopped tick to sleep up
+         * to the 1 s bound with work queued. */
+        __asm__ volatile("cli" ::: "memory");
         __atomic_store_n(&pc->idle, 1, __ATOMIC_SEQ_CST);
-        if (rq_has_ready()) {
+        /* CodeRabbit on #150 (d83db5b): a job posted after the mailbox read
+         * above, whose IPI was taken before the cli, is work too; without this
+         * it would wait for the stop's bound (1 s) instead of a tick. */
+        if (rq_has_ready() || __atomic_load_n(&pc->job, __ATOMIC_ACQUIRE)) {
             __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
+            if (cpu < PERCPU_MAX) g_nz_ready[cpu]++;
+            __asm__ volatile("sti" ::: "memory");
             continue;                  /* work appeared — steal it next schedule() */
         }
+        /* DDR-1188 A7 T2-T5: maybe stop the tick. Returns with IF clear
+         * either way, so a wake IPI sent after the re-check above stays
+         * pending until the sti;hlt below and still breaks it. */
+        int nz = sched_nohz_enter(pc);
         __asm__ volatile("sti; hlt");  /* sleep until wake IPI / timer */
+        if (nz) {
+            __asm__ volatile("cli" ::: "memory");
+            sched_nohz_exit(pc);
+            __asm__ volatile("sti" ::: "memory");
+        }
         __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
     }
 }
@@ -3078,7 +3241,11 @@ static int rt_tick(int cpu, struct tcb *cur) {
          * thread could run here instead: READY on this queue, or on a queue
          * this CPU may steal from. With none, the picker would hand the CPU
          * back to this thread, after an idle detour (on the BSP, a halt for
-         * the rest of the tick). */
+         * the rest of the tick). rq_has_ready() is a hint, not an exact test
+         * (CodeRabbit on #145): it skips a queue whose head is pinned to
+         * another CPU, reads a busy queue lock as ready, and can be stale. So
+         * the guard skips the preemption only when it sees no head this CPU
+         * may take; a busy lock costs one extra switch. */
         if ((dl_out && (top || other || rq_has_ready())) || dl_first < cur->dl_deadline)
             return 1;                              /* A5 D3, D6 */
         return 0;
@@ -3480,7 +3647,7 @@ void sched_unblock(struct tcb *t) {
         } else {
             for (int c = 0; c < PERCPU_MAX; c++) {
                 struct percpu *o = percpu_get((uint32_t)c);
-                if (c != self && o && o->present && o->idle) {
+                if (c != self && o && o->present && o->idle && !g_iso[c]) {
                     saw_idle = 1;
                     if (smp_resched_one((uint32_t)c)) {
                         kicked = 1;
