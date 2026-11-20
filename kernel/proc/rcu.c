@@ -115,8 +115,7 @@ void synchronize_rcu(void) {
              * read section (extended quiescent state). It moved its counter
              * once on entry, so one that stopped after the snapshot also
              * passes the test above. */
-            if (__atomic_load_n(&p->ticks, __ATOMIC_ACQUIRE) != snap[i] ||
-                __atomic_load_n(&p->nohz, __ATOMIC_ACQUIRE)) {
+            if (__atomic_load_n(&p->ticks, __ATOMIC_ACQUIRE) != snap[i]) { /* MUTANT C12c: no EQS */
                 want[i] = 0;
                 continue;
             }
