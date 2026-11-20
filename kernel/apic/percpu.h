@@ -74,8 +74,9 @@ struct percpu {
      * these). BSS-zeroed. */
     volatile uint8_t  nohz;
     volatile uint64_t tirq;
-    uint64_t nohz_base;    /* ticks before the stop's entry (dl_now, CodeRabbit on #150) */
-    uint64_t nohz_t0;      /* CLOCK_MONOTONIC at the stop's entry                     */
+    uint64_t nohz_base;    /* ticks before the stop's entry (cpu_now, CodeRabbit on #150) */
+    uint64_t nohz_t0;      /* CLOCK_MONOTONIC at the stop's entry                      */
+    volatile uint32_t nohz_gen; /* odd while entry writes base/t0; readers retry      */
 };
 
 /* Another CPU's entry by roster index (the BSP writes an AP's mailbox). */

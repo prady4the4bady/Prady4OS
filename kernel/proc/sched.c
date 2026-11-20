@@ -249,19 +249,34 @@ int psi_read(long res, long cpu) {
 }
 
 /* DDR-1188 A5 D2: a deadline thread is pinned, so its time is its CPU's ticks. */
+/* DDR-1188 A7 (CodeRabbit on #150): a CPU's tick clock as another CPU must
+ * read it. A stopped CPU's counter is frozen, so while nohz is set the clock is
+ * the value its exit will catch up to: the count before entry plus max(k, 1).
+ * The exit moves ticks before it clears nohz, so the two readings agree. The
+ * entry writes base and t0 inside an odd nohz_gen, so a reader never combines
+ * one stop's base with the next stop's start. */
+static inline uint64_t cpu_now(struct percpu *pc) {
+    for (;;) {
+        uint32_t g = __atomic_load_n(&pc->nohz_gen, __ATOMIC_ACQUIRE);
+        if (g & 1u) {
+            __asm__ volatile("pause");
+            continue;
+        }
+        if (!__atomic_load_n(&pc->nohz, __ATOMIC_ACQUIRE))
+            return __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+        uint64_t base = __atomic_load_n(&pc->nohz_base, __ATOMIC_RELAXED);
+        uint64_t t0   = __atomic_load_n(&pc->nohz_t0, __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&pc->nohz_gen, __ATOMIC_RELAXED) != g)
+            continue;
+        uint64_t k = (ktime_mono_ns() - t0) / 10000000ull;
+        return base + (k ? k : 1);
+    }
+}
+
 static inline uint64_t dl_now(const struct tcb *t) {
     struct percpu *pc = percpu_get((unsigned)t->pin_cpu);
-    if (!pc)
-        return 0;
-    /* DDR-1188 A7 (CodeRabbit on #150): a CBS wake from another CPU must not
-     * read the counter a stopped CPU froze. While nohz is set, the clock is the
-     * value the exit will catch up to: the base plus max(k, 1). The exit moves
-     * ticks before it clears nohz, so the two readings agree. */
-    if (__atomic_load_n(&pc->nohz, __ATOMIC_ACQUIRE)) {
-        uint64_t k = (ktime_mono_ns() - pc->nohz_t0) / 10000000ull;
-        return pc->nohz_base + (k ? k : 1);
-    }
-    return __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+    return pc ? cpu_now(pc) : 0;
 }
 
 /* A5 D3: a CBS-throttled thread is eligible again at its deadline, with a new
@@ -351,7 +366,7 @@ int sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime, uint64
          * ticking at different times, so their counts differ. */
         if (t->sched_policy != SCHED_DEADLINE && t->dl_cpu >= 0 && t->dl_cpu != t->pin_cpu) {
             struct percpu *op = percpu_get((unsigned)t->dl_cpu);
-            uint64_t onow = op ? __atomic_load_n(&op->ticks, __ATOMIC_RELAXED) : ~0ull;
+            uint64_t onow = op ? cpu_now(op) : ~0ull;    /* A7: a stopped CPU's clock moves */
             t->dl_deadline = onow < t->dl_deadline ? now + (t->dl_deadline - onow) : 0;
         }
         t->dl_cpu = t->pin_cpu;
@@ -1467,8 +1482,11 @@ static int sched_nohz_enter(struct percpu *pc) {
         return 0;
     }
     g_nz_stop[c]++;
-    pc->nohz_t0   = ktime_mono_ns();
-    pc->nohz_base = __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST);
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);     /* odd: writing */
+    __atomic_store_n(&pc->nohz_t0, ktime_mono_ns(), __ATOMIC_RELAXED);
+    __atomic_store_n(&pc->nohz_base, __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST),
+                     __ATOMIC_RELAXED);
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);     /* even: stable */
     __atomic_store_n(&pc->nohz, 1, __ATOMIC_SEQ_CST);
     return 1;
 }
