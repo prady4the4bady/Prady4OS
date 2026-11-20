@@ -47,7 +47,13 @@ static struct fx_bucket g_fx[FX_BUCKETS];   /* BSS: unlocked, empty */
 
 static struct fx_bucket *bucket(uint64_t k1, uint64_t k2) {
     uint64_t h = (k1 ^ (k2 * 0x9E3779B97F4A7C15ull)) * 0xBF58476D1CE4E5B9ull;
+#if LOCKDEP
+    struct fx_bucket *b = &g_fx[(h >> 58) & (FX_BUCKETS - 1)];
+    LOCKDEP_CLASS(&b->lock, "futex.bucket");     /* DDR-1209 D2: one class, 64 locks */
+    return b;
+#else
     return &g_fx[(h >> 58) & (FX_BUCKETS - 1)];
+#endif
 }
 
 /* The key and the word's physical address for `uaddr` in `t`. Caller holds

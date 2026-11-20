@@ -10,6 +10,7 @@
 #include "fd.h"
 #include "regs.h"
 #include "spinlock.h"
+#include "lockdep.h"   /* DDR-1209: struct ld_held (LOCKDEP=1 only) */
 #include "signal.h"   /* DDR-1174: struct sig_rec */
 
 typedef void (*thread_fn)(void *);
@@ -311,6 +312,11 @@ struct tcb {
     /* DDR-1188 A6 P1: set while this thread is queued by its own yield();
      * psi_tick does not count it as stalled. Initialised in sched_create_state. */
     uint32_t   psi_yld;
+#if LOCKDEP
+    /* DDR-1209 D3: the spinlocks this thread holds, checking build only. Last,
+     * so no offset above it moves; initialised in sched_create_state. */
+    struct ld_held ld;
+#endif
 };
 
 /* DDR-1188 Amendment 4 (C1.5 P3). */
