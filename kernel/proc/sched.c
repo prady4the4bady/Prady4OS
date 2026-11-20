@@ -1477,7 +1477,7 @@ static int sched_nohz_enter(struct percpu *pc) {
     if (!pc || pc->is_bsp || !__atomic_load_n(&g_nohz, __ATOMIC_ACQUIRE))
         return 0;
     unsigned c = pc->cpu_idx < PERCPU_MAX ? pc->cpu_idx : 0;
-    if (!hrt_nohz_enter()) {
+    if (1 || !hrt_nohz_enter()) {     /* MUTANT C12: never stop the tick */
         g_nz_refuse[c]++;
         return 0;
     }
