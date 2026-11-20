@@ -67,6 +67,11 @@ static inline uint64_t block_size(unsigned order) {
  * helpers keep their names so every call site is unchanged. */
 #include "spinlock.h"
 static spinlock_t g_pmm_lock = SPINLOCK_INIT;
+#if LOCKDEP
+#include "lockdep.h"
+/* DDR-1209 arm LA: the documented heap -> PMM order is the gate's witness. */
+spinlock_t *pmm_lockdep_lock(void) { return &g_pmm_lock; }
+#endif
 static inline uint64_t irq_save(void) {
     return spin_lock_irqsave(&g_pmm_lock);
 }

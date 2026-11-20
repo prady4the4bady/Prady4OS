@@ -2,6 +2,7 @@
 #include "cap.h"
 #include "kheap.h"
 #include "spinlock.h"     /* DDR-1181 §3.6: one table, several threads */
+#include "lockdep.h"      /* DDR-1209 */
 #include "shm.h"          /* DDR-1178 A2.2: a RES_SHM slot holds its segment */
 
 #define CAP_SLOTS 64
@@ -38,6 +39,7 @@ struct cap_table *cap_table_create(void) {
         t->slots[i].res_id = 0;
     }
     t->lk.v = 0;                       /* kmalloc does not zero */
+    LOCKDEP_CLASS(&t->lk, "cap.table");  /* DDR-1209 D2: stamps cls and chk too */
     t->refs = 1;
     return t;
 }

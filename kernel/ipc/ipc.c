@@ -31,6 +31,7 @@ void ipc_endpoint_init(struct ipc_endpoint *e, uint64_t res_id) {
     e->res_id = res_id;
     e->waiting_receiver = 0;
     e->lock = (spinlock_t)SPINLOCK_INIT;
+    LOCKDEP_CLASS(&e->lock, "ipc.ep");           /* DDR-1209 D2 */
     for (int i = 0; i < IPC_MSG_WORDS; i++)
         e->msg[i] = 0;
 }

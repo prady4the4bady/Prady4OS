@@ -36,6 +36,7 @@
 #include "smp.h"
 #include "fault_expect.h"   /* DDR-1040: the one-shot expected-fault latch */
 #include "percpu.h"
+#include "lockdep.h"         /* DDR-1209: LOCKDEP=1 self-test (smoke-lockdep) */
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
@@ -1991,6 +1992,11 @@ static void fs_test_thread(void *arg) {
         kline_s(&k, " zhits=");                 kline_d(&k, __atomic_load_n(&g_rcu_sw.rf_zhits, __ATOMIC_RELAXED));
         kline_s(&k, "\r\n"); kline_emit(&k);
     }
+#endif
+#if LOCKDEP
+    /* DDR-1209 D7 (`make smoke-lockdep` only): arms LB-LE, while the APs are
+     * idle and before init, as the RCU self-test above; then ldsum. */
+    lockdep_selftest();
 #endif
     int mnt = -1, blk = -1;
     int inst_root = disk_root_select();
@@ -4227,6 +4233,9 @@ static void sched_demo(void) {
     kputs(" MHz\r\n");
 
     sched_init();
+#if LOCKDEP
+    lockdep_init();                           /* DDR-1209 D3: no-op if already on */
+#endif
     /* DDR-949: sched_create returns NULL on TCB/stack kmalloc failure. Unchecked,
      * bench_ctx_switch below would measure a context switch against a partner
      * that does not exist and report a bogus number as a real measurement. */
@@ -5111,6 +5120,9 @@ void kmain(struct boot_info *bi) {
         kputdec(pc ? pc->apic_id : 999);
         kputs("\r\n");
         tlb_cpu_ready();                 /* DDR-1177: BSP can take the 0xF0 IPI */
+#if LOCKDEP
+        lockdep_init();                  /* DDR-1209 D3: before any AP takes a lock */
+#endif
         smp_start_aps();                 /* ADR-029: INIT-SIPI; APs idle for jobs */
         /* DDR-SMP-3c-alpha: prove cross-CPU dispatch — one job per AP. */
         unsigned jobs = 0;
