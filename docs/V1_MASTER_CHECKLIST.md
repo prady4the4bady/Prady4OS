@@ -113,9 +113,9 @@ Status: IN PROGRESS (P1 to P6 merged; DDR-1188 §3; memory PSI waits for C2.1). 
 Exit gate: `smoke-schedclass` (arms A, B, B2, B3, C, M, D, E, F, G, H, HA, N, P, I, J, Q, K, K0, O, L, L1, L2). C1.5 stays IN PROGRESS only for memory PSI (C2.1).
 
 ### C1.6 Dynamic linking and loader
-Status: TODO. Needs: C1.3.
+Status: IN-PROGRESS (P1 merged, #154; P2 to P4 open, DDR-1189). Needs: C1.3.
 - [ ] ELF dynamic loader, relocation, shared libraries, shared text pages
-- [ ] user-space ASLR. **P1 (stack top and mmap base) merged:** #154 `0d464e1` (DDR-1189 Amendment 1). Gate `smoke-dynlink` arms A and B (shard 8). Head `da6ce27` green, 19 of 19 jobs (run [44778658685](https://github.com/prady4the4bady/Prady4OS/actions/runs/44778658685)). Mutants D1, D2 and D2b ran on `9b99b13`, the code head; `da6ce27` only merges docs. Each was red only in shard 8, on its own arm: D1 on A (run 44761801440), D2 on B (44761806644), D2b on B (44768583641). The program image moves with P2 (static PIE, Amendment 2), which closes this item. Strength is bounded by DDR-1189 L3 (16 and 18 bits). QEMU (TCG) only, not verified on real hardware.
+- [ ] user-space ASLR. **P1 (stack top and mmap base) merged:** #154 `0d464e1` (DDR-1189 Amendment 1). Gate `smoke-dynlink` arms A and B (shard 8). Head `da6ce27` green, 19 of 19 jobs (run [44778658685](https://github.com/prady4the4bady/Prady4OS/actions/runs/44778658685)). Mutants D1, D2 and D2b ran on `9b99b13`, the code head; `da6ce27` only merges docs. Each was red only in shard 8, on its own arm: D1 on A (run 44761801440), D2 on B (44761806644), D2b on B (44768583641). The program image moves with P2 (static PIE), which closes this item. P2's design, DDR-1189 Amendment 2, is on branch `c16-p2-pie` until its PR merges. Strength is bounded by DDR-1189 L3 (16 and 18 bits). QEMU (TCG) only, not verified on real hardware.
 Exit gate: dynamic-linking gate (name TBD).
 
 ### C1.7 KASLR
