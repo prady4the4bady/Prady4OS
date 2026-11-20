@@ -252,9 +252,11 @@ int psi_read(long res, long cpu) {
 /* DDR-1188 A7 (CodeRabbit on #150): a CPU's tick clock as another CPU must
  * read it. A stopped CPU's counter is frozen, so while nohz is set the clock is
  * the value its exit will catch up to: the count before entry plus max(k, 1).
- * The exit moves ticks before it clears nohz, so the two readings agree. The
- * entry writes base and t0 inside an odd nohz_gen, so a reader never combines
- * one stop's base with the next stop's start. */
+ * The exit moves ticks before it clears nohz, so the two readings agree. Entry
+ * and exit both run inside an odd nohz_gen (CodeRabbit on #150, d83db5b), and
+ * the generation is checked again after the time sample: a reader that raced
+ * an exit retries instead of counting a tick the exit did not, so the clock
+ * never reads one ahead and then steps back. */
 static inline uint64_t cpu_now(struct percpu *pc) {
     for (;;) {
         uint32_t g = __atomic_load_n(&pc->nohz_gen, __ATOMIC_ACQUIRE);
@@ -262,15 +264,19 @@ static inline uint64_t cpu_now(struct percpu *pc) {
             __asm__ volatile("pause");
             continue;
         }
-        if (!__atomic_load_n(&pc->nohz, __ATOMIC_ACQUIRE))
-            return __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
-        uint64_t base = __atomic_load_n(&pc->nohz_base, __ATOMIC_RELAXED);
-        uint64_t t0   = __atomic_load_n(&pc->nohz_t0, __ATOMIC_RELAXED);
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (__atomic_load_n(&pc->nohz_gen, __ATOMIC_RELAXED) != g)
-            continue;
-        uint64_t k = (ktime_mono_ns() - t0) / 10000000ull;
-        return base + (k ? k : 1);
+        uint64_t v;
+        if (!__atomic_load_n(&pc->nohz, __ATOMIC_ACQUIRE)) {
+            v = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
+        } else {
+            uint64_t base = __atomic_load_n(&pc->nohz_base, __ATOMIC_RELAXED);
+            uint64_t t0   = __atomic_load_n(&pc->nohz_t0, __ATOMIC_RELAXED);
+            uint64_t k = (ktime_mono_ns() - t0) / 10000000ull;
+            v = base + (k ? k : 1);
+        }
+        /* The TSC read and the loads above complete before the check. */
+        __asm__ volatile("lfence" ::: "memory");
+        if (__atomic_load_n(&pc->nohz_gen, __ATOMIC_RELAXED) == g)
+            return v;
     }
 }
 
@@ -1494,6 +1500,9 @@ static int sched_nohz_enter(struct percpu *pc) {
 /* DDR-1188 A7 T4, T5. IF clear. The clock moves by max(k, 1) ticks in all:
  * the entry already moved it once. */
 static void sched_nohz_exit(struct percpu *pc) {
+    /* Odd before hrt_nohz_exit samples the clock: a cpu_now that sampled after
+     * this point fails its check and retries (CodeRabbit on #150, d83db5b). */
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);
     uint64_t k = hrt_nohz_exit();
     uint64_t t0 = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
     uint64_t add = k > 0 ? k - 1 : 0;
@@ -1501,6 +1510,7 @@ static void sched_nohz_exit(struct percpu *pc) {
         __atomic_fetch_add(&pc->ticks, add, __ATOMIC_SEQ_CST);
     psi_idle_catchup(pc, t0, add + 1);
     __atomic_store_n(&pc->nohz, 0, __ATOMIC_SEQ_CST);
+    __atomic_fetch_add(&pc->nohz_gen, 1, __ATOMIC_SEQ_CST);     /* even: stable */
 }
 
 /* DDR-1188 A7 T6, probe-only (SYS_SCHED_CPU op 6). Isolating moves the CPU's
@@ -1590,7 +1600,10 @@ void sched_ap_enter(void) {
          * to the 1 s bound with work queued. */
         __asm__ volatile("cli" ::: "memory");
         __atomic_store_n(&pc->idle, 1, __ATOMIC_SEQ_CST);
-        if (rq_has_ready()) {
+        /* CodeRabbit on #150 (d83db5b): a job posted after the mailbox read
+         * above, whose IPI was taken before the cli, is work too; without this
+         * it would wait for the stop's bound (1 s) instead of a tick. */
+        if (rq_has_ready() || __atomic_load_n(&pc->job, __ATOMIC_ACQUIRE)) {
             __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
             if (cpu < PERCPU_MAX) g_nz_ready[cpu]++;
             __asm__ volatile("sti" ::: "memory");
