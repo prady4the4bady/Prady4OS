@@ -420,7 +420,7 @@ int hrt_nohz_enter(void) {
     if (h->phase == HR_PERIODIC && !hr_irr48()) {
         uint64_t now = ktime_mono_ns();
         uint64_t ns  = (uint64_t)NOHZ_MAX_TICKS * HR_TICK_NS;
-        uint64_t dl  = hr_earliest(h);              /* A7: the sleeper's deadline */
+        uint64_t dl  = ~0ull;                       /* MUTANT C12b: ignores the sleeper */
         if (dl != ~0ull && dl < now + ns)
             ns = dl > now ? dl - now : 0;
         if (ns > HR_TICK_NS) {
