@@ -228,7 +228,7 @@ static int elf_dyn_rela(const uint8_t *img, uint64_t image_len,
             return ELF_E_RELOC;
         if (r.r_offset & 7u)
             return ELF_E_RELOC;
-        if (!elf_target_writable(img, eh, r.r_offset))
+        if (0 && !elf_target_writable(img, eh, r.r_offset))   /* MUTANT D3e */
             return ELF_E_RELOC;
     }
     *out_off = off;
