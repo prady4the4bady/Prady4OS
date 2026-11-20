@@ -87,7 +87,10 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 - `FORBIDDEN_SENTINEL`: `LOCKDEP INVERSION`, `LOCKDEP RECURSION`. Not added to `GLOBAL_FORBIDDEN`: only this build can print them, and the count stays 78.
 - **Arm LA (the real kernel):**
   - It reads the `[lockdep] final` line (D6), which must exist: a missing line (the checker never froze, or the boot died first) fails the arm.
-  - **Order:** that line must come after `PRADYOS_THREAD_DONE`, so the freeze came after the workload and the checked window covers all of it.
+  - **Order:** that line must come after `PRADYOS_THREAD_DONE`. That is what the rule checks: the final line printed after the workload's last line.
+    - **Residual window (CodeRabbit on #152, after merge).** `ldsum` freezes and copies the counters, then prints the remaining records and the final line. A workload that ends inside that interval (milliseconds, at about 240 s) passes the rule with its last events uncounted.
+    - The documented runs end at 10 to 15 s, and a workload that ends any later than the interval prints its done line after the final line and fails the rule.
+    - A marker printed before the freeze would close the window. It is not done: it changes `lockdep.c` and the recipe, and the window has not occurred.
   - It must have `inv=0 rec=0 unmatched=0 untracked=0 ovf=0`.
   - Vacuity: it must also have `hp=1`, meaning the edge heap → PMM, the order `kheap.c` documents, is in the graph. That edge exists only if the hooks see real nesting in real kernel code.
   - **Why a frozen line (CodeRabbit on #152):** the first implementation read the last `[lockdep] sum` line, printed only on change.
