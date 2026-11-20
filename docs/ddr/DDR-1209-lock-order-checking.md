@@ -88,7 +88,7 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 - **Arm LA (the real kernel):**
   - It reads the `[lockdep] final` line (D6), which must exist: a missing line (the checker never froze, or the boot died first) fails the arm.
   - **Order:** that line must come after `PRADYOS_THREAD_DONE`. That is what the rule checks: the final line printed after the workload's last line.
-    - **Residual window (CodeRabbit on #152, after merge).** `ldsum` freezes and copies the counters, then prints the remaining records and the final line. A workload that ends inside that interval (milliseconds, at about 240 s) passes the rule with its last events uncounted.
+    - **Residual window (CodeRabbit on #152, after merge).** `ldsum` freezes and copies the counters, then prints the remaining records and the final line. A workload that ends inside that interval, at about 240 s, passes the rule with its last events uncounted. The interval's length is not measured (CodeRabbit on #153): it is the time to print the records not yet printed and the final line, so it depends on how many records remain and on the console's write time.
     - The documented runs end at 10 to 15 s, and a workload that ends any later than the interval prints its done line after the final line and fails the rule.
     - A marker printed before the freeze would close the window. It is not done: it changes `lockdep.c` and the recipe, and the window has not occurred.
   - It must have `inv=0 rec=0 unmatched=0 untracked=0 ovf=0`.
@@ -100,7 +100,7 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
   - **Timing:** the gate declares a FORBIDDEN list, so `boot_test.sh` never exits early and the guest runs the whole 300 s window.
     - In both kept logs the workload ends between the `[hb]` lines `t=1000` and `t=1500` (10 ms ticks), and the `[hb]` lines run on to `t=29500` and `t=30000`.
     - A freeze at about 240 s therefore lands long after the workload and well before the kill.
-    - A host slow enough to push the workload past the freeze fails the order rule; it cannot pass silently.
+    - A host slow enough to push the workload past the freeze fails the order rule, unless the workload ends inside the residual window above. Then it passes with its last events uncounted (CodeRabbit on #153). Final-line order alone does not prove that the freeze covered the workload.
 - **Arm LB (direct inversion):** X then Y, then Y then X, on the BSP. `PRADYOS_LOCKDEP_B inv=1`.
 - **Arm LC (transitive):** P → Q, Q → R, then R → P. No pair is inverted directly, so only the closure finds it. `PRADYOS_LOCKDEP_C inv=1`.
 - **Arm LD (preemption):** two kernel threads pinned to CPU 1. T1 takes U with `spin_lock`, interrupts enabled, and spins until T2 has run. T2 takes and drops V while T1 still holds U. Then the BSP takes V then U.
@@ -142,6 +142,6 @@ Each mutant must be red on its own arm; red on others too is allowed. LD5 runs o
 - **Sleeping locks:** `kmutex` (only its inner spinlock is seen), `mnt_lock`, futex-based user locks.
 - **Ordered same-class nesting** needs an annotation this DDR does not add (D5).
 - **Recursion is detected, not gated:** a test that takes a lock twice would hang the CPU after the report.
-- **Locks taken after the freeze** (about 240 s into a 300 s run, D6) are not checked. The workload has ended by then, and the order rule fails the run if it has not.
+- **Locks taken after the freeze** (about 240 s into a 300 s run, D6) are not checked. The workload has ended by then in every documented run. If it has not, the order rule fails the run, except inside the residual window (§3, arm LA).
 - **The shipped kernel checks nothing** (D1). The checker finds orders that the gate's workload exercises; an order no gate runs stays unseen.
 - QEMU (TCG, 4 vCPU) only, not verified on real hardware.
