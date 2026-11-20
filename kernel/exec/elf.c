@@ -301,8 +301,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     uint64_t prev_end = 0;                         /* page_up end of the last PT_LOAD */
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         const struct elf64_phdr *ph = elf_ph(img, eh, i);
-        if (is_dyn && ph->p_type == PT_INTERP)
-            return ELF_E_INTERP;
+        /* MUTANT D3d: PT_INTERP not refused */
         if (is_dyn && ph->p_type == PT_DYNAMIC) {
             if (dynph)
                 return ELF_E_DYN;
