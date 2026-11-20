@@ -249,7 +249,8 @@ static inline struct ld_held *ld_cpu_held(struct percpu *p) {
 }
 static inline struct ld_held *ld_cur(struct percpu *p) {
     struct tcb *t = p->current;
-    return t ? &t->ld : ld_cpu_held(p);
+    (void)t;                                    /* MUTANT LD3: per-CPU held state */
+    return ld_cpu_held(p);
 }
 static inline int ld_active(struct percpu *p) {
     (void)p;
