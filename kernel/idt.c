@@ -877,7 +877,8 @@ void isr_dispatch(struct regs *r) {
         current_thread) {
         uint64_t cr2 = read_cr2();
         mm_lock(current_thread);
-        int grown = vmm_stack_fault(current_thread->cr3, cr2);
+        int grown = current_thread->mm ?    /* DDR-1189 A1 P1-3: its own stack */
+            vmm_stack_fault(current_thread->cr3, cr2, current_thread->mm->stack_top) : -1;
         mm_unlock(current_thread);
         if (grown == 0)
             return;

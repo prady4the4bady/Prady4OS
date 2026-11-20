@@ -167,6 +167,8 @@ USER_ARGT_SRC  := user/argtest.asm       # DDR-1032: execve argv/envp receiver
 USER_ARGT_ELF  := build/argtest.elf
 USER_ARGV_SRC  := user/argvtest.c        # DDR-1032: execve argv/envp launcher
 USER_ARGV_ELF  := build/argvtest.elf
+USER_DYN_SRC   := user/dyntest.c         # DDR-1189 A1 (C1.6 P1): user ASLR probe
+USER_DYN_ELF   := build/dyntest.elf
 USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
 USER_IPC_ELF   := build/ipctest.elf
 USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
@@ -238,7 +240,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
                kernel/drivers/fwcfg/fwcfg.c \
-               kernel/crypto/sha256.c kernel/crypto/acc.c kernel/crypto/x25519.c kernel/crypto/fe25519.c kernel/crypto/hkdf.c kernel/crypto/aead.c kernel/crypto/ed25519.c kernel/crypto/sha512.c \
+               kernel/crypto/sha256.c kernel/crypto/acc.c kernel/crypto/x25519.c kernel/crypto/fe25519.c kernel/crypto/hkdf.c kernel/crypto/aead.c kernel/crypto/ed25519.c kernel/crypto/sha512.c kernel/crypto/aslr.c \
                kernel/drivers/rng/virtio_rng.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c kernel/fs/pdrive/pdrive.c kernel/arch/x86_64/pstate.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
@@ -255,7 +257,7 @@ KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/vmm.o build/vmm_cow.o build/mm.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/kmutex.o build/futex.o build/rcu.o build/ipc.o build/shm.o \
                build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_thread.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/aslr.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
                build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/uaccess_copy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
@@ -329,7 +331,7 @@ KCFLAGS += -DRCU_TORTURE=$(RCU_TORTURE) -DRCU_T_SWAPS=$(RCU_T_SWAPS)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -673,6 +675,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGT_ELF) build/argtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ARGV_SRC) -o build/argvtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGV_ELF) build/argvtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DYN_SRC) -o build/dyntest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DYN_ELF) build/dyntest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_IPC_SRC) -o build/ipctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
@@ -703,7 +707,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF) $(USER_DYN_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -808,6 +812,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_ledger.c -o build/sys_ledger.o
 	$(CC) $(KCFLAGS) -Ikernel/crypto -c kernel/crypto/mldsa.c -o build/mldsa.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/aslr.c               -o build/aslr.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
@@ -941,6 +946,8 @@ fat-image: $(KERNEL_BIN)
 	mcopy -i $(FAT_IMG) $(USER_PRISM_ELF) ::/PRISM.ELF
 	# DDR-1032: the execve argv/envp receiver, on the volume execve resolves against.
 	mcopy -i $(FAT_IMG) $(USER_ARGT_ELF) ::/ARGTEST.ELF
+	# DDR-1189 A1: smoke-dynlink's probe execs its own image from here.
+	mcopy -i $(FAT_IMG) $(USER_DYN_ELF) ::/DYNTEST.ELF
 	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
@@ -4433,6 +4440,36 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 	FORBIDDEN_SENTINEL="ARGVTEST FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[execve-argv] PASS — $$(grep -a PRADYOS_ARGC build/argv.log | head -1)"
+
+# DDR-1189 Amendment 1 (C1.6 P1): user ASLR. The probe forks four children and
+# each execve()s /DYNTEST.ELF, so every sample comes through execve's commit.
+# Each child prints PRADYOS_DYN_L stack=0x... mmap=0x... . Arm A: the four
+# stack values lie in [USER_STACK_TOP - 256 MiB - 8 MiB, USER_STACK_TOP) and at
+# least 2 differ. Arm B: the four mmap values lie in [VMM_MMAP_BASE,
+# VMM_MMAP_BASE + 1 GiB + 1 MiB) and at least 2 differ. Runs with virtio-rng
+# and requires the primary source ([aslr] source=rng). A false red needs four
+# equal draws: 2^-48 (stack), 2^-54 (mmap). QEMU only.
+smoke-dynlink: $(IMG) fat-image sfs-image
+	@rm -f build/dynlink.log
+	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4')" \
+	FORBIDDEN_SENTINEL="DYNTEST FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@L=build/dynlink.log ; rc=0 ; \
+	  grep -a 'PRADYOS_DYN_L \|\[aslr\]\|aslr:' $$L ; \
+	  n=$$(grep -ac 'PRADYOS_DYN_L stack=0x[0-9a-f]* mmap=0x[0-9a-f]*' $$L) ; \
+	  [ "$$n" = 4 ] || { echo "[dynlink] FAIL: $$n layout lines, want 4"; rc=1; } ; \
+	  sv=$$(grep -ao 'PRADYOS_DYN_L stack=0x[0-9a-f]*' $$L | sed 's/.*stack=//') ; \
+	  mv=$$(grep -ao ' mmap=0x[0-9a-f]*' $$L | sed 's/.*mmap=//') ; \
+	  sd=$$(printf '%s\n' $$sv | sort -u | grep -c .) ; md=$$(printf '%s\n' $$mv | sort -u | grep -c .) ; \
+	  si=0 ; for v in $$sv ; do x=$$(($$v)) ; \
+	    [ $$x -ge $$((0x9000000000 - 0x10800000)) ] && [ $$x -lt $$((0x9000000000)) ] && si=$$((si+1)) ; done ; \
+	  mi=0 ; for v in $$mv ; do x=$$(($$v)) ; \
+	    [ $$x -ge $$((0x8800000000)) ] && [ $$x -lt $$((0x8800000000 + 0x40100000)) ] && mi=$$((mi+1)) ; done ; \
+	  echo "PRADYOS_DYN_A distinct=$$sd inrange=$$si" ; echo "PRADYOS_DYN_B distinct=$$md inrange=$$mi" ; \
+	  [ $$si = 4 ] && [ $$sd -ge 2 ] || { echo "[dynlink] FAIL: arm A, stack tops distinct=$$sd inrange=$$si (want >=2, 4)"; rc=1; } ; \
+	  [ $$mi = 4 ] && [ $$md -ge 2 ] || { echo "[dynlink] FAIL: arm B, mmap bases distinct=$$md inrange=$$mi (want >=2, 4)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A and B" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

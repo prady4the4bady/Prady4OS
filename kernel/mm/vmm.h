@@ -100,7 +100,10 @@ void vmm_mapguard_probe(void);
  * fault (out of range, or OOM). The guard page at [BOT-PAGE, BOT) is BELOW
  * USER_STACK_BOT and therefore never satisfied here — that is what keeps it a
  * guard rather than decoration. */
-int vmm_stack_fault(uint64_t cr3, uint64_t fault_va);
+/* DDR-1189 A1 P1-3: the stack is [stack_top - USER_STACK_SIZE, stack_top). */
+/* The current thread's stack top (mm.c); USER_STACK_TOP when it has no mm. */
+uint64_t mm_cur_stack_top(void);
+int vmm_stack_fault(uint64_t cr3, uint64_t fault_va, uint64_t stack_top);
 
 /* Free a per-process address space: its private user page tables and the PML4.
  * The shared kernel entries are left intact. */

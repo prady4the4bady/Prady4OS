@@ -12,6 +12,8 @@ struct mm *mm_create(uint64_t cr3) {
     memset(mm, 0, sizeof *mm);      /* kmalloc does not zero (CLAUDE.md rule 11) */
     mm->cr3       = cr3;
     mm->mmap_next = VMM_MMAP_BASE;
+    mm->mmap_base = VMM_MMAP_BASE;  /* DDR-1189 A1 P1-1: the fixed layout until */
+    mm->stack_top = USER_STACK_TOP; /* elf_build_image's draw is stored here    */
     mm->refs      = 1;
     mm->live      = 1;
     return mm;
@@ -31,4 +33,12 @@ void mm_put(struct mm *mm) {
     if (mm->cr3)
         vmm_destroy_address_space(mm->cr3);
     kfree(mm);
+}
+
+/* DDR-1189 A1 P1-3: for readers below the scheduler (vmm.c's [stkdepth]
+ * diagnostic). A kernel thread, or a CPU before the scheduler runs, has no mm:
+ * the fixed top then, which no user stack address can be confused with. */
+uint64_t mm_cur_stack_top(void) {
+    struct tcb *t = current_thread;
+    return (t && t->mm) ? t->mm->stack_top : USER_STACK_TOP;
 }

@@ -520,12 +520,13 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
  * Prints only when a NEW maximum is seen — a handful of lines per boot. Volume
  * discipline is deliberate: an earlier instrument (cur= in the timer ISR) was
  * heavy enough to move the failure rate it was measuring. */
-static volatile uint64_t g_stk_np_deepest;   /* bytes below USER_STACK_TOP */
+static volatile uint64_t g_stk_np_deepest;   /* bytes below the stack top */
 
 static void stk_note_not_present(uint64_t va) {
-    if (va < USER_STACK_BOT || va >= USER_STACK_TOP)
+    uint64_t top = mm_cur_stack_top();       /* DDR-1189 A1 P1-3: this process's */
+    if (va < top - USER_STACK_SIZE || va >= top)
         return;                              /* not a stack address */
-    uint64_t off = USER_STACK_TOP - va;
+    uint64_t off = top - va;
     if (off <= __atomic_load_n(&g_stk_np_deepest, __ATOMIC_RELAXED))
         return;                              /* not a new maximum */
     __atomic_store_n(&g_stk_np_deepest, off, __ATOMIC_RELAXED);

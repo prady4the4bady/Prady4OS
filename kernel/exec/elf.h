@@ -46,9 +46,17 @@ struct exec_args {
     uint16_t    envc;
 };
 
+/* DDR-1189 Amendment 1 (P1-2): the layout elf_build_image drew for the image.
+ * The caller stores it in the image's mm (struct mm stack_top, mmap_base). */
+struct user_layout {
+    uint64_t stack_top;   /* USER_STACK_TOP - r16 pages, r16 < 2^16 */
+    uint64_t mmap_base;   /* VMM_MMAP_BASE + r18 pages, r18 < 2^18  */
+};
+
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
                     const struct exec_args *args,
-                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp);
+                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp,
+                    struct user_layout *out_lay);
 
 /* DDR-1085: see the note beside elf_load. args == 0 is identical to elf_load. */
 int elf_load_args(const void *image, uint64_t image_len, const char *name,

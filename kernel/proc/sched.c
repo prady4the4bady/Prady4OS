@@ -1918,6 +1918,8 @@ struct tcb *sched_create_user_clone(struct tcb *parent, uint64_t child_cr3,
         } else {
             memcpy(cm->vma, parent->mm->vma, sizeof cm->vma);
             cm->mmap_next = parent->mm->mmap_next;
+            cm->mmap_base = parent->mm->mmap_base;   /* DDR-1189 A1 P1-1: the child's */
+            cm->stack_top = parent->mm->stack_top;   /* stack is a copy at the same VAs */
             shm_fork_vmas(cm);   /* DDR-1178 A2.2: the copies are attachments */
             t->mm = cm;
             /* DDR-1188 A4 S3: fork drops RES_SCHED. cap_fork copied every
