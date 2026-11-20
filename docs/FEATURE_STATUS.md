@@ -56,6 +56,12 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | TCB freed-while-queued fix | gated | `smoke-rqfree` | Reaper cannot free a queued thread |
 | Tick sweep ends when the current thread is off the ring (#115, DDR-1201) | gated in a test build with the window held open (emulated-verified; not verified on real hardware) | `smoke-zanchor` A, B | A timer tick cannot loop forever on a thread that is exiting |
 | Kernel RCU grace periods: IF-off read sections, tick-counter grace periods; first user, the timer-tick timed-wake sweep (DDR-1200, C1.4 P5a and P5b) | gated in a test build (emulated-verified; not verified on real hardware) | `smoke-rcu` RA, RB, RC, RD, RE, RF | Kernel code can read shared structures without a lock and free them only when no reader can still see them. The timer tick now times out waits without taking the scheduler lock, and a thread's memory is freed only after a grace period |
+| Clocks and sleep: `CLOCK_MONOTONIC` and `CLOCK_REALTIME` on the TSC through the vDSO, `SYS_CLOCK_GETTIME` (120), `SYS_NANOSLEEP` (121) (C1.5 P1, DDR-1188) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` A, B, B2, B3 | Time that never goes back; a sleep that never ends early and can be interrupted |
+| One-shot LAPIC timers: a sleep can end between ticks (C1.5 P2, DDR-1188 A3) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` C, M | Sub-tick wake-ups, with a per-thread budget |
+| `SCHED_FIFO` and `SCHED_RR`, the 19-of-20-tick RT throttle, `RES_SCHED` grants, one-level `kmutex` priority inheritance (C1.5 P3, DDR-1188 A4) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` D, E, F, G, H, HA, N, P | Real-time threads ahead of the fair class, without starving it |
+| `SCHED_DEADLINE`: EDF with a constant-bandwidth server, admission at 0.90 per CPU, pinned threads (C1.5 P4, DDR-1188 A5) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` I, J, Q | Periodic work with a guaranteed budget |
+| Pressure stall information `some`, per CPU and for virtio-blk reads, `SYS_PSI` (124) (C1.5 P5, DDR-1188 A6). Memory pressure not built (C2.1) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` K, K0, O | Tell whether a CPU or the disk is the bottleneck |
+| Tickless idle on the APs: a bounded stop (1 s), RCU quiescent while stopped; the BSP never stops. "CPU frequency" is a CPUID report only (C1.5 P6, DDR-1188 A7) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` L, L1, L2 | An idle AP takes no timer interrupts; a sleeper on it still wakes between ticks |
 | `mprotect` cannot add write to a frame another process maps (#112, DDR-1202) | gated (emulated-verified; not verified on real hardware) | `smoke-mprotect` F, G, H | One process cannot change another's private memory, or the shared vDSO page |
 | OPEN-2 double dispatch (DDR-1139) | gated (fix confirmed) | `[schedcheck]` in GLOBAL_FORBIDDEN | One thread on one CPU at a time |
 | Capability IPC, ring-3 door | gated | `smoke-sendipc` | Agent-to-agent messages |
@@ -80,6 +86,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | SFS large files (>16 KiB from ring 3) | not started | none | DDR-1100: blocked on staging chunk and `inline_extents[4]` |
 | ext4 read / write | partial | `smoke-fs-ext4` (read) | Read Linux disks; write not started |
 | virtio-blk multi-queue, MSI-X, integrity | gated | `smoke-blkmq`, `smoke-blk-integrity`, `smoke-msixap` | Disk I/O |
+| virtio-blk: a timed-out request keeps its memory with the device (per-slot bounce buffers; a timed-out slot is held until its late completion) (DDR-1208) | gated (emulated-verified; not verified on real hardware) | `smoke-vblklate` Q, B | A caller may free its buffer after `-EIO`; a late completion cannot write into reused memory |
 | AHCI, NVMe (poll mode) | gated | `smoke-ahci`, `smoke-nvme` | Real SATA / NVMe disks; NVMe completion IRQ deferred |
 | Partitions (MBR) | gated | `smoke-part` | Installed-disk layout |
 
