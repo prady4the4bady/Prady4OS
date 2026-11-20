@@ -34,6 +34,8 @@
 #define SURFACE_DIM_MAX    1024u               /* >= the 1024x768 scanout       */
 #define SURFACE_BYTES_MAX  (4u * 1024u * 1024u) /* one buddy order-10 block     */
 #define SURFACE_VA_BASE    0x8600000000ull     /* below the FB mapping (0x8700000000) */
+/* DDR-1189 A2 P2-1: no ELF image reaches the surface window. */
+_Static_assert(SURFACE_VA_BASE >= USER_IMAGE_TOP, "surfaces sit above every ELF image");
 #define SURFACE_VA_SLOT    0x400000ull         /* 4 MiB per surface id          */
 
 _Static_assert(SURFACE_BYTES_MAX <= SURFACE_VA_SLOT,

@@ -6,6 +6,11 @@
  * frame's physical (identity) address, so a text segment can be populated even
  * though its user mapping is read-execute only — no page is ever writable and
  * executable at once.
+ *
+ * DDR-1189 Amendment 2 (C1.6 P2): an ET_DYN without PT_INTERP (a static PIE)
+ * loads at a random base, and its R_X86_64_RELATIVE relocations are applied
+ * here, each target checked first: aligned, and inside a writable PT_LOAD, so
+ * the loader never writes to text (L1).
  */
 #include "elf.h"
 #include "vmm.h"
@@ -55,8 +60,11 @@ _Static_assert(sizeof(struct elf64_ehdr) == 64, "Elf64_Ehdr must be 64 bytes");
 _Static_assert(sizeof(struct elf64_phdr) == 56, "Elf64_Phdr must be 56 bytes");
 
 #define ET_EXEC      2
+#define ET_DYN       3
 #define EM_X86_64    62
 #define PT_LOAD      1
+#define PT_DYNAMIC   2
+#define PT_INTERP    3
 #define PF_X         0x1
 #define PF_W         0x2
 #define PF_R         0x4
@@ -66,7 +74,33 @@ _Static_assert(sizeof(struct elf64_phdr) == 56, "Elf64_Phdr must be 56 bytes");
 #define EV_CURRENT   1
 
 #define AT_NULL      0
+#define AT_PHDR      3
+#define AT_PHENT     4
+#define AT_PHNUM     5
 #define AT_PAGESZ    6
+#define AT_ENTRY     9
+
+/* PT_DYNAMIC tags and relocation types P2 reads (DDR-1189 A2 P2-2). */
+#define DT_NULL      0
+#define DT_NEEDED    1
+#define DT_PLTRELSZ  2
+#define DT_RELA      7
+#define DT_RELASZ    8
+#define DT_RELAENT   9
+#define DT_REL      17
+#define DT_RELSZ    18
+#define DT_JMPREL   23
+#define DT_RELRSZ   35
+#define DT_RELR     36
+#define R_X86_64_NONE     0
+#define R_X86_64_RELATIVE 8
+
+struct elf64_rela {
+    uint64_t r_offset;
+    uint64_t r_info;
+    int64_t  r_addend;
+};
+_Static_assert(sizeof(struct elf64_rela) == 24, "Elf64_Rela must be 24 bytes");
 
 /* --- user address-space layout (PML4 slot 1: [512 GiB, 1 TiB), per ADR-021) - */
 #define USER_MIN         0x8000000000ull            /* 512 GiB                  */
@@ -76,6 +110,14 @@ _Static_assert(sizeof(struct elf64_phdr) == 56, "Elf64_Phdr must be 56 bytes");
  * in two places is the mirrored-definition bug class (DDR-822/825): the two
  * copies drift and the guard silently stops being a guard. One definition. */
 
+/* DDR-1189 A2 P2-1: the image bounds (vmm.h) and how they relate. */
+_Static_assert(USER_IMAGE_TOP <= VMM_MMAP_BASE, "images end below the mmap arena");
+_Static_assert(USER_IMAGE_TOP <= USER_STACK_LOWEST_BOT - PAGE_SIZE,
+               "images end below every stack window and its guard page");
+_Static_assert(USER_PIE_BASE + USER_PIE_ASLR_PAGES * PAGE_SIZE <= USER_PIE_TOP,
+               "every drawn PIE base is below USER_PIE_TOP");
+_Static_assert(USER_PIE_TOP <= USER_IMAGE_TOP, "the PIE window is inside the image window");
+
 static inline uint64_t page_down(uint64_t x) { return x & ~((uint64_t)PAGE_SIZE - 1); }
 static inline uint64_t page_up(uint64_t x)   { return (x + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1); }
 
@@ -83,6 +125,102 @@ static uint64_t kstrlen(const char *s) {
     uint64_t n = 0;
     while (s[n]) n++;
     return n;
+}
+
+/* Program header i. The table was checked to lie inside the image. */
+static const struct elf64_phdr *elf_ph(const uint8_t *img,
+                                       const struct elf64_ehdr *eh, uint16_t i) {
+    return (const struct elf64_phdr *)(img + eh->e_phoff + (uint64_t)i * eh->e_phentsize);
+}
+
+/* The file offset of [va, va + len) (link addresses) when the file part of one
+ * PT_LOAD holds all of it, else ~0. Every PT_LOAD's file range was checked. */
+static uint64_t elf_va_to_off(const uint8_t *img, const struct elf64_ehdr *eh,
+                              uint64_t va, uint64_t len) {
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        const struct elf64_phdr *ph = elf_ph(img, eh, i);
+        if (ph->p_type != PT_LOAD || va < ph->p_vaddr)
+            continue;
+        uint64_t d = va - ph->p_vaddr;
+        if (d <= ph->p_filesz && len <= ph->p_filesz - d)
+            return ph->p_offset + d;
+    }
+    return ~0ull;
+}
+
+/* DDR-1189 A2 P2-3: 1 when the 8 bytes at `off` (a link address) lie inside a
+ * writable PT_LOAD. A relocation anywhere else -- text, read-only data, or no
+ * segment at all -- is refused, so the loader never writes to text (L1). */
+static int elf_target_writable(const uint8_t *img, const struct elf64_ehdr *eh,
+                               uint64_t off) {
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        const struct elf64_phdr *ph = elf_ph(img, eh, i);
+        if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_W) || ph->p_memsz < 8)
+            continue;
+        if (off >= ph->p_vaddr && off - ph->p_vaddr <= ph->p_memsz - 8)
+            return 1;
+    }
+    return 0;
+}
+
+/* DDR-1189 A2 P2-2, P2-3: read PT_DYNAMIC, find the RELA table in the file and
+ * check every entry, all before the address space exists, so a refusal has
+ * written nothing. On success, out_off and out_n give the table (n may be 0). */
+static int elf_dyn_rela(const uint8_t *img, uint64_t image_len,
+                        const struct elf64_ehdr *eh, const struct elf64_phdr *dynph,
+                        uint64_t *out_off, uint64_t *out_n) {
+    *out_off = 0;
+    *out_n = 0;
+    if (dynph->p_offset > image_len || dynph->p_filesz > image_len - dynph->p_offset)
+        return ELF_E_DYN;
+    uint64_t rela = 0, relasz = 0, relaent = sizeof(struct elf64_rela);
+    int have_rela = 0;
+    for (uint64_t o = 0; o + 16 <= dynph->p_filesz; o += 16) {
+        uint64_t d[2];
+        memcpy(d, img + dynph->p_offset + o, sizeof d);
+        if (d[0] == DT_NULL)
+            break;
+        switch (d[0]) {
+        case DT_NEEDED:            /* libraries are P3's */
+        case DT_REL: case DT_RELSZ:
+        case DT_RELR: case DT_RELRSZ:
+        case DT_JMPREL:            /* a table this loader does not read */
+            return ELF_E_DYN;
+        case DT_PLTRELSZ:
+            if (d[1])
+                return ELF_E_DYN;
+            break;
+        case DT_RELA:    rela = d[1]; have_rela = 1; break;
+        case DT_RELASZ:  relasz = d[1]; break;
+        case DT_RELAENT: relaent = d[1]; break;
+        default: break;
+        }
+    }
+    if (relaent != sizeof(struct elf64_rela) ||
+        relasz % sizeof(struct elf64_rela) != 0 || (relasz && !have_rela))
+        return ELF_E_DYN;
+    if (relasz == 0)
+        return ELF_OK;
+    uint64_t off = elf_va_to_off(img, eh, rela, relasz);
+    if (off == ~0ull)
+        return ELF_E_DYN;
+    uint64_t n = relasz / sizeof(struct elf64_rela);
+    for (uint64_t k = 0; k < n; k++) {
+        struct elf64_rela r;
+        memcpy(&r, img + off + k * sizeof r, sizeof r);
+        uint32_t type = (uint32_t)r.r_info;
+        if (type == R_X86_64_NONE)
+            continue;
+        if (type != R_X86_64_RELATIVE || (r.r_info >> 32) != 0)
+            return ELF_E_RELOC;
+        if (r.r_offset & 7u)
+            return ELF_E_RELOC;
+        if (!elf_target_writable(img, eh, r.r_offset))
+            return ELF_E_RELOC;
+    }
+    *out_off = off;
+    *out_n = n;
+    return ELF_OK;
 }
 
 /* Map one freshly zeroed user page into `as` at `va` with `flags`, copying any
@@ -132,7 +270,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
         eh->e_ident[4] != ELFCLASS64 || eh->e_ident[5] != ELFDATA2LSB ||
         eh->e_ident[6] != EV_CURRENT)
         return ELF_E_MAGIC;
-    if (eh->e_type != ET_EXEC || eh->e_machine != EM_X86_64)
+    if ((eh->e_type != ET_EXEC && eh->e_type != ET_DYN) || eh->e_machine != EM_X86_64)
         return ELF_E_MACHINE;
     if (eh->e_phentsize < sizeof(struct elf64_phdr) || eh->e_phnum == 0)
         return ELF_E_PHDR;
@@ -141,45 +279,87 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     if (eh->e_phoff > image_len || ph_bytes > image_len - eh->e_phoff)
         return ELF_E_PHDR;
 
+    /* Pass 1, before anything is allocated: every PT_LOAD's file range, W^X and
+     * extent; for ET_DYN, at most one PT_DYNAMIC and no PT_INTERP (DDR-1189 A2
+     * P2-2: the interpreter is P3's). */
+    const int is_dyn = (eh->e_type == ET_DYN);
+    const struct elf64_phdr *dynph = 0;
+    uint64_t lo = ~0ull, hi = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        const struct elf64_phdr *ph = elf_ph(img, eh, i);
+        if (is_dyn && ph->p_type == PT_INTERP)
+            return ELF_E_INTERP;
+        if (is_dyn && ph->p_type == PT_DYNAMIC) {
+            if (dynph)
+                return ELF_E_DYN;
+            dynph = ph;
+            continue;
+        }
+        if (ph->p_type != PT_LOAD)
+            continue;
+        /* file range valid */
+        if (ph->p_filesz > ph->p_memsz ||
+            ph->p_offset > image_len || ph->p_filesz > image_len - ph->p_offset)
+            return ELF_E_SEGMENT;
+        /* W^X: never both writable and executable */
+        if ((ph->p_flags & PF_W) && (ph->p_flags & PF_X))
+            return ELF_E_WX;
+        if (ph->p_memsz == 0)
+            continue;
+        /* both under 1 TiB, so the sum below cannot wrap */
+        if (ph->p_vaddr > USER_MAX || ph->p_memsz > USER_MAX)
+            return ELF_E_RANGE;
+        uint64_t vstart = page_down(ph->p_vaddr);
+        uint64_t vend   = page_up(ph->p_vaddr + ph->p_memsz);
+        if (vstart < lo) lo = vstart;
+        if (vend > hi)   hi = vend;
+    }
+
+    /* DDR-1189 A2 P2-1: one bound for every image, [USER_MIN, USER_IMAGE_TOP),
+     * clear of the surface, framebuffer and mmap windows and of every stack
+     * window (CodeRabbit on #154), so an image loads or fails the same way
+     * whatever the draws. An ET_DYN gets a random page-aligned base, 18 bits
+     * within 1 GiB (L3), and must end at or below USER_PIE_TOP. */
+    uint64_t bias = 0;
+    if (hi != 0) {                                 /* at least one PT_LOAD */
+        if (is_dyn) {
+            uint64_t base = USER_PIE_BASE +
+                (aslr_random() & (USER_PIE_ASLR_PAGES - 1)) * PAGE_SIZE;
+            if (hi - lo > USER_PIE_TOP - base)
+                return ELF_E_RANGE;
+            bias = base - lo;
+        } else if (lo < USER_MIN || hi > USER_IMAGE_TOP) {
+            return ELF_E_RANGE;
+        }
+    }
+
+    /* DDR-1189 A2 P2-2, P2-3: the relocation table, every entry checked. */
+    uint64_t rela_off = 0, rela_n = 0;
+    if (dynph) {
+        int drc = elf_dyn_rela(img, image_len, eh, dynph, &rela_off, &rela_n);
+        if (drc != ELF_OK)
+            return drc;
+    }
+
     uint64_t as = vmm_new_address_space();
     if (!as)
         return ELF_E_NOMEM;
 
     int rc = ELF_OK;
     for (uint16_t i = 0; i < eh->e_phnum && rc == ELF_OK; i++) {
-        const struct elf64_phdr *ph =
-            (const struct elf64_phdr *)(img + eh->e_phoff + (uint64_t)i * eh->e_phentsize);
-        if (ph->p_type != PT_LOAD)
+        const struct elf64_phdr *ph = elf_ph(img, eh, i);
+        if (ph->p_type != PT_LOAD || ph->p_memsz == 0)
             continue;
-
-        /* file range valid */
-        if (ph->p_filesz > ph->p_memsz ||
-            ph->p_offset > image_len || ph->p_filesz > image_len - ph->p_offset) {
-            rc = ELF_E_SEGMENT;
-            break;
-        }
-        /* W^X: never both writable and executable */
-        if ((ph->p_flags & PF_W) && (ph->p_flags & PF_X)) {
-            rc = ELF_E_WX;
-            break;
-        }
-        /* stay inside the user range and clear of every stack window a layout
-         * draw can give, and its guard page (DDR-1189 A1 P1-2; Codex on #154):
-         * an image then loads or fails the same way whatever the draw */
-        uint64_t vstart = page_down(ph->p_vaddr);
-        uint64_t vend   = page_up(ph->p_vaddr + ph->p_memsz);
-        if (ph->p_memsz == 0) continue;
-        if (vstart < USER_MIN || vend > USER_STACK_LOWEST_BOT - PAGE_SIZE || vend <= vstart) {
-            rc = ELF_E_RANGE;
-            break;
-        }
 
         uint64_t flags = VMM_USER;                 /* present is added by map_core */
         if (ph->p_flags & PF_W) flags |= VMM_RW;
         if (!(ph->p_flags & PF_X)) flags |= VMM_NX;   /* W^X: only X stays executable */
 
+        /* bias is page-aligned (a page-aligned base minus a page-aligned lo) */
+        uint64_t vstart = page_down(ph->p_vaddr) + bias;
+        uint64_t vend   = page_up(ph->p_vaddr + ph->p_memsz) + bias;
         for (uint64_t va = vstart; va < vend; va += PAGE_SIZE) {
-            if (!load_page(as, va, flags, img, ph->p_vaddr,
+            if (!load_page(as, va, flags, img, ph->p_vaddr + bias,
                            ph->p_offset, ph->p_filesz)) {
                 rc = ELF_E_NOMEM;
                 break;
@@ -187,9 +367,45 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
         }
     }
 
+    /* DDR-1189 A2 P2-3: apply R_X86_64_RELATIVE. Each target was checked to be
+     * 8-aligned inside a writable PT_LOAD, so it sits in one private, freshly
+     * mapped frame; the write goes through that frame's identity view, as
+     * load_page copies file bytes (the new address space is not current). */
+    for (uint64_t k = 0; k < rela_n && rc == ELF_OK; k++) {
+        struct elf64_rela r;
+        memcpy(&r, img + rela_off + k * sizeof r, sizeof r);
+        if ((uint32_t)r.r_info == R_X86_64_NONE)
+            continue;
+        uint64_t va = r.r_offset + bias;
+        uint64_t phys = vmm_resolve(as, va);
+        if (!phys) {
+            rc = ELF_E_RELOC;
+            break;
+        }
+        *(uint64_t *)(uintptr_t)(phys + (va & (PAGE_SIZE - 1))) = bias + (uint64_t)r.r_addend;
+    }
+
     if (rc != ELF_OK) {
         vmm_destroy_address_space(as);
         return rc;
+    }
+
+    /* DDR-1189 A2 P2-4: AT_PHDR when the file part of a PT_LOAD holds the
+     * program headers, else AT_PHDR and AT_PHNUM stay 0. ET_DYN only. */
+    const uint64_t aux_bias = bias;    /* AT_PHDR and AT_ENTRY carry the bias */
+    uint64_t at_phdr = 0, at_phnum = 0;
+    if (is_dyn) {
+        for (uint16_t i = 0; i < eh->e_phnum; i++) {
+            const struct elf64_phdr *ph = elf_ph(img, eh, i);
+            if (ph->p_type != PT_LOAD || eh->e_phoff < ph->p_offset)
+                continue;
+            uint64_t d = eh->e_phoff - ph->p_offset;
+            if (d <= ph->p_filesz && ph_bytes <= ph->p_filesz - d) {
+                at_phdr = ph->p_vaddr + d + aux_bias;
+                at_phnum = eh->e_phnum;
+                break;
+            }
+        }
     }
 
     /* --- user stack: 8 MiB RW+NX, guard page below, SysV ABI initial frame --- */
@@ -277,13 +493,26 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
      * EVEN and shipped a misaligned stack for argc=3/envc=1 (11 slots). Nothing
      * in the assembly receiver can feel that, so `PRADYOS_ARGV_ALIGN` was added
      * to measure RSP at entry -- it read `bad`, which is how this was caught. */
-    if (((7u + nargc + nenvc) & 1u) != 0u) { sp -= 8; *(uint64_t *)(kp + sp) = 0; }
+    /* DDR-1189 A2 P2-4: an ET_DYN frame has 4 more auxv pairs, 8 slots, so the
+     * parity this reads is the same; an ET_EXEC frame is byte-for-byte as before. */
+    const unsigned fixed = 7u + (is_dyn ? 8u : 0u);
+    if (((fixed + nargc + nenvc) & 1u) != 0u) { sp -= 8; *(uint64_t *)(kp + sp) = 0; }
 
     /* push high->low so the final (lowest) slot is argc; RSP stays 16-aligned */
     sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* auxv[1].val  (AT_NULL)     */
     sp -= 8; *(uint64_t *)(kp + sp) = AT_NULL;     /* auxv[1].type               */
     sp -= 8; *(uint64_t *)(kp + sp) = PAGE_SIZE;   /* auxv[0].val                */
     sp -= 8; *(uint64_t *)(kp + sp) = AT_PAGESZ;   /* auxv[0].type               */
+    if (is_dyn) {                                  /* ahead of AT_PAGESZ (P2-4)  */
+        sp -= 8; *(uint64_t *)(kp + sp) = eh->e_entry + aux_bias;
+        sp -= 8; *(uint64_t *)(kp + sp) = AT_ENTRY;
+        sp -= 8; *(uint64_t *)(kp + sp) = at_phnum;
+        sp -= 8; *(uint64_t *)(kp + sp) = AT_PHNUM;
+        sp -= 8; *(uint64_t *)(kp + sp) = eh->e_phentsize;
+        sp -= 8; *(uint64_t *)(kp + sp) = AT_PHENT;
+        sp -= 8; *(uint64_t *)(kp + sp) = at_phdr;
+        sp -= 8; *(uint64_t *)(kp + sp) = AT_PHDR;
+    }
     sp -= 8; *(uint64_t *)(kp + sp) = 0;           /* envp terminator            */
     for (unsigned i = nenvc; i-- > 0; ) {
         sp -= 8; *(uint64_t *)(kp + sp) = uva[nargc + i];
@@ -299,7 +528,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     metric_page_map_user(as);   /* F#68/DDR-795: read-only sealed objective root */
 
     *out_as    = as;
-    *out_entry = eh->e_entry;
+    *out_entry = eh->e_entry + bias;
     *out_rsp   = user_rsp;
     *out_lay   = lay;
     return ELF_OK;
