@@ -19,6 +19,7 @@
 #include "aether.h"            /* DDR-1171: rollback log replay/free */
 #include "rcu.h"               /* DDR-1200: rule-1 check in schedule() */
 #include "lapic.h"             /* DDR-1188 A7: hrt_nohz_enter / exit */
+#include "vdso_page.h"         /* DDR-1188 A7: ktime_mono_ns for dl_now */
 
 /* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
  * reader -- init_idle, which records its base as idle0's kstack_base so
@@ -169,6 +170,17 @@ static volatile uint8_t g_iso[PERCPU_MAX];
  * idle-loop passes that found work. */
 static volatile uint64_t g_nz_stop[PERCPU_MAX], g_nz_refuse[PERCPU_MAX], g_nz_ready[PERCPU_MAX];
 
+/* The BSP's roster index, by identity (0 on QEMU; percpu_init_bsp says
+ * correctness must not depend on that). CodeRabbit on #150. */
+static int sched_bsp_idx(void) {
+    for (int i = 0; i < PERCPU_MAX; i++) {
+        struct percpu *p = percpu_get((unsigned)i);
+        if (p && p->present && p->is_bsp)
+            return i;
+    }
+    return 0;
+}
+
 static void psi_record(struct psi_win *w, uint64_t tick, int stalled) {
     uint32_t i = (uint32_t)(tick % 100);
     uint64_t m = 1ull << (i & 63);
@@ -239,7 +251,17 @@ int psi_read(long res, long cpu) {
 /* DDR-1188 A5 D2: a deadline thread is pinned, so its time is its CPU's ticks. */
 static inline uint64_t dl_now(const struct tcb *t) {
     struct percpu *pc = percpu_get((unsigned)t->pin_cpu);
-    return pc ? __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED) : 0;
+    if (!pc)
+        return 0;
+    /* DDR-1188 A7 (CodeRabbit on #150): a CBS wake from another CPU must not
+     * read the counter a stopped CPU froze. While nohz is set, the clock is the
+     * value the exit will catch up to: the base plus max(k, 1). The exit moves
+     * ticks before it clears nohz, so the two readings agree. */
+    if (__atomic_load_n(&pc->nohz, __ATOMIC_ACQUIRE)) {
+        uint64_t k = (ktime_mono_ns() - pc->nohz_t0) / 10000000ull;
+        return pc->nohz_base + (k ? k : 1);
+    }
+    return __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
 }
 
 /* A5 D3: a CBS-throttled thread is eligible again at its deadline, with a new
@@ -517,8 +539,8 @@ static void rq_push(int cpu, struct tcb *t) {
      * makes a thread runnable comes through here, so this is the one site. */
     if (t->pin_cpu >= 0)
         cpu = t->pin_cpu;
-    else if (cpu > 0 && cpu < PERCPU_MAX && g_iso[cpu])
-        cpu = 0;                       /* DDR-1188 A7 T6: isolated, pinned threads only */
+    else if (cpu >= 0 && cpu < PERCPU_MAX && g_iso[cpu])
+        cpu = sched_bsp_idx();         /* DDR-1188 A7 T6: isolated, pinned threads only */
     struct rq *q = &g_rq[cpu];
 #if RCU_TORTURE
     /* RE (f): a push made by the sweep's act step tries the lock first and
@@ -1445,7 +1467,8 @@ static int sched_nohz_enter(struct percpu *pc) {
         return 0;
     }
     g_nz_stop[c]++;
-    __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST);
+    pc->nohz_t0   = ktime_mono_ns();
+    pc->nohz_base = __atomic_fetch_add(&pc->ticks, 1, __ATOMIC_SEQ_CST);
     __atomic_store_n(&pc->nohz, 1, __ATOMIC_SEQ_CST);
     return 1;
 }
@@ -1471,16 +1494,17 @@ uint64_t sched_nohz_stat(int cpu, int which) {
 }
 
 int sched_iso_set(int cpu, int on) {
-    if (cpu <= 0 || cpu >= PERCPU_MAX)
+    if (cpu < 0 || cpu >= PERCPU_MAX)
         return -1;
     struct percpu *p = percpu_get((unsigned)cpu);
-    if (!p || !p->present)
+    if (!p || !p->present || p->is_bsp)
         return -1;
     __atomic_store_n(&g_iso[cpu], (uint8_t)(on ? 1 : 0), __ATOMIC_SEQ_CST);
     if (!on)
         return 0;
     struct rq *q = &g_rq[cpu];
-    for (int n = 0; n < 256; n++) {
+    int bsp = sched_bsp_idx();
+    for (;;) {                         /* until no unpinned entry is left (CodeRabbit on #150) */
         uint64_t fl = spin_lock_irqsave(&q->lock);
         struct tcb *u = 0;
         for (struct tcb *c = q->head; c; c = c->rq_next)
@@ -1490,7 +1514,7 @@ int sched_iso_set(int cpu, int on) {
         if (!u)
             break;
         if (got)
-            rq_push(0, got);           /* rq_unlink cleared rq_on */
+            rq_push(bsp, got);         /* rq_unlink cleared rq_on */
     }
     return 0;
 }
@@ -1541,11 +1565,17 @@ void sched_ap_enter(void) {
          * work that may have arrived between schedule() and now (else that
          * waker saw idle==0 and skipped the kick). SEQ_CST orders the flag store
          * before the rq_has_ready load, pairing with the waker's rq_push then
-         * idle read. If we still hlt, the wake IPI (or timer) breaks it. */
+         * idle read. If we still hlt, the wake IPI (or timer) breaks it.
+         * DDR-1188 A7 (CodeRabbit on #150): IF is cleared before the flag, so
+         * a wake IPI sent after the re-check stays pending until the sti;hlt
+         * below; consumed earlier, it would leave a stopped tick to sleep up
+         * to the 1 s bound with work queued. */
+        __asm__ volatile("cli" ::: "memory");
         __atomic_store_n(&pc->idle, 1, __ATOMIC_SEQ_CST);
         if (rq_has_ready()) {
             __atomic_store_n(&pc->idle, 0, __ATOMIC_SEQ_CST);
             if (cpu < PERCPU_MAX) g_nz_ready[cpu]++;
+            __asm__ volatile("sti" ::: "memory");
             continue;                  /* work appeared — steal it next schedule() */
         }
         /* DDR-1188 A7 T2-T5: maybe stop the tick. Returns with IF clear

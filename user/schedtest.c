@@ -1161,18 +1161,21 @@ static void arms_p5(void) {
 #define L2_N       20
 #define L2_MAX_US  50000
 
-struct l1_state { volatile long done, pinned; volatile uint64_t late; };
+struct l1_state { volatile long done, pinned, valid; volatile uint64_t late; };
 
 __attribute__((noreturn, force_align_arg_pointer)) static void l1_sleeper(long arg) {
     struct l1_state *s = (struct l1_state *)arg;
     s->pinned = pin(L_CPU);
     uint64_t worst = 0;
     for (int i = 0; i < L1_N && s->pinned; i++) {
+        struct ts req = { 0, L1_MS * (long)MS };
         uint64_t t0 = mono();
-        sleep_ms(L1_MS);
+        long r = nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
         uint64_t d = mono() - t0, want = (uint64_t)L1_MS * MS;
-        uint64_t late = d > want ? d - want : 0;
-        if (late > worst) worst = late;
+        if (r != 0 || d < want)
+            continue;                 /* a failed or short sleep is not a sample */
+        s->valid++;
+        if (d - want > worst) worst = d - want;
     }
     s->late = worst;
     __atomic_store_n(&s->done, 1, __ATOMIC_RELEASE);
@@ -1198,9 +1201,10 @@ static void arms_p6(void) {
     struct l1_state *s = page();
     spawn(l1_sleeper, (long)s);
     long done = await_eq(&s->done, 1, 10);
-    say("[sched] L1 late_us=%d pinned=%d done=%d\n", (long)(s->late / 1000), s->pinned, done);
+    say("[sched] L1 late_us=%d valid=%d pinned=%d done=%d\n", (long)(s->late / 1000), s->valid,
+        s->pinned, done);
     say("PRADYOS_SCHED_L1 wake_ok=%d\n",
-        (long)(iso == 0 && done && s->pinned && s->late <= L1_LATE));
+        (long)(iso == 0 && done && s->pinned && s->valid == L1_N && s->late <= L1_LATE));
 
     sleep_ms(200);                           /* CPU 3 isolated and idle again */
     long worst = -1, bad = 0;
