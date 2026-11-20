@@ -421,7 +421,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
 
     /* DDR-1189 A2 P2-4: AT_PHDR when the file part of a PT_LOAD holds the
      * program headers, else AT_PHDR and AT_PHNUM stay 0. ET_DYN only. */
-    const uint64_t aux_bias = bias;    /* AT_PHDR and AT_ENTRY carry the bias */
+    const uint64_t aux_bias = 0;       /* MUTANT D3c: auxv not biased */
     uint64_t at_phdr = 0, at_phnum = 0;
     if (is_dyn) {
         for (uint16_t i = 0; i < eh->e_phnum; i++) {
