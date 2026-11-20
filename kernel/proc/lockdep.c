@@ -252,8 +252,7 @@ static inline struct ld_held *ld_cur(struct percpu *p) {
     return t ? &t->ld : ld_cpu_held(p);
 }
 static inline int ld_active(struct percpu *p) {
-    (void)p;
-    return 1;
+    return p->is_bsp;                           /* MUTANT LD4: BSP only */
 }
 
 /* Before the wait: the order check. Returns the class for the push. */
