@@ -1,7 +1,7 @@
 # DDR-1189: Dynamic linking, shared libraries and user-space ASLR (checklist C1.6)
 
-Status: design ahead (#45 comment 6436706603, item 2). No code until C1.3 has
-merged (`Needs: C1.3`).
+Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged; P1 is
+being built under Amendment 1. P2 to P4 are not built.
 
 ## 1. Where the tree is (read from `dev/phase1` = `7981cd4`)
 
@@ -103,3 +103,100 @@ layout and `ET_EXEC`-only loader.
 - ASLR strength is bounded by L3's bit counts, and by L2 when no hardware
   entropy is present.
 - This record does not close OPEN-1/2/12/13 or U1-U3.
+
+## Amendment 1 (2026-11-20): Part P1, user ASLR for what exists now
+
+Authorised by #45 6993979920 (C1.6 follows C1.4's lock-order checking). This
+amendment fixes P1's implementation; §3 L2 and L3 stand as written.
+
+### A1.1 Where the tree is (`dev/phase1` = `01d0704`)
+
+- **One loader core.** `elf_build_image` (`kernel/exec/elf.c`) builds every
+  user image: the boot-time probe spawns through `elf_load`/`elf_load_args`,
+  and `execve` (`kernel/syscall/sys_exec.c`). It maps the top stack pages at
+  the fixed `USER_STACK_TOP` and writes the SysV initial frame there.
+- **The mmap bump pointer** lives in `struct mm` (`mmap_next`). `mm_create` and
+  `execve`'s commit set it to the fixed `VMM_MMAP_BASE`; fork copies it.
+- **Stack growth** (`vmm_stack_fault`, ADR-038) maps not-present pages in the
+  fixed `[USER_STACK_BOT, USER_STACK_TOP)`. The `[stkdepth]` diagnostic in
+  `vmm_user_range_ok` measures from `USER_STACK_TOP`. No gate reads it.
+- **Entropy.** `rng_bytes()` uses virtio-rng or `RDSEED` and fails closed.
+  Gates attach virtio-rng only under `QEMU_RNG`, and the default TCG CPU has
+  neither `RDSEED` nor `RDRAND`, so most boots have no hardware source
+  (`[rng] source=NONE`). Nothing reads `RDRAND`.
+- **No user probe hard-codes the stack** (`stackdemand` recurses relative to
+  its own frame). `shmtest` and `sigsemtest` use the fixed address
+  `0x8E00000000`, 24 GiB above any P1 mmap base.
+
+### A1.2 Decisions
+
+- **P1-1. The layout belongs to the address space.** `struct mm` gains
+  `stack_top` (the stack is `[stack_top - USER_STACK_SIZE, stack_top)`, the
+  guard page below it) and `mmap_base` (where `mmap_next` starts). `mm_create`
+  sets the fixed values. Fork copies the parent's, because the child's stack
+  contents are copies at the same addresses. `CLONE_VM` threads share the mm,
+  and with it the layout.
+- **P1-2. `elf_build_image` draws the layout and returns it.**
+  - `stack_top = USER_STACK_TOP - r16 * 4 KiB`, with `r16 < 2^16`: 16 bits
+    within 256 MiB (L3).
+  - `mmap_base = VMM_MMAP_BASE + r18 * 4 KiB`, with `r18 < 2^18`: 18 bits
+    within 1 GiB (L3).
+  - It builds the stack and the initial frame at `stack_top`.
+  - Every `PT_LOAD` must end below the lowest stack bottom any draw can give, and its guard page (`USER_STACK_LOWEST_BOT`), not only below the fixed one. An image therefore loads, or is refused, the same way whatever the draw (Codex on #154).
+  - `elf_load_args` stores the layout in the new mm. `execve` stores it at its
+    point of no return, where it used to reset `mmap_next` to the fixed base.
+  - Nothing else moves in P1: the ELF image (`ET_EXEC`, link addresses, until
+    P2), the vDSO, and the framebuffer window (`FB_USER_VA`).
+- **P1-3. Every reader of the stack range uses the mm's.**
+  `vmm_stack_fault` takes the stack top; the `#PF` path passes the faulting
+  thread's. The `[stkdepth]` diagnostic measures from the current thread's.
+- **P1-4. `aslr_random()` (`kernel/crypto/aslr.c`) implements L2 as written.**
+  1. `rng_bytes()`.
+  2. Failing that, `RDRAND` when CPUID.1:ECX[30] is set, checking CF on every
+     call, at most 10 tries per 64-bit word.
+  3. Failing that, TSC readings mixed into a per-boot state, with a flag set
+     and `aslr: weak entropy` printed once.
+  - The source of the first draw is printed once, `[aslr] source=rng`,
+    `rdrand` or `tsc`.
+  - `rng_bytes()` stays fail-closed for key material. Its virtio path now holds a lock across the draw: the queue, its descriptor and the bounce page are shared, and exec now draws from every CPU (Codex on #154).
+  - The draw happens before `execve`'s point of no return, so a failure there
+    costs nothing; the TSC path cannot fail.
+- **P1-5. Gate `smoke-dynlink`, arms A and B (§4).**
+  - Probe `user/dyntest.c`, raw syscalls, no libc. It is embedded for
+    `QEMU_PROBES=dynlink` and copied to the FAT image as `/DYNTEST.ELF`.
+  - The boot instance forks four children. Each `execve`s `/DYNTEST.ELF` with
+    `argv[1] = "child"`, and the parent waits for each in turn.
+  - Each child prints `PRADYOS_DYN_L stack=0x... mmap=0x...`:
+    - the address of a local in its entry function;
+    - the address returned by a fresh one-page anonymous `mmap`.
+  - The parent prints `PRADYOS_DYN_DONE n=4`.
+  - All four samples come from `execve`, so the commit-side store is tested,
+    not only the boot path.
+  - The gate runs with `QEMU_RNG=1` and requires `[aslr] source=rng`, so it
+    tests the primary source. Every other gate boots without virtio-rng and
+    exercises the TSC path, which is not asserted (stated).
+  - **Arm A:** the four `stack=` values are within
+    `[USER_STACK_TOP - 256 MiB - 8 MiB, USER_STACK_TOP)`, and at least 2 of
+    them are distinct.
+  - **Arm B:** the four `mmap=` values are within
+    `[VMM_MMAP_BASE, VMM_MMAP_BASE + 1 GiB + 1 MiB)`, and at least 2 of them
+    are distinct.
+  - A false red needs four equal draws: 2^-48 for the stack, 2^-54 for mmap.
+- **P1-6. Mutants (each red on its own arm).**
+  - **D1:** `elf_build_image` keeps `stack_top = USER_STACK_TOP`. Expected: A
+    red (`distinct=1`), B green.
+  - **D2:** it keeps `mmap_base = VMM_MMAP_BASE`. Expected: B red, A green.
+  - **D2b:** `execve`'s commit resets `mmap_next` to `VMM_MMAP_BASE`, the
+    fixed value, instead of storing the drawn base. Expected: B red, A green;
+    this is what makes every sample come from `execve`.
+  - **Vacuity, read before writing:** today's tree has the fixed layout, so A
+    and B are both red on it.
+
+### A1.3 Not covered by P1 (stated)
+
+- The program image, the vDSO and the framebuffer window stay at fixed
+  addresses until P2 and later.
+- Strength is bounded by L3's bit counts. On the TSC path ASLR runs, but it is
+  weak and not called secure.
+- Fork shares the parent's layout by design. Only `execve` re-randomises.
+- QEMU (TCG) only, not verified on real hardware.

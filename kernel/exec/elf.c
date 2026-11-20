@@ -19,6 +19,7 @@
 #include "vfs.h"        /* FS_RES_ID + vfs_default_mnt for the 5b FS grant */
 #include "vdso_page.h"  /* vdso_map_user — read-only clock page (IMP-C) */
 #include "metric_page.h" /* metric_page_map_user — sealed objective root (DDR-795) */
+#include "aslr.h"        /* DDR-1189 A1 P1-4: aslr_random */
 
 /* --- ELF64 on-disk format (System V gABI; a public spec, clean-room) -------- */
 
@@ -117,9 +118,10 @@ static uint64_t load_page(uint64_t as, uint64_t va, uint64_t flags,
 
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
                     const struct exec_args *args,
-                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp) {
+                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp,
+                    struct user_layout *out_lay) {
     if (!image || image_len < sizeof(struct elf64_ehdr) ||
-        !out_as || !out_entry || !out_rsp)
+        !out_as || !out_entry || !out_rsp || !out_lay)
         return ELF_E_ARGS;
 
     const uint8_t *img = (const uint8_t *)image;
@@ -161,11 +163,13 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
             rc = ELF_E_WX;
             break;
         }
-        /* stay inside the user range and clear of the stack + its guard page */
+        /* stay inside the user range and clear of every stack window a layout
+         * draw can give, and its guard page (DDR-1189 A1 P1-2; Codex on #154):
+         * an image then loads or fails the same way whatever the draw */
         uint64_t vstart = page_down(ph->p_vaddr);
         uint64_t vend   = page_up(ph->p_vaddr + ph->p_memsz);
         if (ph->p_memsz == 0) continue;
-        if (vstart < USER_MIN || vend > USER_STACK_BOT - PAGE_SIZE || vend <= vstart) {
+        if (vstart < USER_MIN || vend > USER_STACK_LOWEST_BOT - PAGE_SIZE || vend <= vstart) {
             rc = ELF_E_RANGE;
             break;
         }
@@ -196,9 +200,16 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
      * stack's headroom. The top page cannot be lazy: elf.c writes the SysV
      * initial frame (argc/argv/envp/auxv) into it just below, through its
      * identity view, before the thread ever runs. */
+    /* DDR-1189 Amendment 1 (P1-2): this image's layout, 16 bits for the stack
+     * top within 256 MiB and 18 bits for the mmap base within 1 GiB (L3).
+     * Drawn before the caller's image is touched; aslr_random cannot fail. */
+    struct user_layout lay;
+    lay.stack_top = USER_STACK_TOP - (aslr_random() & (USER_STACK_ASLR_PAGES - 1)) * PAGE_SIZE;
+    lay.mmap_base = VMM_MMAP_BASE + (aslr_random() & 0x3FFFFull) * PAGE_SIZE;
+
     uint64_t top_phys = 0;
     for (uint64_t i = 0; i < USER_STACK_EAGER_PAGES; i++) {
-        uint64_t va = USER_STACK_TOP - (i + 1) * PAGE_SIZE;
+        uint64_t va = lay.stack_top - (i + 1) * PAGE_SIZE;
         void *frame = ptnode_alloc();
         if (!frame) { vmm_destroy_address_space(as); return ELF_E_NOMEM; }
         uint64_t phys = (uint64_t)(uintptr_t)frame;
@@ -210,12 +221,13 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
         if (i == 0)
             top_phys = phys;              /* the SysV initial frame lives here */
     }
-    /* guard page at [USER_STACK_BOT - PAGE_SIZE, USER_STACK_BOT) is left unmapped. */
+    /* the guard page, the one just below lay.stack_top - USER_STACK_SIZE, is
+     * left unmapped. */
 
     /* Build argc/argv/envp/auxv in the top stack page via its identity view.
      * Pointers stored in the frame are USER virtual addresses. */
     uint8_t *kp = (uint8_t *)(uintptr_t)top_phys;
-    uint64_t top_uva = USER_STACK_TOP - PAGE_SIZE;
+    uint64_t top_uva = lay.stack_top - PAGE_SIZE;
     const char *prog = name ? name : "prog";
     uint64_t nlen = kstrlen(prog) + 1;
 
@@ -289,6 +301,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     *out_as    = as;
     *out_entry = eh->e_entry;
     *out_rsp   = user_rsp;
+    *out_lay   = lay;
     return ELF_OK;
 }
 
@@ -306,7 +319,8 @@ int elf_load_args(const void *image, uint64_t image_len, const char *name,
         return ELF_E_ARGS;
 
     uint64_t as, entry, user_rsp;
-    int rc = elf_build_image(image, image_len, name, args, &as, &entry, &user_rsp);
+    struct user_layout lay;
+    int rc = elf_build_image(image, image_len, name, args, &as, &entry, &user_rsp, &lay);
     if (rc != ELF_OK)
         return rc;
 
@@ -324,6 +338,9 @@ int elf_load_args(const void *image, uint64_t image_len, const char *name,
         vmm_destroy_address_space(as);
         return ELF_E_NOMEM;
     }
+    mm->stack_top = lay.stack_top;     /* DDR-1189 A1 P1-2 */
+    mm->mmap_base = lay.mmap_base;
+    mm->mmap_next = lay.mmap_base;
     uint64_t fl;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(fl) :: "memory");
     struct tcb *t = sched_create_user(prog, entry, user_rsp);

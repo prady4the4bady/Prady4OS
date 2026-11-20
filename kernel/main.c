@@ -465,6 +465,8 @@ extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DEL
 extern const unsigned char actiondeltest_elf_end[];
 extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT */
 extern const unsigned char mprotecttest_elf_end[];
+extern const unsigned char dyntest_elf[];             /* DDR-1189 A1: user ASLR */
+extern const unsigned char dyntest_elf_end[];
 extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
 extern const unsigned char killblocktest_elf_end[];
 extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semantics */
@@ -3404,6 +3406,19 @@ static void fs_test_thread(void *arg) {
                  * resolves against the PROCESS root (the same reason
                  * /EXECTEST.ELF lives there). Not in smnt_pid: it touches no
                  * files on the SFS root. */
+                /* DDR-1189 Amendment 1 (C1.6 P1): smoke-dynlink arms A and B. */
+                if (probe_enabled("dynlink")) {
+                    struct tcb *dy = 0;
+                    uint64_t dylen = (uint64_t)(uintptr_t)dyntest_elf_end -
+                                     (uint64_t)(uintptr_t)dyntest_elf;
+                    if (elf_load((void *)(uintptr_t)dyntest_elf, dylen,
+                                 "DYNTEST", &dy) == ELF_OK && dy) {
+                        sched_unblock(dy);
+                        kputs("[user] user ASLR probe spawned\r\n");
+                    } else {
+                        kputs("[user] DYNTEST probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("argv")) {
                     struct tcb *av = 0;
                     uint64_t avlen = (uint64_t)(uintptr_t)argvtest_elf_end -

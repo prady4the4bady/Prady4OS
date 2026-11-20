@@ -81,6 +81,11 @@ void vmm_mapguard_probe(void);
 #define USER_STACK_TOP   0x9000000000ull            /* 576 GiB                  */
 #define USER_STACK_SIZE  (8ull * 1024 * 1024)       /* 8 MiB (ADR-021)          */
 #define USER_STACK_BOT   (USER_STACK_TOP - USER_STACK_SIZE)
+/* DDR-1189 A1 P1-2: the stack top is drawn down from USER_STACK_TOP by up to
+ * USER_STACK_ASLR_PAGES - 1 pages, so no PT_LOAD may reach the lowest stack
+ * bottom any draw can give, nor its guard page (Codex on #154). */
+#define USER_STACK_ASLR_PAGES 0x10000ull
+#define USER_STACK_LOWEST_BOT (USER_STACK_BOT - (USER_STACK_ASLR_PAGES - 1) * PAGE_SIZE)
 
 /* ADR-038 Option 3: pages eagerly mapped at the TOP of the stack; everything
  * below is demand-paged. This window exists because vmm_user_range_ok (ADR-022)
@@ -100,7 +105,10 @@ void vmm_mapguard_probe(void);
  * fault (out of range, or OOM). The guard page at [BOT-PAGE, BOT) is BELOW
  * USER_STACK_BOT and therefore never satisfied here — that is what keeps it a
  * guard rather than decoration. */
-int vmm_stack_fault(uint64_t cr3, uint64_t fault_va);
+/* DDR-1189 A1 P1-3: the stack is [stack_top - USER_STACK_SIZE, stack_top). */
+/* The current thread's stack top (mm.c); USER_STACK_TOP when it has no mm. */
+uint64_t mm_cur_stack_top(void);
+int vmm_stack_fault(uint64_t cr3, uint64_t fault_va, uint64_t stack_top);
 
 /* Free a per-process address space: its private user page tables and the PML4.
  * The shared kernel entries are left intact. */

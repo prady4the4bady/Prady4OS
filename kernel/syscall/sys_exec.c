@@ -134,8 +134,9 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     /* Build the new address space. This does NOT touch the current image, so a
      * failure here leaves the caller running unharmed. */
     uint64_t new_as = 0, entry = 0, new_rsp = 0;
+    struct user_layout lay;
     int rc = elf_build_image(buf, isize, kpath, na > 0 ? &eargs : 0,
-                             &new_as, &entry, &new_rsp);
+                             &new_as, &entry, &new_rsp, &lay);
     kfree(buf);
     if (rc != ELF_OK)
         return -ENOEXEC;
@@ -160,7 +161,11 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     t->user_stack = new_rsp;
     shm_release_vmas(t->mm);   /* DDR-1178 A2.2: the old image's attachments end */
     for (int i = 0; i < VM_AREA_MAX; i++) { t->mm->vma[i].base = 0; t->mm->vma[i].npages = 0; }
-    t->mm->mmap_next = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
+    /* DDR-1189 A1 P1-2: the new image's drawn layout (it used to be the fixed
+     * VMM_MMAP_BASE here). Mutant D2b puts that back; arm B catches it. */
+    t->mm->stack_top = lay.stack_top;
+    t->mm->mmap_base = lay.mmap_base;
+    t->mm->mmap_next = lay.mmap_base;
 
     /* Activate the new AS before freeing the old one — never free the live CR3. */
     __asm__ volatile("mov %0, %%cr3" :: "r"(new_as) : "memory");

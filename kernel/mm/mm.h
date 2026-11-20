@@ -25,6 +25,9 @@ struct mm {
     uint64_t       cr3;                 /* page-table root; 0 = none           */
     struct vm_area vma[VM_AREA_MAX];    /* anonymous mmap regions (5b)         */
     uint64_t       mmap_next;           /* bump pointer for addr==NULL mmaps   */
+    uint64_t       mmap_base;           /* DDR-1189 A1 P1-1: where mmap_next starts */
+    uint64_t       stack_top;           /* DDR-1189 A1 P1-1: the stack is
+                                         * [stack_top - USER_STACK_SIZE, stack_top) */
     uint64_t       mem_limit;           /* L6: 0 -> AETHER_MEM_DEFAULT          */
     uint64_t       mem_used;            /* charged by mmap growth (agents)     */
     uint32_t       refs;                /* tcbs holding this mm (atomic)       */
