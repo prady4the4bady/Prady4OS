@@ -159,7 +159,8 @@ int vmm_stack_fault(uint64_t cr3, uint64_t fault_va, uint64_t stack_top) {
      * BELOW this range, so a guard touch can never be satisfied here and
      * always falls through to the kill path. A top outside the range the
      * layout draw can produce is refused outright. */
-    if (stack_top > USER_STACK_TOP || stack_top < USER_STACK_TOP - (0x10000ull * PAGE_SIZE))
+    if (stack_top > USER_STACK_TOP ||
+        stack_top < USER_STACK_TOP - (USER_STACK_ASLR_PAGES - 1) * PAGE_SIZE)
         return -1;
     if (va < stack_top - USER_STACK_SIZE || va >= stack_top)
         return -1;

@@ -163,11 +163,13 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
             rc = ELF_E_WX;
             break;
         }
-        /* stay inside the user range and clear of the stack + its guard page */
+        /* stay inside the user range and clear of every stack window a layout
+         * draw can give, and its guard page (DDR-1189 A1 P1-2; Codex on #154):
+         * an image then loads or fails the same way whatever the draw */
         uint64_t vstart = page_down(ph->p_vaddr);
         uint64_t vend   = page_up(ph->p_vaddr + ph->p_memsz);
         if (ph->p_memsz == 0) continue;
-        if (vstart < USER_MIN || vend > USER_STACK_BOT - PAGE_SIZE || vend <= vstart) {
+        if (vstart < USER_MIN || vend > USER_STACK_LOWEST_BOT - PAGE_SIZE || vend <= vstart) {
             rc = ELF_E_RANGE;
             break;
         }
@@ -202,7 +204,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
      * top within 256 MiB and 18 bits for the mmap base within 1 GiB (L3).
      * Drawn before the caller's image is touched; aslr_random cannot fail. */
     struct user_layout lay;
-    lay.stack_top = USER_STACK_TOP - (aslr_random() & 0xFFFFull) * PAGE_SIZE;
+    lay.stack_top = USER_STACK_TOP - (aslr_random() & (USER_STACK_ASLR_PAGES - 1)) * PAGE_SIZE;
     lay.mmap_base = VMM_MMAP_BASE + (aslr_random() & 0x3FFFFull) * PAGE_SIZE;
 
     uint64_t top_phys = 0;

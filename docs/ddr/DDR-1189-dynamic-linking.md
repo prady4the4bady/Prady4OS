@@ -142,6 +142,7 @@ amendment fixes P1's implementation; §3 L2 and L3 stand as written.
   - `mmap_base = VMM_MMAP_BASE + r18 * 4 KiB`, with `r18 < 2^18`: 18 bits
     within 1 GiB (L3).
   - It builds the stack and the initial frame at `stack_top`.
+  - Every `PT_LOAD` must end below the lowest stack bottom any draw can give, and its guard page (`USER_STACK_LOWEST_BOT`), not only below the fixed one. An image therefore loads, or is refused, the same way whatever the draw (Codex on #154).
   - `elf_load_args` stores the layout in the new mm. `execve` stores it at its
     point of no return, where it used to reset `mmap_next` to the fixed base.
   - Nothing else moves in P1: the ELF image (`ET_EXEC`, link addresses, until
@@ -157,7 +158,7 @@ amendment fixes P1's implementation; §3 L2 and L3 stand as written.
      and `aslr: weak entropy` printed once.
   - The source of the first draw is printed once, `[aslr] source=rng`,
     `rdrand` or `tsc`.
-  - `rng_bytes()` is not changed, and stays fail-closed for key material.
+  - `rng_bytes()` stays fail-closed for key material. Its virtio path now holds a lock across the draw: the queue, its descriptor and the bounce page are shared, and exec now draws from every CPU (Codex on #154).
   - The draw happens before `execve`'s point of no return, so a failure there
     costs nothing; the TSC path cannot fail.
 - **P1-5. Gate `smoke-dynlink`, arms A and B (§4).**
