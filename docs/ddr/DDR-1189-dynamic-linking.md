@@ -247,6 +247,15 @@ stand; this amendment fixes how P2 meets them.
   - **`ET_DYN` base:** `USER_PIE_BASE + r18 * 4 KiB`, with
     `USER_PIE_BASE` = `0x81_0000_0000` and `r18 < 2^18`: 18 bits within 1 GiB
     (L3). The bias is that base minus the lowest page of any `PT_LOAD`.
+  - **`PT_LOAD`s ascend and share no page** (`ELF_E_SEGMENT`; CodeRabbit on
+    #156), `ET_EXEC` and `ET_DYN` alike.
+    - Each `PT_LOAD`'s page-rounded range must start at or above the previous
+      one's page-rounded end. The gABI already requires ascending `p_vaddr`.
+    - `map_core` replaces a present leaf without a check. A shared page would
+      leak the earlier frame, drop its bytes, and take the later segment's
+      permissions, after the relocation-target and entry checks had read the
+      earlier segment's flags. That predates P2 for `ET_EXEC`.
+    - Every image built in the tree meets it (checked locally over all 94).
   - **`ET_DYN` extent:** the whole image, after its bias, must end at or below
     `USER_PIE_TOP` = `0x84_0000_0000`. An image can therefore span up to
     11 GiB.
@@ -264,7 +273,7 @@ stand; this amendment fixes how P2 meets them.
     - `DT_NEEDED`: libraries are P3's.
     - `DT_REL` and `DT_RELR`: x86-64 uses `RELA`, and a table the loader does
       not read must not be left unapplied.
-    - A non-empty `DT_JMPREL` or `DT_PLTRELSZ`: PLT relocations need symbols.
+    - A non-zero `DT_JMPREL` or `DT_PLTRELSZ`: PLT relocations need symbols. An empty one (0) is accepted (CodeRabbit on #156).
   - **Relocation types:** `R_X86_64_RELATIVE` with symbol 0 is applied, and
     `R_X86_64_NONE` is skipped. Anything else is `ELF_E_RELOC`.
   - **The entry must lie in an executable `PT_LOAD`** (`ELF_E_ENTRY`; Codex on
@@ -354,8 +363,9 @@ stand; this amendment fixes how P2 meets them.
 - **A musl-linked static PIE** (`rcrt1.o`, `-static-pie`) is neither built nor
   tested. Only freestanding probes are, and `PT_TLS` in a PIE is untested.
 - **Not gated:** the refusals in P2-2 other than `PT_INTERP` (the entry check
-  among them), and the `USER_IMAGE_TOP` bound. They are code paths with no
-  probe.
+  among them), the `USER_IMAGE_TOP` bound, and the ascending, no-shared-page
+  rule for `PT_LOAD`s. They are code paths with no probe. The entry check and
+  the shared-page rule were checked locally on patched copies of `DYNPIE.ELF`.
 - **Strength** is bounded by L3's 18 bits and, without hardware entropy, by
   L2's TSC path.
 - QEMU (TCG) only, not verified on real hardware.

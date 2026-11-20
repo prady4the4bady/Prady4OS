@@ -197,9 +197,9 @@ static int elf_dyn_rela(const uint8_t *img, uint64_t image_len,
         case DT_NEEDED:            /* libraries are P3's */
         case DT_REL: case DT_RELSZ:
         case DT_RELR: case DT_RELRSZ:
-        case DT_JMPREL:            /* a table this loader does not read */
             return ELF_E_DYN;
-        case DT_PLTRELSZ:
+        case DT_JMPREL:            /* PLT relocations: a table this loader */
+        case DT_PLTRELSZ:          /* does not read; empty (0) is accepted */
             if (d[1])
                 return ELF_E_DYN;
             break;
@@ -298,6 +298,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     const int is_dyn = (eh->e_type == ET_DYN);
     const struct elf64_phdr *dynph = 0;
     uint64_t lo = ~0ull, hi = 0;
+    uint64_t prev_end = 0;                         /* page_up end of the last PT_LOAD */
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         const struct elf64_phdr *ph = elf_ph(img, eh, i);
         if (is_dyn && ph->p_type == PT_INTERP)
@@ -324,6 +325,15 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
             return ELF_E_RANGE;
         uint64_t vstart = page_down(ph->p_vaddr);
         uint64_t vend   = page_up(ph->p_vaddr + ph->p_memsz);
+        /* PT_LOADs ascend by p_vaddr (the gABI requires it) and share no page,
+         * ET_EXEC and ET_DYN alike (CodeRabbit on #156). map_core replaces a
+         * present leaf without a check, so a shared page would leak the earlier
+         * frame, drop its bytes and take the later segment's permissions --
+         * after the relocation-target and entry checks had read the earlier
+         * segment's flags. */
+        if (vstart < prev_end)
+            return ELF_E_SEGMENT;
+        prev_end = vend;
         if (vstart < lo) lo = vstart;
         if (vend > hi)   hi = vend;
     }
