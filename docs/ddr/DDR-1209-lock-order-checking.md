@@ -23,7 +23,12 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 
 **D2. The class lives in the lock, in the `LOCKDEP=1` build only.**
 - `spinlock_t` becomes `{ uint8_t v; uint8_t cls; uint8_t chk; }` under `LOCKDEP=1`, with `chk == (uint8_t)~cls` for a classed lock. `SPINLOCK_INIT` still zeroes all three, so `cls == 0, chk == 0` means "not yet classed". The default build keeps one byte (Constraint 2). Offsets that assembly reads are static-asserted already, so a shift in the checking build fails to compile rather than misbehaves.
-- **Why the check byte:** `cap.c` initialises only `t->lk.v` on `kmalloc` memory, which is not zeroed. Without `chk`, leftover bytes would read as some class and add edges in its name. A pair that does not match is treated as untracked (and reported), so the gate names the site.
+- **Why the check byte:** `cap.c` initialises only `t->lk.v` on `kmalloc` memory, which is not zeroed. Without `chk`, leftover bytes would read as some class and add edges in its name.
+  - **What it catches:** random leftover bytes (all but about 1 pair in 256 fail `chk == ~cls`) and a pair torn by a racing stamp. A pair that fails is treated as untracked and reported, so the gate names the site.
+  - **What it does not catch:** memory that held a classed lock, freed and reallocated with the lock at the same offset. That pair is valid, and it would read as the old lock's class (CodeRabbit on #152).
+  - **The safeguard chosen: initialisers write all three bytes.** `LOCKDEP_CLASS` stamps `cls` and `chk` at the annotated sites. Assigning `SPINLOCK_INIT`, or zeroing the object, writes them as 0, which reads as unclassed. The one form that leaves them as they were is an assignment to `.v` alone. A grep for that form finds one site in today's tree, `cap.c`, and that site is annotated.
+  - This is an audit of today's tree, stated and not gated: no arm reallocates a classed lock under a partial initialiser. A new `.v`-only initialiser on an unannotated heap lock would reopen the case.
+  - **Not taken: making `ld_valid` reject a stale but valid pair.** It would have to know that the memory was freed in between. The heap does not know where the locks in a block are. Zeroing every block in the checking build would hide uninitialised fields that the shipped build still has.
 - A class is assigned on the first acquire of a lock whose `cls` is 0:
   1. **Annotated:** `LOCKDEP_CLASS(lock, "name")` gives every lock initialised at that call site one class. It is used for heap locks and for static arrays whose elements are one kind of lock (the 64 futex buckets). It compiles to nothing with `LOCKDEP=0`.
   2. **Static storage:** a lock in `.data`/`.bss` (`[__rodata_end, __bss_end)`, the range `sched_check_static_lock` already uses) gets a class of its own, keyed by its address. Re-initialising it (`(spinlock_t)SPINLOCK_INIT`) finds the same class again by address.
@@ -56,9 +61,16 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 
 **D6. The hooks never print.**
 - The check runs before the test-and-set, so a real inversion is recorded before the CPU can spin on it.
-- Reports go into a bounded record (kind, the two classes, both call sites, the CPU). A kernel thread, `ldsum`, wakes every 2 s and prints new records and a summary line when anything changed.
+- Reports go into a bounded record (kind, the two classes, both call sites, the CPU). A kernel thread, `ldsum`, wakes every 2 s, prints new records, and prints a summary line when anything changed.
 - **Why:** printing takes the console locks. A report raised while this thread holds a console lock would deadlock in the printer. The checker's own lock is never held while anything is printed.
 - Real reports print `LOCKDEP INVERSION ...` and `LOCKDEP RECURSION ...`. Self-test classes (D7) print `[lockdep] test-inversion ...`, so a self-test can never produce the line the gate forbids.
+- **The freeze (CodeRabbit on #152).** The runner ends the guest with a kill, not a shutdown, so a summary printed on a timer can trail the counters: a change in the last period is never printed, and a gate reading the last line would pass on a stale one. At its 120th wake (about 240 s) `ldsum` therefore freezes the checker:
+  1. It takes the checker's lock, sets `frozen`, copies the counters and the record count, and releases the lock.
+  2. It prints the records up to that count and one `[lockdep] final ...` line, then prints nothing more.
+  - Every counter, record, class and edge is written under that lock and only while `frozen` is 0. Recursion, unmatched releases and a full held stack were counted outside the lock before; they now go through `ld_count`. Same-class nesting now takes the lock to count, which costs nothing while `nest=0`.
+  - After the freeze nothing changes, so the final line is the state at the end of the run however late the kill comes. This holds by construction and is not gated: no arm provokes an inversion after the freeze.
+  - The fast path is unchanged: a known edge is still one bit test with no lock.
+  - Locks taken after the freeze are not checked (§6).
 
 **D7. Self-tests run at boot in the `LOCKDEP=1` build only,** after the SMP proofs and before init, as `rcu_torture` does. Their locks are static locks marked as test classes, and their inversions are counted in `tinv`, not in `inv`.
 
@@ -74,8 +86,18 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 - `LOCKDEP=1`, `QEMU_SMP=4`, `QEMU_PROBES=thread`, so the thread, futex, `psync` and `pthr` workload runs under the checker on four CPUs. The default kernel is put back and must come back with its hash.
 - `FORBIDDEN_SENTINEL`: `LOCKDEP INVERSION`, `LOCKDEP RECURSION`. Not added to `GLOBAL_FORBIDDEN`: only this build can print them, and the count stays 78.
 - **Arm LA (the real kernel):**
-  - The last `[lockdep] sum` line must have `inv=0 rec=0 unmatched=0 untracked=0 ovf=0`.
+  - It reads the `[lockdep] final` line (D6), which must exist: a missing line (the checker never froze, or the boot died first) fails the arm.
+  - **Order:** that line must come after `PRADYOS_THREAD_DONE`, so the freeze came after the workload and the checked window covers all of it.
+  - It must have `inv=0 rec=0 unmatched=0 untracked=0 ovf=0`.
   - Vacuity: it must also have `hp=1`, meaning the edge heap → PMM, the order `kheap.c` documents, is in the graph. That edge exists only if the hooks see real nesting in real kernel code.
+  - **Why a frozen line (CodeRabbit on #152):** the first implementation read the last `[lockdep] sum` line, printed only on change.
+    - In both kept local logs that line is 39 and 52 lines before `PRADYOS_THREAD_DONE` (lines 538 and 525, against 577). That is still the end state while `ldsum` is alive, because a change would print a new line within 2 s.
+    - But nothing proved `ldsum` was alive, and a change in the last 2 s before the kill would never have been printed.
+    - Neither log has a `final` line, so the new parse fails both.
+  - **Timing:** the gate declares a FORBIDDEN list, so `boot_test.sh` never exits early and the guest runs the whole 300 s window.
+    - In both kept logs the workload ends between the `[hb]` lines `t=1000` and `t=1500` (10 ms ticks), and the `[hb]` lines run on to `t=29500` and `t=30000`.
+    - A freeze at about 240 s therefore lands long after the workload and well before the kill.
+    - A host slow enough to push the workload past the freeze fails the order rule; it cannot pass silently.
 - **Arm LB (direct inversion):** X then Y, then Y then X, on the BSP. `PRADYOS_LOCKDEP_B inv=1`.
 - **Arm LC (transitive):** P → Q, Q → R, then R → P. No pair is inverted directly, so only the closure finds it. `PRADYOS_LOCKDEP_C inv=1`.
 - **Arm LD (preemption):** two kernel threads pinned to CPU 1. T1 takes U with `spin_lock`, interrupts enabled, and spins until T2 has run. T2 takes and drops V while T1 still holds U. Then the BSP takes V then U.
@@ -94,6 +116,8 @@ Status: design, then code in the same PR. Checklist item C1.4 "deadlock detectio
 | LD3 | The held stack is the per-CPU fallback, always (no per-thread state). | LD (LA may go red too: the same false edges appear in the real workload) |
 | LD4 | The hooks do nothing off the BSP. | LE (LB and LC too when the self-test thread runs on an AP) |
 | LD5 | DDR-1181 §2's "mutant that inverts an order": once at boot, take the PMM lock and then the heap lock (`kfree(NULL)` under `g_pmm_lock`), against the documented heap → PMM order. | LA (`LOCKDEP INVERSION` held=PMM take=heap) |
+| LD6 | The freeze comes at `ldsum`'s first wake, before the workload has run. | LA, the order rule only (the final line precedes `PRADYOS_THREAD_DONE`) |
+| LD7 | The freeze never comes. | LA, the final line is missing |
 
 Each mutant must be red on its own arm; red on others too is allowed. LD5 runs once, at the start of the self-test, and holds the heap lock for one `kfree(NULL)`: a concurrent heap → PMM path on another CPU could meet it and hang the boot, which is red as well, so the run's evidence must show the `LOCKDEP INVERSION` line, not only a timeout.
 
@@ -115,5 +139,6 @@ Each mutant must be red on its own arm; red on others too is allowed. LD5 runs o
 - **Sleeping locks:** `kmutex` (only its inner spinlock is seen), `mnt_lock`, futex-based user locks.
 - **Ordered same-class nesting** needs an annotation this DDR does not add (D5).
 - **Recursion is detected, not gated:** a test that takes a lock twice would hang the CPU after the report.
+- **Locks taken after the freeze** (about 240 s into a 300 s run, D6) are not checked. The workload has ended by then, and the order rule fails the run if it has not.
 - **The shipped kernel checks nothing** (D1). The checker finds orders that the gate's workload exercises; an order no gate runs stays unseen.
 - QEMU (TCG, 4 vCPU) only, not verified on real hardware.

@@ -3698,19 +3698,24 @@ smoke-rcu: $(IMG) fat-image sfs-image
 # runs the thread probe on four CPUs under the checker, so, like smoke-rcu, the
 # gate is in no shard and runs in ci.yml's `flag-gates` job; the default kernel
 # is put back and must come back with its hash. Arms LB-LE are exact lines from
-# the boot self-test. Arm LA is the LAST "[lockdep] sum" line, printed by the
-# ldsum thread whenever a counter changes: no inversion, recursion, unmatched
-# release, untracked lock or overflow over the whole run, and the documented
-# heap -> PMM edge recorded (hp=1, the vacuity witness). A real inversion or
-# recursion also prints a FORBIDDEN line (not in GLOBAL_FORBIDDEN: only this
-# build can print it). On a failed boot boot_test.sh keeps the log as
-# lockdep.log.fail-<pid>, and arm LA is read from that capture.
+# the boot self-test. Arm LA is the "[lockdep] final" line: at about 240 s the
+# ldsum thread freezes the checker (nothing is counted after it) and prints the
+# frozen counters, so that line is the state at the end of the run (CodeRabbit
+# on #152). It must exist, it must come after PRADYOS_THREAD_DONE (the freeze
+# came after the workload), and it must show no inversion, recursion, unmatched
+# release, untracked lock or overflow, and the documented heap -> PMM edge
+# recorded (hp=1, the vacuity witness). A real inversion or recursion also
+# prints a FORBIDDEN line (not in GLOBAL_FORBIDDEN: only this build can print
+# it). On a failed boot boot_test.sh keeps the log as lockdep.log.fail-<pid>,
+# and arm LA is read from that capture. A failed LOCKDEP=1 build restores the
+# default kernel before failing.
 smoke-lockdep: $(IMG) fat-image sfs-image
 	@echo "[lockdep] rebuilding the kernel with LOCKDEP=1 (DDR-1209)"
 	@mkdir -p build/gatelogs
 	@sha256sum $(KERNEL_BIN) | cut -d' ' -f1 > build/gatelogs/lockdep.default.sha
 	touch kernel/proc/lockdep.c
-	$(MAKE) image LOCKDEP=1
+	$(MAKE) image LOCKDEP=1 || { echo "[lockdep] FAIL: the LOCKDEP=1 build failed; restoring the default kernel"; \
+	  touch kernel/proc/lockdep.c ; $(MAKE) image ; exit 1; }
 	SERIAL_LOG=$(CURDIR)/build/gatelogs/lockdep.log KEEP_SERIAL=1 \
 	TIMEOUT_S=300 QEMU_SMP=4 QEMU_PROBES=thread \
 	EXTRA_SENTINEL="$$(printf 'PRADYOS_LOCKDEP_B inv=1\nPRADYOS_LOCKDEP_C inv=1\nPRADYOS_LOCKDEP_D overlap=1 inv=0\nPRADYOS_LOCKDEP_E cross=1 inv=1\nPRADYOS_THREAD_DONE')" \
@@ -3721,12 +3726,19 @@ smoke-lockdep: $(IMG) fat-image sfs-image
 	  [ -f $$L ] || L=$$(ls -t build/gatelogs/lockdep.log.fail-* 2>/dev/null | head -1) ; \
 	  L=$${L:-/dev/null} ; \
 	  grep -a '\[lockdep\]\|PRADYOS_LOCKDEP\|LOCKDEP ' $$L || true ; \
-	  s=$$(grep -a '\[lockdep\] sum ' $$L | tail -1 | tr -d '\r') ; \
-	  [ -n "$$s" ] || { echo "[lockdep] FAIL: arm LA, no summary line"; rc=1; } ; \
-	  for kv in inv=0 rec=0 unmatched=0 untracked=0 ovf=0 hp=1; do \
-	    case " $$s " in *" $$kv "*) ;; \
-	      *) echo "[lockdep] FAIL: arm LA, the last summary lacks $$kv"; rc=1 ;; esac ; \
-	  done ; \
+	  s=$$(grep -a '\[lockdep\] final ' $$L | tail -1 | tr -d '\r') ; \
+	  nf=$$(grep -an '\[lockdep\] final ' $$L | tail -1 | cut -d: -f1) ; \
+	  nd=$$(grep -an 'PRADYOS_THREAD_DONE' $$L | tail -1 | cut -d: -f1) ; \
+	  if [ -z "$$s" ] ; then \
+	    echo "[lockdep] FAIL: arm LA, no final summary (the checker never froze)"; rc=1 ; \
+	  else \
+	    [ -n "$$nd" ] && [ "$$nf" -gt "$$nd" ] || \
+	      { echo "[lockdep] FAIL: arm LA, the checker froze before the workload ended (final line $$nf, done line $${nd:-none})"; rc=1; } ; \
+	    for kv in inv=0 rec=0 unmatched=0 untracked=0 ovf=0 hp=1; do \
+	      case " $$s " in *" $$kv "*) ;; \
+	        *) echo "[lockdep] FAIL: arm LA, the final summary lacks $$kv"; rc=1 ;; esac ; \
+	    done ; \
+	  fi ; \
 	  echo "[lockdep] restoring the default kernel" ; \
 	  touch kernel/proc/lockdep.c ; \
 	  $(MAKE) image || rc=1 ; \

@@ -28,6 +28,7 @@
 #define LD_MAXC  128                  /* class ids 1..127; 0 = untracked */
 #define LD_REPS  32
 #define LD_SUM_TICKS 200u             /* ldsum period: 2 s at 100 Hz */
+#define LD_FINAL_WAKES 120u           /* the freeze: ldsum's 120th wake, about 240 s */
 
 extern char __rodata_end[], __bss_end[];
 
@@ -62,6 +63,12 @@ static uint32_t g_ld_nrep_kind[8];
 
 static volatile uint32_t g_ld_edges, g_ld_inv, g_ld_tinv, g_ld_rec, g_ld_nest,
                          g_ld_unm, g_ld_unt, g_ld_ovf;
+
+/* D6, the freeze (CodeRabbit on #152). Set once, by ldsum, under g_ld_lk. Every
+ * counter, record, class and edge is written under g_ld_lk and only while this
+ * is 0, so the snapshot taken as it is set is the state at the end of the run,
+ * whenever the runner stops the guest. */
+static uint32_t g_ld_frozen;
 
 /* ---- primitives ------------------------------------------------------- */
 
@@ -123,10 +130,15 @@ static void ld_report(uint8_t kind, uint8_t a, uint8_t b, const void *lock,
     __atomic_store_n(&g_ld_nrep, n + 1u, __ATOMIC_RELEASE);
 }
 
-static void ld_report_locked(uint8_t kind, uint8_t a, uint8_t b, const void *lock,
-                             uint64_t take, uint64_t held) {
+/* A counted event outside the graph (recursion, a full held stack, an
+ * unmatched release): counted and recorded under g_ld_lk, unless frozen. */
+static void ld_count(volatile uint32_t *ctr, uint8_t kind, uint8_t a, uint8_t b,
+                     const void *lock, uint64_t take, uint64_t held) {
     uint64_t f = ld_lock();
-    ld_report(kind, a, b, lock, take, held);
+    if (!g_ld_frozen) {
+        ld_inc(ctr);
+        ld_report(kind, a, b, lock, take, held);
+    }
     ld_unlock(f);
 }
 
@@ -140,8 +152,10 @@ static uint8_t ld_find_key(const void *key) {
     return 0;
 }
 
-/* Caller holds g_ld_lk. 0 = the table is full (counted as ovf). */
+/* Caller holds g_ld_lk. 0 = the table is full (counted as ovf), or frozen. */
 static uint8_t ld_new_class(const void *key, const char *name, uint64_t site, uint8_t test) {
+    if (g_ld_frozen)
+        return 0;
     uint32_t c = g_ld_ncls;
     if (c >= LD_MAXC) {
         ld_inc(&g_ld_ovf);
@@ -161,7 +175,11 @@ static inline void ld_stamp(spinlock_t *l, uint8_t c) {
     __atomic_store_n(&l->cls, c, __ATOMIC_RELAXED);
 }
 
-/* A valid class, or 0. A torn or leftover pair fails the check byte. */
+/* A valid class, or 0. A torn pair, or random leftover bytes, fail the check
+ * byte (all but 1 pair in 256). A previous lock's valid stamp on reused memory
+ * does not: that case is covered only by the initialisers, which stamp or zero
+ * all three bytes. That is an audit of today's tree, not a gate (DDR-1209 D2;
+ * CodeRabbit on #152). */
 static inline uint8_t ld_valid(const spinlock_t *l) {
     uint8_t c = __atomic_load_n(&l->cls, __ATOMIC_RELAXED);
     uint8_t k = __atomic_load_n(&l->chk, __ATOMIC_RELAXED);
@@ -183,7 +201,7 @@ static uint8_t ld_class_of(spinlock_t *l, uint64_t site) {
             c = ld_new_class(l, 0, site, 0);
         if (c)
             ld_stamp(l, c);
-    } else {
+    } else if (!g_ld_frozen) {
         /* An unannotated heap or stack lock, or leftover kmalloc bytes. */
         ld_inc(&g_ld_unt);
         ld_report(LDR_UNT, 0, 0, l, site, 0);
@@ -215,7 +233,7 @@ void lockdep_class_init(spinlock_t *l, uint8_t *key, const char *name) {
 
 static void ld_add_edge(uint8_t a, uint8_t b, const void *lock, uint64_t take, uint64_t held) {
     uint64_t f = ld_lock();
-    if (!ld_bit(g_ld_dir[a], b)) {
+    if (!g_ld_frozen && !ld_bit(g_ld_dir[a], b)) {
         if (ld_bit(g_ld_reach[b], a)) {
             /* b already reaches a: a -> b closes a cycle. Not added, so the
              * graph stays acyclic; each pair is counted and reported once. */
@@ -269,20 +287,21 @@ static uint8_t ld_check(spinlock_t *l, uint64_t site) {
         for (uint32_t i = 0; i < h->depth; i++) {
             struct ld_ent *e = &h->e[i];
             if (e->lock == (void *)l) {
-                ld_inc(&g_ld_rec);
-                ld_report_locked(LDR_REC, c, c, l, site, e->site);
+                ld_count(&g_ld_rec, LDR_REC, c, c, l, site, e->site);
                 continue;
             }
             if (!c || !e->cls)
                 continue;
             if (e->cls == c) {
-                ld_inc(&g_ld_nest);
-                if (!ld_bit(g_ld_nest_seen, c)) {
-                    uint64_t g = ld_lock();
-                    ld_set(g_ld_nest_seen, c);
-                    ld_report(LDR_NEST, c, c, l, site, e->site);
-                    ld_unlock(g);
+                uint64_t g = ld_lock();         /* counted under g_ld_lk (D6) */
+                if (!g_ld_frozen) {
+                    ld_inc(&g_ld_nest);
+                    if (!ld_bit(g_ld_nest_seen, c)) {
+                        ld_set(g_ld_nest_seen, c);
+                        ld_report(LDR_NEST, c, c, l, site, e->site);
+                    }
                 }
+                ld_unlock(g);
                 continue;
             }
             if (ld_bit(g_ld_dir[e->cls], c))
@@ -303,8 +322,7 @@ static void ld_push(spinlock_t *l, uint64_t site, uint8_t c) {
         struct ld_held *h = ld_cur(p);
         if (h->depth >= LD_DEPTH) {
             h->lost++;
-            ld_inc(&g_ld_ovf);
-            ld_report_locked(LDR_OVF, c, 0, l, site, 0);
+            ld_count(&g_ld_ovf, LDR_OVF, c, 0, l, site, 0);
         } else {
             struct ld_ent *e = &h->e[h->depth++];
             e->lock = l;
@@ -341,8 +359,7 @@ static void ld_pop(spinlock_t *l, uint64_t site) {
                 if (h->lost) {
                     h->lost--;
                 } else {
-                    ld_inc(&g_ld_unm);
-                    ld_report_locked(LDR_UNM, 0, 0, l, site, 0);
+                    ld_count(&g_ld_unm, LDR_UNM, 0, 0, l, site, 0);
                 }
             }
         }
@@ -444,44 +461,76 @@ static int ld_has_edge(spinlock_t *a, spinlock_t *b) {
 static spinlock_t g_ld_sum_lk = SPINLOCK_INIT;
 static volatile int g_ld_never;
 
+static void ld_values(uint64_t v[10]) {
+    v[0] = g_ld_ncls - 1u;
+    v[1] = g_ld_edges;
+    v[2] = g_ld_inv;
+    v[3] = g_ld_rec;
+    v[4] = g_ld_nest;
+    v[5] = g_ld_unm;
+    v[6] = g_ld_unt;
+    v[7] = g_ld_ovf;
+    v[8] = g_ld_tinv;
+    v[9] = (uint64_t)ld_has_edge(kheap_lockdep_lock(), pmm_lockdep_lock());
+}
+
+static void ld_sum_line(const char *head, const uint64_t v[10]) {
+    static const char *const key[10] = {
+        "classes=", " edges=", " inv=", " rec=", " nest=",
+        " unmatched=", " untracked=", " ovf=", " tinv=", " hp=" };
+    kline k;
+    kline_init(&k);
+    kline_s(&k, head);
+    for (unsigned i = 0; i < 10; i++) {
+        kline_s(&k, key[i]);
+        kline_d(&k, v[i]);
+    }
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
+}
+
+/* A summary whenever a value changed. At wake LD_FINAL_WAKES, the freeze: from
+ * then on nothing is counted, recorded, classed or added to the graph, so the
+ * "[lockdep] final" line printed then is the state at the end of the run. Arm
+ * LA reads only that line, and requires it after the workload's last line. */
 static void ld_sum(void *arg) {
     (void)arg;
-    static const char *const key[10] = {
-        "[lockdep] sum classes=", " edges=", " inv=", " rec=", " nest=",
-        " unmatched=", " untracked=", " ovf=", " tinv=", " hp=" };
-    uint32_t shown = 0;
-    uint64_t last[10];
+    uint32_t shown = 0, frozen = 0;
+    uint64_t last[10], v[10];
     for (unsigned i = 0; i < 10; i++)
         last[i] = ~0ull;
-    for (;;) {
+    for (uint32_t wake = 1; ; wake++) {
         uint64_t fl = spin_lock_irqsave(&g_ld_sum_lk);
         (void)sched_block_timeout(&g_ld_sum_lk, &g_ld_never, LD_SUM_TICKS);
         spin_unlock_irqrestore(&g_ld_sum_lk, fl);
-        uint32_t n = __atomic_load_n(&g_ld_nrep, __ATOMIC_ACQUIRE);
+        if (frozen)
+            continue;
+        uint32_t n;
+        if (wake == LD_FINAL_WAKES) {
+            uint64_t f = ld_lock();
+            g_ld_frozen = 1;
+            ld_values(v);
+            n = g_ld_nrep;
+            ld_unlock(f);
+            frozen = 1;
+        } else {
+            n = __atomic_load_n(&g_ld_nrep, __ATOMIC_ACQUIRE);
+            ld_values(v);
+        }
         while (shown < n)
             ld_print_rep(&g_ld_rep[shown++]);
-        /* Printed whenever any value changed, so the last line in the log is
-         * the state at the end of the run (arm LA reads only that line). */
-        uint64_t v[10] = {
-            g_ld_ncls - 1u, g_ld_edges, g_ld_inv, g_ld_rec, g_ld_nest,
-            g_ld_unm, g_ld_unt, g_ld_ovf, g_ld_tinv,
-            (uint64_t)ld_has_edge(kheap_lockdep_lock(), pmm_lockdep_lock()) };
+        if (frozen) {
+            ld_sum_line("[lockdep] final ", v);
+            continue;
+        }
         int changed = 0;
         for (unsigned i = 0; i < 10; i++)
             if (v[i] != last[i]) {
                 changed = 1;
                 last[i] = v[i];
             }
-        if (!changed)
-            continue;
-        kline k;
-        kline_init(&k);
-        for (unsigned i = 0; i < 10; i++) {
-            kline_s(&k, key[i]);
-            kline_d(&k, v[i]);
-        }
-        kline_s(&k, "\r\n");
-        kline_emit(&k);
+        if (changed)
+            ld_sum_line("[lockdep] sum ", v);
     }
 }
 
