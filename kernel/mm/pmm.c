@@ -71,6 +71,14 @@ static spinlock_t g_pmm_lock = SPINLOCK_INIT;
 #include "lockdep.h"
 /* DDR-1209 arm LA: the documented heap -> PMM order is the gate's witness. */
 spinlock_t *pmm_lockdep_lock(void) { return &g_pmm_lock; }
+#include "kheap.h"
+/* MUTANT LD5: the heap lock taken under the PMM lock, once, against heap -> PMM. */
+void pmm_lockdep_mutant(void);
+void pmm_lockdep_mutant(void) {
+    uint64_t f = spin_lock_irqsave(&g_pmm_lock);
+    kfree(0);
+    spin_unlock_irqrestore(&g_pmm_lock, f);
+}
 #endif
 static inline uint64_t irq_save(void) {
     return spin_lock_irqsave(&g_pmm_lock);
