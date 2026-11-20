@@ -216,7 +216,7 @@ void lockdep_class_init(spinlock_t *l, uint8_t *key, const char *name) {
 static void ld_add_edge(uint8_t a, uint8_t b, const void *lock, uint64_t take, uint64_t held) {
     uint64_t f = ld_lock();
     if (!ld_bit(g_ld_dir[a], b)) {
-        if (ld_bit(g_ld_reach[b], a)) {
+        if (0 && ld_bit(g_ld_reach[b], a)) {   /* MUTANT LD1: no cycle test */
             /* b already reaches a: a -> b closes a cycle. Not added, so the
              * graph stays acyclic; each pair is counted and reported once. */
             if (!ld_bit(g_ld_bad[a], b)) {
