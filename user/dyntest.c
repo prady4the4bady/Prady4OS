@@ -13,8 +13,9 @@
  * Every sample comes from execve, so the gate tests execve's commit (where the
  * drawn mmap base is stored), not only the boot path (mutant D2b).
  *
- * argc is read from the stack before any prologue runs: _start is naked and
- * hands %rsp to dyn_main (DDR-823: a C _start's prologue has already moved it).
+ * argc is read from the stack before any prologue runs: _start is an assembly
+ * stub that hands %rsp to dyn_main (DDR-823: a C _start's prologue has
+ * already moved it).
  * No writable globals: this probe links as one R+X segment.
  * QEMU only, not verified on real hardware.
  */
@@ -130,9 +131,16 @@ __attribute__((noreturn, used)) void dyn_main(const uint64_t *sp) {
     parent();
 }
 
-__attribute__((naked, noreturn)) void _start(void) {
-    __asm__("mov %rsp, %rdi\n\t"
-            "and $-16, %rsp\n\t"
-            "call dyn_main\n\t"
-            "ud2");
-}
+/* The entry is an assembly stub, not a C function: argc is on the stack at
+ * entry and must be read before any prologue runs (DDR-823), and a C entry
+ * would need force_align_arg_pointer (ci-start-align-check), whose realigning
+ * prologue moves the stack before the body can read it. The stub aligns RSP
+ * itself, so dyn_main is entered by a normal call with RSP = 8 (mod 16). */
+__asm__(".text\n"
+        ".globl _start\n"
+        ".type _start, @function\n"
+        "_start:\n"
+        "    mov %rsp, %rdi\n"
+        "    and $-16, %rsp\n"
+        "    call dyn_main\n"
+        "    ud2\n");
