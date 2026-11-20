@@ -205,7 +205,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
      * Drawn before the caller's image is touched; aslr_random cannot fail. */
     struct user_layout lay;
     lay.stack_top = USER_STACK_TOP - (aslr_random() & (USER_STACK_ASLR_PAGES - 1)) * PAGE_SIZE;
-    lay.mmap_base = VMM_MMAP_BASE + (aslr_random() & 0x3FFFFull) * PAGE_SIZE;
+    lay.mmap_base = VMM_MMAP_BASE;              /* MUTANT D2: fixed mmap base */
 
     uint64_t top_phys = 0;
     for (uint64_t i = 0; i < USER_STACK_EAGER_PAGES; i++) {
