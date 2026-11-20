@@ -86,6 +86,18 @@ void vmm_mapguard_probe(void);
  * bottom any draw can give, nor its guard page (Codex on #154). */
 #define USER_STACK_ASLR_PAGES 0x10000ull
 #define USER_STACK_LOWEST_BOT (USER_STACK_BOT - (USER_STACK_ASLR_PAGES - 1) * PAGE_SIZE)
+/* DDR-1189 A2 P2-1: every PT_LOAD, ET_EXEC or ET_DYN after its bias, lies in
+ * [USER_MIN, USER_IMAGE_TOP): below the surface window (SURFACE_VA_BASE), the
+ * framebuffer window and the mmap arena, and so below every stack window too
+ * (CodeRabbit on #154). An ET_DYN base is USER_PIE_BASE plus up to
+ * USER_PIE_ASLR_PAGES - 1 pages (18 bits, L3), and the whole image ends at or
+ * below USER_PIE_TOP. [USER_PIE_TOP, USER_IMAGE_TOP) is left for P3's
+ * interpreter. */
+#define USER_IMAGE_TOP      0x8600000000ull
+#define USER_PIE_BASE       0x8100000000ull
+#define USER_PIE_TOP        0x8400000000ull
+#define USER_PIE_ASLR_PAGES 0x40000ull
+/* The bounds' relations are static assertions in kernel/exec/elf.c. */
 
 /* ADR-038 Option 3: pages eagerly mapped at the TOP of the stack; everything
  * below is demand-paged. This window exists because vmm_user_range_ok (ADR-022)

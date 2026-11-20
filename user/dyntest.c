@@ -13,6 +13,13 @@
  * Every sample comes from execve, so the gate tests execve's commit (where the
  * drawn mmap base is stored), not only the boot path (mutant D2b).
  *
+ * DDR-1189 Amendment 2 (C1.6 P2), arm C: after PRADYOS_DYN_DONE the boot
+ * instance forks four children that execve /DYNPIE.ELF (a static PIE; each
+ * prints PRADYOS_DYN_P), then two that execve the images P2 must refuse,
+ * /DYNPINT.ELF (PT_INTERP) and /DYNPTXT.ELF (a text relocation). Each of those
+ * two prints `PRADYOS_DYN_R <what> rc=<execve's return>` when execve returns.
+ * Last, PRADYOS_DYN_PIE_DONE n=4.
+ *
  * argc is read from the stack before any prologue runs: _start is an assembly
  * stub that hands %rsp to dyn_main (DDR-823: a C _start's prologue has
  * already moved it).
@@ -96,6 +103,67 @@ __attribute__((noreturn)) static void child(void) {
         nsi(SYS_EXIT, 0, 0, 0);
 }
 
+/* A signed decimal into out (at least 21 bytes), NUL-terminated. */
+static void dec(char *out, long v) {
+    char t[20];
+    int n = 0;
+    unsigned long u = v < 0 ? 0ul - (unsigned long)v : (unsigned long)v;
+    do { t[n++] = (char)('0' + u % 10u); u /= 10u; } while (u);
+    int o = 0;
+    if (v < 0)
+        out[o++] = '-';
+    while (n)
+        out[o++] = t[--n];
+    out[o] = 0;
+}
+
+/* Fork; the child execve()s path with argv {a0}. With `what` set, the image
+ * must be refused: the child prints PRADYOS_DYN_R <what> rc=<rc> and exits 0.
+ * The parent waits and requires exit status 0 either way. */
+static void run_one(const char *path, const char *a0, const char *what) {
+    long pid = nsi(SYS_FORK, 0, 0, 0);
+    if (pid < 0)
+        die("fork");
+    if (pid == 0) {
+        const char *argv[2];               /* on the stack: no writable globals */
+        const char *envp[1];
+        argv[0] = a0;
+        argv[1] = 0;
+        envp[0] = 0;
+        long rc = nsi(SYS_EXECVE, (long)path, (long)argv, (long)envp);
+        if (!what)
+            die("execve dynpie returned");
+        char d[24];
+        dec(d, rc);
+        wr("PRADYOS_DYN_R ");
+        wr(what);
+        wr(" rc=");
+        wr(d);
+        wr("\n");
+        for (;;)
+            nsi(SYS_EXIT, 0, 0, 0);
+    }
+    int st = -1;
+    if (nsi(SYS_WAIT4, pid, (long)&st, 0) != pid)
+        die("wait4");
+    if (st != 0)
+        die("a child exited non-zero");
+}
+
+/* DDR-1189 A2 P2-5: arm C. */
+__attribute__((noreturn)) static void pie_phase(void) {
+    static const char pie[] = "/DYNPIE.ELF";
+    static const char pint[] = "/DYNPINT.ELF";
+    static const char ptxt[] = "/DYNPTXT.ELF";
+    for (int i = 0; i < DYN_CHILDREN; i++)
+        run_one(pie, "dynpie", 0);
+    run_one(pint, "dynpint", "interp");
+    run_one(ptxt, "dynptxt", "textrel");
+    wr("PRADYOS_DYN_PIE_DONE n=4\n");
+    for (;;)
+        nsi(SYS_EXIT, 0, 0, 0);
+}
+
 __attribute__((noreturn)) static void parent(void) {
     static const char path[] = "/DYNTEST.ELF";
     static const char a0[] = "dyntest";
@@ -121,8 +189,7 @@ __attribute__((noreturn)) static void parent(void) {
             die("a child exited non-zero");
     }
     wr("PRADYOS_DYN_DONE n=4\n");
-    for (;;)
-        nsi(SYS_EXIT, 0, 0, 0);
+    pie_phase();
 }
 
 __attribute__((noreturn, used)) void dyn_main(const uint64_t *sp) {

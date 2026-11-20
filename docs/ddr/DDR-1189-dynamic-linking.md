@@ -1,7 +1,7 @@
 # DDR-1189: Dynamic linking, shared libraries and user-space ASLR (checklist C1.6)
 
-Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged; P1 is
-being built under Amendment 1. P2 to P4 are not built.
+Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged. P1 is
+built under Amendment 1 (#154), and P2 under Amendment 2. P3 and P4 are not built.
 
 ## 1. Where the tree is (read from `dev/phase1` = `7981cd4`)
 
@@ -199,4 +199,173 @@ amendment fixes P1's implementation; §3 L2 and L3 stand as written.
 - Strength is bounded by L3's bit counts. On the TSC path ASLR runs, but it is
   weak and not called secure.
 - Fork shares the parent's layout by design. Only `execve` re-randomises.
+- QEMU (TCG) only, not verified on real hardware.
+
+## Amendment 2 (2026-11-20): Part P2, static PIE
+
+Authorised by #45 6993979920 (C1.6, part by part, after P1). §3 L1 and L3
+stand; this amendment fixes how P2 meets them.
+
+### A2.1 Where the tree is (`c16-p1-aslr` = `da6ce27`, P1)
+
+- **Only `ET_EXEC` loads.** `elf_build_image` refuses any other `e_type`
+  (`ELF_E_MACHINE`). It maps each `PT_LOAD` at its link address, which must lie
+  in `[USER_MIN, USER_STACK_LOWEST_BOT - 4 KiB)`.
+- **That bound is too loose (CodeRabbit on #154, carried here).** A `PT_LOAD`
+  may reach into:
+  - the surface window, `SURFACE_VA_BASE` = `0x86_0000_0000`;
+  - the framebuffer window, `FB_USER_VA` = `0x87_0000_0000`;
+  - the mmap arena, `0x88_0000_0000`.
+  A later `mmap`, surface or framebuffer mapping would then collide with the
+  image.
+- **Every user ELF in the tree is `ET_EXEC`**, linked at `0x80_0000_0000`
+  (`user/user.ld`, `user/user_c.ld`). Measured over the 91 built images: the
+  highest `PT_LOAD` end is `0x80_0001_60a8` (`compositor.elf`).
+- **The auxiliary vector** in the initial frame is `AT_PAGESZ` and `AT_NULL`
+  only.
+- **musl's static start-up uses `AT_PHDR`.** `src/env/__init_tls.c` line 90
+  walks the program headers at `AT_PHDR` whenever `AT_PHNUM` is non-zero.
+  Today it finds none.
+- **The toolchain.** binutils 2.42 is both the local and the CI `ld`
+  (`ubuntu-24.04`, DDR-1191). On a trial freestanding object, `ld -pie
+  --no-dynamic-linker` gives an `ET_DYN` with no `PT_INTERP`, a `PT_DYNAMIC`,
+  and only `R_X86_64_RELATIVE` entries in `.rela.dyn`. Linking it with
+  `--dynamic-linker=` adds a `PT_INTERP`. Linking with `-z notext` and a
+  pointer in `.text` puts a relocation in the read-execute segment and sets
+  `DT_TEXTREL`.
+
+### A2.2 Decisions
+
+- **P2-1. Where images go.**
+  - **One bound for every image:** `USER_IMAGE_TOP` = `0x86_0000_0000`, the
+    surface window's base. Every `PT_LOAD`, `ET_EXEC` or `ET_DYN` after its
+    bias, must lie in `[USER_MIN, USER_IMAGE_TOP)`, with no overflow in
+    `p_vaddr + p_memsz`.
+    - It replaces P1's stack-window bound and implies it; a static assertion
+      holds that.
+    - It closes the arena case above. Today's images end 24 GiB below it.
+  - **`ET_DYN` base:** `USER_PIE_BASE + r18 * 4 KiB`, with
+    `USER_PIE_BASE` = `0x81_0000_0000` and `r18 < 2^18`: 18 bits within 1 GiB
+    (L3). The bias is that base minus the lowest page of any `PT_LOAD`.
+  - **`PT_LOAD`s ascend and share no page** (`ELF_E_SEGMENT`; CodeRabbit on
+    #156), `ET_EXEC` and `ET_DYN` alike.
+    - Each `PT_LOAD`'s page-rounded range must start at or above the previous
+      one's page-rounded end. The gABI already requires ascending `p_vaddr`.
+    - `map_core` replaces a present leaf without a check. A shared page would
+      leak the earlier frame, drop its bytes, and take the later segment's
+      permissions, after the relocation-target and entry checks had read the
+      earlier segment's flags. That predates P2 for `ET_EXEC`.
+    - Every image built in the tree meets it (checked locally over all 94).
+  - **`ET_DYN` extent:** the whole image, after its bias, must end at or below
+    `USER_PIE_TOP` = `0x84_0000_0000`. An image can therefore span up to
+    11 GiB.
+  - `[0x84_0000_0000, 0x86_0000_0000)` is left for P3's interpreter.
+    `ET_EXEC` images stay at their link addresses.
+- **P2-2. What `ET_DYN` P2 accepts.**
+  - **No `PT_INTERP`** (`ELF_E_INTERP`). P3 adds the interpreter.
+  - **At most one `PT_DYNAMIC`**, inside the file. Its 16-byte entries are read
+    up to `DT_NULL` or the segment's end.
+  - **The relocation table is `DT_RELA` with `DT_RELASZ`.**
+    - `DT_RELAENT`, if present, must be 24, and `DT_RELASZ` a multiple of 24.
+    - The table must lie inside the file part of one `PT_LOAD`. It is read
+      from the file, through that segment's offset.
+  - **Refused (`ELF_E_DYN`):**
+    - `DT_NEEDED`: libraries are P3's.
+    - `DT_REL` and `DT_RELR`: x86-64 uses `RELA`, and a table the loader does
+      not read must not be left unapplied.
+    - A non-zero `DT_JMPREL` or `DT_PLTRELSZ`: PLT relocations need symbols. An empty one (0) is accepted (CodeRabbit on #156).
+  - **Relocation types:** `R_X86_64_RELATIVE` with symbol 0 is applied, and
+    `R_X86_64_NONE` is skipped. Anything else is `ELF_E_RELOC`.
+  - **The entry must lie in an executable `PT_LOAD`** (`ELF_E_ENTRY`; Codex on
+    #156). A shared object, or a PIE whose `e_entry` points elsewhere, is
+    refused with `ENOEXEC` before `execve` commits, instead of faulting after
+    it. `ET_EXEC` images are not checked, as before.
+- **P2-3. Every target is checked before any is written.**
+  - A target must be 8-byte aligned. It must lie inside a writable (`PF_W`)
+    `PT_LOAD`, in `[p_vaddr, p_vaddr + p_memsz - 8]` before the bias.
+    Anything else is `ELF_E_RELOC`, and nothing has been written.
+  - This is L1 in the kernel: the loader never writes to text. A text
+    relocation is refused because it lands in a non-writable segment, whether
+    or not the image sets `DT_TEXTREL`.
+  - **The write.** The value is `bias + r_addend`. The kernel resolves the
+    target's page in the new address space (`vmm_resolve`) and writes through
+    the frame's identity view, the way `load_page` copies file bytes.
+    - §5 said "through the uaccess helpers". Those act on the current address
+      space, and the new one is not current while it is built.
+    - The frames are new and private, and nothing else maps them yet.
+  - **Applying `RELATIVE` twice gives the same value**: it reads `r_addend`,
+    not the word in memory. A start-up that relocates itself again, such as
+    musl's `rcrt1`, is harmless.
+- **P2-4. The auxiliary vector, `ET_DYN` only.**
+  - `AT_PHDR`, `AT_PHENT`, `AT_PHNUM` and `AT_ENTRY`, all with the bias
+    applied, ahead of `AT_PAGESZ`.
+  - `AT_PHDR` is the program headers' address when the file part of a
+    `PT_LOAD` holds them. Otherwise `AT_PHDR` and `AT_PHNUM` are 0.
+  - **`ET_EXEC` frames are unchanged, byte for byte.** Otherwise musl's static
+    start-up would begin walking `AT_PHDR` in every existing binary. That
+    change is not P2's to make.
+  - The 8 extra slots keep the parity that the 16-byte alignment rule reads.
+- **P2-5. Gate `smoke-dynlink`, arm C as five sub-arms.**
+  - **`user/dynpie.c`**, a static PIE: clang `-fPIE`, `ld -pie
+    --no-dynamic-linker -z text`, raw syscalls.
+    - It holds a data pointer and a function pointer, each needing a
+      `RELATIVE` relocation.
+    - It prints `PRADYOS_DYN_P base=0x... rel=R aux=X`.
+    - `base` is the run-time address of its own ELF header (`__ehdr_start`).
+    - `rel=1` when both pointers equal the addresses the code computes
+      PC-relative.
+    - `aux=1` when four things hold:
+      - `AT_ENTRY` equals `_start`;
+      - `AT_PHNUM` and `AT_PHENT` match its ELF header;
+      - `AT_PHDR` equals `base + e_phoff`;
+      - the base musl's rule computes from `AT_PHDR` (the address of
+        `_DYNAMIC` minus `PT_DYNAMIC`'s `p_vaddr`) equals `base`.
+  - **`user/dynpbad.c`**, built twice into two images that must be refused:
+    - `/DYNPINT.ELF`, linked with a `PT_INTERP`;
+    - `/DYNPTXT.ELF`, with an aligned 8-byte relocation in its text
+      (`-z notext`).
+    - Either one prints `PRADYOS_DYN_X` if it runs.
+  - **The parent is `dyntest`'s boot instance.** After arms A and B, it forks
+    four children that `execve` `/DYNPIE.ELF`.
+    - It then forks two more, which `execve` the refused images and print
+      `PRADYOS_DYN_R interp rc=` or `textrel rc=` when `execve` returns.
+    - Last, it prints `PRADYOS_DYN_PIE_DONE n=4`.
+  - The three new images go on the FAT image only, not into `kernel.bin`.
+  - **C1:** four `P` lines, all `rel=1`.
+  - **C2:** the four bases lie in `[USER_PIE_BASE, USER_PIE_BASE + 1 GiB)`,
+    and at least 2 are distinct. A false red needs four equal draws: 2^-54.
+  - **C3:** all `aux=1`.
+  - **C4:** `interp rc=-8` (`-ENOEXEC`).
+  - **C5:** `textrel rc=-8`.
+  - `FORBIDDEN_SENTINEL` adds `PRADYOS_DYN_X`.
+- **P2-6. Mutants, each red on its own sub-arm.**
+  - **D3:** the relocations are validated but not written. Expected: C1 red
+    (`rel=0`), the rest green.
+  - **D3b:** `r18 = 0`, a fixed base. Expected: C2 red (`distinct=1`).
+  - **D3c:** `AT_PHDR` and `AT_ENTRY` without the bias. Expected: C3 red
+    (`aux=0`).
+  - **D3d:** the `PT_INTERP` refusal skipped. Expected: C4 red. The image runs
+    and prints `PRADYOS_DYN_X`.
+  - **D3e:** the target check skipped. Expected: C5 red. The text relocation
+    is written and the image runs.
+  - **Vacuity, read before writing:**
+    - P1's tree refuses every `ET_DYN`, so C1, C2 and C3 are red there: no
+      `P` line is printed.
+    - C4 and C5 are refusals, and they pass on P1's tree for the same reason.
+      They mean something only beside C1, which shows that `ET_DYN` is
+      accepted.
+    - D3d and D3e show that each refusal comes from its own check. Stated.
+
+### A2.3 Not covered by P2 (stated)
+
+- **`PT_GNU_RELRO` is not enforced.** The RELRO pages stay writable. P3's
+  `ld.so` or a later part may make them read-only.
+- **A musl-linked static PIE** (`rcrt1.o`, `-static-pie`) is neither built nor
+  tested. Only freestanding probes are, and `PT_TLS` in a PIE is untested.
+- **Not gated:** the refusals in P2-2 other than `PT_INTERP` (the entry check
+  among them), the `USER_IMAGE_TOP` bound, and the ascending, no-shared-page
+  rule for `PT_LOAD`s. They are code paths with no probe. The entry check and
+  the shared-page rule were checked locally on patched copies of `DYNPIE.ELF`.
+- **Strength** is bounded by L3's 18 bits and, without hardware entropy, by
+  L2's TSC path.
 - QEMU (TCG) only, not verified on real hardware.

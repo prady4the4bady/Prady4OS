@@ -66,11 +66,15 @@ enum elf_err {
     ELF_OK            =  0,
     ELF_E_ARGS        = -1,   /* null/short image                       */
     ELF_E_MAGIC       = -2,   /* not ELF / wrong class / endian / version */
-    ELF_E_MACHINE     = -3,   /* not x86-64 ET_EXEC                      */
+    ELF_E_MACHINE     = -3,   /* not x86-64 ET_EXEC or ET_DYN            */
     ELF_E_PHDR        = -4,   /* program-header table out of bounds      */
     ELF_E_SEGMENT     = -5,   /* segment file/addr range invalid         */
     ELF_E_WX          = -6,   /* segment requested write+execute (W^X)   */
     ELF_E_RANGE       = -7,   /* segment outside the user address range  */
     ELF_E_NOMEM       = -8,   /* out of frames / address space           */
     ELF_E_THREAD      = -9,   /* thread creation failed                  */
+    ELF_E_INTERP      = -10,  /* ET_DYN with PT_INTERP (P3; DDR-1189 A2)  */
+    ELF_E_DYN         = -11,  /* PT_DYNAMIC refused (DDR-1189 A2 P2-2)    */
+    ELF_E_RELOC       = -12,  /* relocation refused (DDR-1189 A2 P2-3)    */
+    ELF_E_ENTRY       = -13,  /* ET_DYN entry not in an X PT_LOAD (P2-2)  */
 };

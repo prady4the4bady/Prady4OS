@@ -169,6 +169,13 @@ USER_ARGV_SRC  := user/argvtest.c        # DDR-1032: execve argv/envp launcher
 USER_ARGV_ELF  := build/argvtest.elf
 USER_DYN_SRC   := user/dyntest.c         # DDR-1189 A1 (C1.6 P1): user ASLR probe
 USER_DYN_ELF   := build/dyntest.elf
+# DDR-1189 A2 (C1.6 P2): a static PIE and the two images P2 must refuse. On
+# the FAT image only (execve'd by dyntest), not embedded in kernel.bin.
+USER_PIE_SRC   := user/dynpie.c
+USER_PIE_ELF   := build/dynpie.elf
+USER_PBAD_SRC  := user/dynpbad.c
+USER_PINT_ELF  := build/dynpint.elf
+USER_PTXT_ELF  := build/dynptxt.elf
 USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
 USER_IPC_ELF   := build/ipctest.elf
 USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
@@ -225,6 +232,10 @@ USER_C_LD      := user/user_c.ld
 # user-C compile flags: -mcmodel=large (the 0x8000000000 base exceeds 32-bit
 # relocs), musl public headers + our generated bits/. OUR code -> -Werror.
 USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=large \
+  -nostdinc -nostdlib -Wall -Wextra -Werror \
+  -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
+# DDR-1189 A2: the same, position-independent, for the static-PIE probes.
+USER_PIE_CFLAGS := --target=x86_64-elf -ffreestanding -fPIE -fno-asynchronous-unwind-tables \
   -nostdinc -nostdlib -Wall -Wextra -Werror \
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
@@ -682,6 +693,14 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGV_ELF) build/argvtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DYN_SRC) -o build/dyntest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DYN_ELF) build/dyntest.o
+	# DDR-1189 A2: a static PIE (no PT_INTERP, RELATIVE relocations only, no text
+	# relocation), one with a PT_INTERP, and one with a text relocation.
+	$(CC) $(USER_PIE_CFLAGS) -c $(USER_PIE_SRC) -o build/dynpie.o
+	$(LD) -pie --no-dynamic-linker -z text -z noexecstack --strip-all -o $(USER_PIE_ELF) build/dynpie.o
+	$(CC) $(USER_PIE_CFLAGS) -c $(USER_PBAD_SRC) -o build/dynpint.o
+	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack --strip-all -o $(USER_PINT_ELF) build/dynpint.o
+	$(CC) $(USER_PIE_CFLAGS) -DDYN_TEXTREL -c $(USER_PBAD_SRC) -o build/dynptxt.o
+	$(LD) -pie --no-dynamic-linker -z notext -z noexecstack --strip-all -o $(USER_PTXT_ELF) build/dynptxt.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_IPC_SRC) -o build/ipctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
@@ -712,7 +731,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF) $(USER_DYN_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF) $(USER_DYN_ELF) $(USER_PIE_ELF) $(USER_PINT_ELF) $(USER_PTXT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -954,6 +973,10 @@ fat-image: $(KERNEL_BIN)
 	mcopy -i $(FAT_IMG) $(USER_ARGT_ELF) ::/ARGTEST.ELF
 	# DDR-1189 A1: smoke-dynlink's probe execs its own image from here.
 	mcopy -i $(FAT_IMG) $(USER_DYN_ELF) ::/DYNTEST.ELF
+	# DDR-1189 A2: arm C's static PIE and the two images it must see refused.
+	mcopy -i $(FAT_IMG) $(USER_PIE_ELF) ::/DYNPIE.ELF
+	mcopy -i $(FAT_IMG) $(USER_PINT_ELF) ::/DYNPINT.ELF
+	mcopy -i $(FAT_IMG) $(USER_PTXT_ELF) ::/DYNPTXT.ELF
 	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
@@ -4511,8 +4534,8 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-dynlink: $(IMG) fat-image sfs-image
 	@rm -f build/dynlink.log
 	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
-	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4')" \
-	FORBIDDEN_SENTINEL="DYNTEST FAIL" \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_PIE_DONE n=4')" \
+	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@L=build/dynlink.log ; rc=0 ; \
 	  grep -a 'PRADYOS_DYN_L \|\[aslr\]\|aslr:' $$L ; \
@@ -4528,7 +4551,23 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  echo "PRADYOS_DYN_A distinct=$$sd inrange=$$si" ; echo "PRADYOS_DYN_B distinct=$$md inrange=$$mi" ; \
 	  [ $$si = 4 ] && [ $$sd -ge 2 ] || { echo "[dynlink] FAIL: arm A, stack tops distinct=$$sd inrange=$$si (want >=2, 4)"; rc=1; } ; \
 	  [ $$mi = 4 ] && [ $$md -ge 2 ] || { echo "[dynlink] FAIL: arm B, mmap bases distinct=$$md inrange=$$mi (want >=2, 4)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A and B" ; exit $$rc
+	  grep -a 'PRADYOS_DYN_[PRX] ' $$L ; \
+	  np=$$(grep -ac 'PRADYOS_DYN_P base=0x[0-9a-f]* rel=[01] aux=[01]' $$L) ; \
+	  nr=$$(grep -ac 'PRADYOS_DYN_P base=0x[0-9a-f]* rel=1 ' $$L) ; \
+	  nx=$$(grep -ac 'PRADYOS_DYN_P base=0x[0-9a-f]* rel=[01] aux=1' $$L) ; \
+	  bv=$$(grep -ao 'PRADYOS_DYN_P base=0x[0-9a-f]*' $$L | sed 's/.*base=//') ; \
+	  bd=$$(printf '%s\n' $$bv | sort -u | grep -c .) ; \
+	  bi=0 ; for v in $$bv ; do x=$$(($$v)) ; \
+	    [ $$x -ge $$((0x8100000000)) ] && [ $$x -lt $$((0x8100000000 + 0x40000000)) ] && bi=$$((bi+1)) ; done ; \
+	  ri=$$(grep -ac 'PRADYOS_DYN_R interp rc=-8$$' $$L) ; rt=$$(grep -ac 'PRADYOS_DYN_R textrel rc=-8$$' $$L) ; \
+	  echo "PRADYOS_DYN_C1 rel=$$nr/$$np" ; echo "PRADYOS_DYN_C2 distinct=$$bd inrange=$$bi" ; \
+	  echo "PRADYOS_DYN_C3 aux=$$nx/$$np" ; echo "PRADYOS_DYN_C4 interp_refused=$$ri" ; echo "PRADYOS_DYN_C5 textrel_refused=$$rt" ; \
+	  [ "$$np" = 4 ] && [ "$$nr" = 4 ] || { echo "[dynlink] FAIL: arm C1, relocated pointers rel=$$nr of $$np PIE runs (want 4 of 4)"; rc=1; } ; \
+	  [ "$$bi" = 4 ] && [ "$$bd" -ge 2 ] || { echo "[dynlink] FAIL: arm C2, PIE bases distinct=$$bd inrange=$$bi (want >=2, 4)"; rc=1; } ; \
+	  [ "$$np" = 4 ] && [ "$$nx" = 4 ] || { echo "[dynlink] FAIL: arm C3, auxv aux=$$nx of $$np PIE runs (want 4 of 4)"; rc=1; } ; \
+	  [ "$$ri" = 1 ] || { echo "[dynlink] FAIL: arm C4, the PT_INTERP image was not refused with -ENOEXEC"; rc=1; } ; \
+	  [ "$$rt" = 1 ] || { echo "[dynlink] FAIL: arm C5, the text-relocation image was not refused with -ENOEXEC"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B and C1-C5" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log
