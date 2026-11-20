@@ -28,7 +28,7 @@
 #define LD_MAXC  128                  /* class ids 1..127; 0 = untracked */
 #define LD_REPS  32
 #define LD_SUM_TICKS 200u             /* ldsum period: 2 s at 100 Hz */
-#define LD_FINAL_WAKES 120u           /* the freeze: ldsum's 120th wake, about 240 s */
+#define LD_FINAL_WAKES 0u   /* MUTANT LD7: never freeze */           /* the freeze: ldsum's 120th wake, about 240 s */
 
 extern char __rodata_end[], __bss_end[];
 
