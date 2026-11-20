@@ -359,14 +359,15 @@ jobs:
   # own recipe builds the flagged kernel, boots it, and puts the default kernel
   # back with the hash it had.
   #
-  # One entry today: smoke-zanchor (ZANCHOR_TEST=1, #115).
+  # Entries: smoke-zanchor (ZANCHOR_TEST=1, #115), smoke-rcu (RCU_TORTURE=1,
+  # DDR-1200), smoke-lockdep (LOCKDEP=1, DDR-1209).
   flag-gates:
     needs: build
     runs-on: ubuntu-24.04   # DDR-1191: pinned, as the shards are
     strategy:
       fail-fast: false
       matrix:
-        gate: [smoke-zanchor, smoke-rcu]
+        gate: [smoke-zanchor, smoke-rcu, smoke-lockdep]
     name: flag-gates (${{ matrix.gate }})
     steps:
       - name: Docs-only change, boot gates not run (DDR-1187)

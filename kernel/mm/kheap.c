@@ -232,6 +232,11 @@ void kheap_init(void) {
  * takes its own lock); the PMM never calls back into the heap, so no cycle. */
 #include "spinlock.h"
 static spinlock_t g_heap_lock = SPINLOCK_INIT;
+#if LOCKDEP
+#include "lockdep.h"
+/* DDR-1209 arm LA: the documented heap -> PMM order is the gate's witness. */
+spinlock_t *kheap_lockdep_lock(void) { return &g_heap_lock; }
+#endif
 
 static void *kmalloc_locked(size_t size) {
     if (size == 0)

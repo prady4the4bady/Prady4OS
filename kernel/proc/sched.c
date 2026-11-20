@@ -184,7 +184,11 @@ static void psi_tick(struct percpu *pc) {
     uint64_t t = __atomic_load_n(&pc->ticks, __ATOMIC_RELAXED);
     struct rq *q = &g_rq[cpu];
     int st = 0;
+#if LOCKDEP
+    if (spin_trylock(&q->lock)) {          /* DDR-1209 D8: the checker sees it */
+#else
     if (!__atomic_test_and_set(&q->lock.v, __ATOMIC_ACQUIRE)) {
+#endif
         for (struct tcb *c = q->head; c; c = c->rq_next)
             if (c->state == THREAD_READY && !c->is_idle && !c->psi_yld) {
                 st = 1;                    /* arm K: runnable here, not running */
@@ -1170,7 +1174,11 @@ static struct tcb *steal_pass(int self, uint32_t want_node, int same) {
         if (same != (cnode == want_node))
             continue;
         struct rq *q = &g_rq[c];
+#if LOCKDEP
+        if (!spin_trylock(&q->lock))     /* DDR-1209 D8: the checker sees it */
+#else
         if (__atomic_test_and_set(&q->lock.v, __ATOMIC_ACQUIRE))
+#endif
             continue;                    /* busy — don't convoy, next victim */
         if (rq_head_pinned_away(q, self)) {
             spin_unlock(&q->lock);       /* DDR-1186: its CPU's, not ours */
@@ -1527,6 +1535,10 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->dl_bw           = 0;
     t->dl_cpu          = -1;           /* DDR-1188 A5: no deadline yet */
     t->psi_yld         = 0;            /* DDR-1188 A6: not queued by a yield */
+#if LOCKDEP
+    t->ld.depth        = 0;            /* DDR-1209 D3: holds nothing yet */
+    t->ld.lost         = 0;
+#endif
     t->blk_wait_next = 0;            /* DDR-878: not on any slot wait list yet.
                                       * kmalloc does not zero, so an uninitialised
                                       * link here would be a garbage pointer the

@@ -12,11 +12,13 @@
 #include "bcast.h"
 #include "errno.h"     /* DDR-955: ETIMEDOUT */
 #include "sched.h"
+#include "lockdep.h"
 
 void bcast_bus_init(struct bcast_bus *b, uint64_t res_id) {
     b->res_id = res_id;
     b->subs = 0;
     b->lock = (spinlock_t)SPINLOCK_INIT;
+    LOCKDEP_CLASS(&b->lock, "bcast.bus");        /* DDR-1209 D2 */
 }
 
 int bcast_subscribe(struct cap_table *caps, cap_t h, struct bcast_bus *b,
@@ -28,6 +30,7 @@ int bcast_subscribe(struct cap_table *caps, cap_t h, struct bcast_bus *b,
     s->waiter = 0;
     s->pending = 0;
     s->lock = (spinlock_t)SPINLOCK_INIT;
+    LOCKDEP_CLASS(&s->lock, "bcast.sub");        /* DDR-1209 D2 */
     uint64_t flags = spin_lock_irqsave(&b->lock);
     s->next = b->subs;
     b->subs = s;

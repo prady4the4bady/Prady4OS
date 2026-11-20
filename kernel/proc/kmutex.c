@@ -1,10 +1,24 @@
 /* kernel/proc/kmutex.c — sleeping kernel mutex (DDR-1181 §3.3). */
 #include "kmutex.h"
 #include "sched.h"
+#include "lockdep.h"
+
+/* DDR-1209 D2: every kmutex's inner lock is one class; a zeroed kmutex is
+ * valid, so the class is stamped where the lock is taken (one call site).
+ * The shipped build takes &m->lk exactly as before (D8: byte-identical). */
+#if LOCKDEP
+static spinlock_t *kmx_lk(struct kmutex *m) {
+    LOCKDEP_CLASS(&m->lk, "kmutex.lk");
+    return &m->lk;
+}
+#define KMX_LK(m) kmx_lk(m)
+#else
+#define KMX_LK(m) (&(m)->lk)
+#endif
 
 void kmutex_lock(struct kmutex *m) {
     struct tcb *self = current_thread;
-    uint64_t fl = spin_lock_irqsave(&m->lk);
+    uint64_t fl = spin_lock_irqsave(KMX_LK(m));
     if (!m->owner) {
         m->owner = self;
         self->kmx_held++;
@@ -32,7 +46,7 @@ void kmutex_lock(struct kmutex *m) {
 
 void kmutex_unlock(struct kmutex *m) {
     struct tcb *self = current_thread;
-    uint64_t fl = spin_lock_irqsave(&m->lk);
+    uint64_t fl = spin_lock_irqsave(KMX_LK(m));
     struct tcb *next = m->head;
     if (next) {
         m->head = next->kmx_next;
