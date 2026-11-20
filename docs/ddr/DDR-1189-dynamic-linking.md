@@ -267,6 +267,10 @@ stand; this amendment fixes how P2 meets them.
     - A non-empty `DT_JMPREL` or `DT_PLTRELSZ`: PLT relocations need symbols.
   - **Relocation types:** `R_X86_64_RELATIVE` with symbol 0 is applied, and
     `R_X86_64_NONE` is skipped. Anything else is `ELF_E_RELOC`.
+  - **The entry must lie in an executable `PT_LOAD`** (`ELF_E_ENTRY`; Codex on
+    #156). A shared object, or a PIE whose `e_entry` points elsewhere, is
+    refused with `ENOEXEC` before `execve` commits, instead of faulting after
+    it. `ET_EXEC` images are not checked, as before.
 - **P2-3. Every target is checked before any is written.**
   - A target must be 8-byte aligned. It must lie inside a writable (`PF_W`)
     `PT_LOAD`, in `[p_vaddr, p_vaddr + p_memsz - 8]` before the bias.
@@ -349,8 +353,9 @@ stand; this amendment fixes how P2 meets them.
   `ld.so` or a later part may make them read-only.
 - **A musl-linked static PIE** (`rcrt1.o`, `-static-pie`) is neither built nor
   tested. Only freestanding probes are, and `PT_TLS` in a PIE is untested.
-- **Not gated:** the refusals in P2-2 other than `PT_INTERP`, and the
-  `USER_IMAGE_TOP` bound. They are code paths with no probe.
+- **Not gated:** the refusals in P2-2 other than `PT_INTERP` (the entry check
+  among them), and the `USER_IMAGE_TOP` bound. They are code paths with no
+  probe.
 - **Strength** is bounded by L3's 18 bits and, without hardware entropy, by
   L2's TSC path.
 - QEMU (TCG) only, not verified on real hardware.

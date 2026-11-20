@@ -163,6 +163,19 @@ static int elf_target_writable(const uint8_t *img, const struct elf64_ehdr *eh,
     return 0;
 }
 
+/* DDR-1189 A2 P2-2 (Codex on #156): 1 when e_entry (a link address) lies inside
+ * an executable PT_LOAD. */
+static int elf_entry_exec(const uint8_t *img, const struct elf64_ehdr *eh) {
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        const struct elf64_phdr *ph = elf_ph(img, eh, i);
+        if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_X))
+            continue;
+        if (eh->e_entry >= ph->p_vaddr && eh->e_entry - ph->p_vaddr < ph->p_memsz)
+            return 1;
+    }
+    return 0;
+}
+
 /* DDR-1189 A2 P2-2, P2-3: read PT_DYNAMIC, find the RELA table in the file and
  * check every entry, all before the address space exists, so a refusal has
  * written nothing. On success, out_off and out_n give the table (n may be 0). */
@@ -340,6 +353,12 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
         if (drc != ELF_OK)
             return drc;
     }
+
+    /* DDR-1189 A2 P2-2 (Codex on #156): an ET_DYN's entry must lie in an
+     * executable PT_LOAD. A shared object or a malformed PIE is then refused
+     * with ENOEXEC here, before execve commits, instead of faulting after it. */
+    if (is_dyn && !elf_entry_exec(img, eh))
+        return ELF_E_ENTRY;
 
     uint64_t as = vmm_new_address_space();
     if (!as)

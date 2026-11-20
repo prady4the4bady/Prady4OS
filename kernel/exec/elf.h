@@ -76,4 +76,5 @@ enum elf_err {
     ELF_E_INTERP      = -10,  /* ET_DYN with PT_INTERP (P3; DDR-1189 A2)  */
     ELF_E_DYN         = -11,  /* PT_DYNAMIC refused (DDR-1189 A2 P2-2)    */
     ELF_E_RELOC       = -12,  /* relocation refused (DDR-1189 A2 P2-3)    */
+    ELF_E_ENTRY       = -13,  /* ET_DYN entry not in an X PT_LOAD (P2-2)  */
 };
