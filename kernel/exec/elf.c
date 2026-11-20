@@ -323,8 +323,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     uint64_t bias = 0;
     if (hi != 0) {                                 /* at least one PT_LOAD */
         if (is_dyn) {
-            uint64_t base = USER_PIE_BASE +
-                (aslr_random() & (USER_PIE_ASLR_PAGES - 1)) * PAGE_SIZE;
+            uint64_t base = USER_PIE_BASE;  /* MUTANT D3b: fixed base */
             if (hi - lo > USER_PIE_TOP - base)
                 return ELF_E_RANGE;
             bias = base - lo;
