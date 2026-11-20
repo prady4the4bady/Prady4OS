@@ -342,6 +342,13 @@ extern volatile uint32_t g_rt_threads;
  * virtio-blk read; stalled ticks of the last 100 (res 0 CPU, 1 I/O). */
 extern volatile uint32_t g_psi_io_wait;
 int  psi_read(long res, long cpu);
+
+/* DDR-1188 Amendment 7 (C1.5 P6): tickless idle on the APs. g_nohz is set
+ * after the boot self-checks; sched_iso_set is the probe-only isolate op
+ * (SYS_SCHED_CPU op 6), -1 for the BSP or an absent CPU. */
+extern volatile uint32_t g_nohz;
+int  sched_iso_set(int cpu, int on);
+uint64_t sched_nohz_stat(int cpu, int which);   /* 1 stops, 2 refused, 3 found work */
 int  sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime_ns,
                          uint64_t period_ns);   /* A5 D5: -EBUSY on admission */
 /* S3: kernel-only grant of RES_SCHED with `rights`. -EPERM for an agent. */

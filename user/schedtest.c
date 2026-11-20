@@ -1149,6 +1149,86 @@ static void arms_p5(void) {
     nsi(SYS_SCHED_CPU, 2, 0, 0);
 }
 
+/* ---- C1.5 P6 (DDR-1188 Amendment 7): tickless idle on the APs ----
+ * Probe-only ops of SYS_SCHED_CPU: 6 (cpu, on) isolates a CPU so that only
+ * threads pinned to it run there; 7 (cpu) reads its timer-interrupt count;
+ * 8 runs one synchronize_rcu and returns how long it took, in us. */
+#define L_CPU      3
+#define L_MAX      5        /* timer interrupts in 1 s on an idle isolated CPU */
+#define L1_N       50
+/* 20.1 ms, not 20: nanosleep's tick backstop (rem / 10 ms + 1 ticks, expired by
+ * the BSP's sweep) then lands after the deadline, never before it. With a whole
+ * number of ticks it landed at or before the deadline, its wake ended any stop
+ * early and the exit's one-shot gave the precise wake whether or not the stop
+ * counted to the deadline (C12b survived on d83db5b, DDR-1188 A7). */
+#define L1_NS      (20 * MS + 100000ull)
+#define L1_FINE    (2 * MS)         /* a wake this close is not a tick's */
+#define L1_FINE_N  40               /* of L1_N; C12b leaves about 9.9 ms late */
+#define L1_LATE    (2 * 10 * MS)    /* 2 ticks */
+#define L2_N       20
+#define L2_MAX_US  50000
+
+struct l1_state { volatile long done, pinned, valid, fine; volatile uint64_t late; };
+
+__attribute__((noreturn, force_align_arg_pointer)) static void l1_sleeper(long arg) {
+    struct l1_state *s = (struct l1_state *)arg;
+    s->pinned = pin(L_CPU);
+    uint64_t worst = 0;
+    for (int i = 0; i < L1_N && s->pinned; i++) {
+        struct ts req = { 0, (long)L1_NS };
+        uint64_t t0 = mono();
+        long r = nsi(SYS_NANOSLEEP, (long)&req, 0, 0);
+        uint64_t d = mono() - t0, want = L1_NS;
+        if (r != 0 || d < want)
+            continue;                 /* a failed or short sleep is not a sample */
+        s->valid++;
+        if (d - want < L1_FINE) s->fine++;
+        if (d - want > worst) worst = d - want;
+    }
+    s->late = worst;
+    __atomic_store_n(&s->done, 1, __ATOMIC_RELEASE);
+    texit();
+}
+
+static void arms_p6(void) {
+    pin(0);
+    long iso = nsi6(SYS_SCHED_CPU, 6, L_CPU, 1, 0, 0, 0);
+    sleep_ms(1000);                          /* drain: what was there finishes */
+    long i0 = nsi(SYS_SCHED_CPU, 7, L_CPU, 0);
+    long s0 = nsi(SYS_SCHED_CPU, 7, L_CPU, 1), r0 = nsi(SYS_SCHED_CPU, 7, L_CPU, 2);
+    long w0 = nsi(SYS_SCHED_CPU, 7, L_CPU, 3);
+    sleep_ms(1000);
+    long i1 = nsi(SYS_SCHED_CPU, 7, L_CPU, 0);
+    long s1 = nsi(SYS_SCHED_CPU, 7, L_CPU, 1), r1 = nsi(SYS_SCHED_CPU, 7, L_CPU, 2);
+    long w1 = nsi(SYS_SCHED_CPU, 7, L_CPU, 3);
+    long irqs = (i0 >= 0 && i1 >= 0) ? i1 - i0 : -1;
+    say("[sched] L iso=%d irqs=%d stops=%d refused=%d found_work=%d\n", iso, irqs,
+        s1 - s0, r1 - r0, w1 - w0);
+    say("PRADYOS_SCHED_L nohz_ok=%d\n", (long)(iso == 0 && irqs >= 0 && irqs < L_MAX));
+
+    struct l1_state *s = page();
+    spawn(l1_sleeper, (long)s);
+    long done = await_eq(&s->done, 1, 10);
+    say("[sched] L1 late_us=%d fine=%d valid=%d pinned=%d done=%d\n", (long)(s->late / 1000),
+        s->fine, s->valid, s->pinned, done);
+    say("PRADYOS_SCHED_L1 wake_ok=%d\n",
+        (long)(iso == 0 && done && s->pinned && s->valid == L1_N && s->fine >= L1_FINE_N &&
+               s->late <= L1_LATE));
+
+    sleep_ms(200);                           /* CPU 3 isolated and idle again */
+    long worst = -1, bad = 0;
+    for (int i = 0; i < L2_N; i++) {
+        long us = nsi(SYS_SCHED_CPU, 8, 0, 0);
+        if (us < 0) bad++;
+        else if (us > worst) worst = us;
+    }
+    say("[sched] L2 worst_us=%d bad=%d\n", worst, bad);
+    say("PRADYOS_SCHED_L2 eqs_ok=%d\n",
+        (long)(iso == 0 && !bad && worst >= 0 && worst <= L2_MAX_US));
+    nsi6(SYS_SCHED_CPU, 6, L_CPU, 0, 0, 0, 0);
+    nsi(SYS_SCHED_CPU, 2, 0, 0);
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arm_b2();     /* first: it forks, so before arm A creates threads */
     arm_h();      /* forks too; and SCHEDAGT is certainly still alive */
@@ -1159,6 +1239,7 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     arms_p3();
     arms_p4();
     arms_p5();
+    arms_p6();
     say("PRADYOS_SCHED_DONE\n");
     nsi(SYS_EXIT, 0, 0, 0);
     for (;;) { }
