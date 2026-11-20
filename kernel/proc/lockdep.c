@@ -642,7 +642,9 @@ static int ld_wait(volatile uint32_t *flag, uint64_t bound) {
     return (int)__atomic_load_n(flag, __ATOMIC_ACQUIRE);
 }
 
+void pmm_lockdep_mutant(void);
 void lockdep_selftest(void) {
+    pmm_lockdep_mutant();                       /* MUTANT LD5 */
     spinlock_t *tl[] = { &tX, &tY, &tP, &tQ, &tR, &tU, &tV, &tA, &tB };
     for (unsigned i = 0; i < sizeof tl / sizeof tl[0]; i++)
         ld_test_class(tl[i]);
