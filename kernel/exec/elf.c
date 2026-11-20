@@ -411,7 +411,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
             rc = ELF_E_RELOC;
             break;
         }
-        *(uint64_t *)(uintptr_t)(phys + (va & (PAGE_SIZE - 1))) = bias + (uint64_t)r.r_addend;
+        (void)0;                          /* MUTANT D3: validated, not written */
     }
 
     if (rc != ELF_OK) {
