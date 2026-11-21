@@ -4534,7 +4534,7 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-dynlink: $(IMG) fat-image sfs-image
 	@rm -f build/dynlink.log
 	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
-	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_PIE_DONE n=4')" \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=')" \
 	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@L=build/dynlink.log ; rc=0 ; \
@@ -4567,7 +4567,15 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$np" = 4 ] && [ "$$nx" = 4 ] || { echo "[dynlink] FAIL: arm C3, auxv aux=$$nx of $$np PIE runs (want 4 of 4)"; rc=1; } ; \
 	  [ "$$ri" = 1 ] || { echo "[dynlink] FAIL: arm C4, the PT_INTERP image was not refused with -ENOEXEC"; rc=1; } ; \
 	  [ "$$rt" = 1 ] || { echo "[dynlink] FAIL: arm C5, the text-relocation image was not refused with -ENOEXEC"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B and C1-C5" ; exit $$rc
+	  F=$$(grep -a 'PRADYOS_DYN_F wx=' $$L | head -1) ; echo "$$F" ; \
+	  fv() { echo "$$F" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(fv filex)" = 1 ] && [ "$$(fv frx)" = 0 ] && [ "$$(fv frw)" = 0 ] || { echo "[dynlink] FAIL: arm F0, the legal executable path: filex=$$(fv filex) frx=$$(fv frx) frw=$$(fv frw) (want 1, 0, 0)"; rc=1; } ; \
+	  [ "$$(fv wx)" = -13 ] || { echo "[dynlink] FAIL: arm F1, write+execute from a read-only fd: $$(fv wx) (want -13)"; rc=1; } ; \
+	  [ "$$(fv anonx)" = -22 ] && [ "$$(fv sharedx)" = -22 ] || { echo "[dynlink] FAIL: arm F2, anonymous/shared executable: anonx=$$(fv anonx) sharedx=$$(fv sharedx) (want -22, -22)"; rc=1; } ; \
+	  [ "$$(fv rwfd)" = -13 ] || { echo "[dynlink] FAIL: arm F3, executable from a writable fd: $$(fv rwfd) (want -13)"; rc=1; } ; \
+	  [ "$$(fv mpanon)" = -13 ] || { echo "[dynlink] FAIL: arm F4, mprotect(PROT_EXEC) on anonymous memory: $$(fv mpanon) (want -13)"; rc=1; } ; \
+	  [ "$$(fv frwx)" = -13 ] || { echo "[dynlink] FAIL: arm F5, mprotect(PROT_EXEC) after the mapping was writable: $$(fv frwx) (want -13)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5 and F0-F5" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

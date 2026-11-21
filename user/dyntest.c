@@ -34,10 +34,17 @@
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
+#define SYS_OPEN    7
+#define SYS_CLOSE   8
+#define SYS_MPROTECT 97
 
 #define PROT_READ      0x1
 #define PROT_WRITE     0x2
+#define PROT_EXEC      0x4
+#define MAP_SHARED     0x01
 #define MAP_PRIVATE    0x02
+#define O_RDONLY       0
+#define O_RDWR         2
 #define MAP_ANONYMOUS  0x20
 
 #define DYN_CHILDREN 4
@@ -150,6 +157,58 @@ static void run_one(const char *path, const char *a0, const char *what) {
         die("a child exited non-zero");
 }
 
+/* " key=<v>" */
+static void kv(const char *key, long v) {
+    char d[24];
+    dec(d, v);
+    wr(" ");
+    wr(key);
+    wr("=");
+    wr(d);
+}
+
+/* DDR-1189 A3 P3a-1 (L1): arm F. One line of return codes; the gate checks
+ * each rule as its own sub-arm. A positive address is printed as 1. */
+static void wx_phase(void) {
+    static const char self[] = "/DYNTEST.ELF";
+    long ro = nsi(SYS_OPEN, (long)self, O_RDONLY, 0);
+    long rw = nsi(SYS_OPEN, (long)self, O_RDWR, 0);
+    if (ro < 0 || rw < 0)
+        die("open /DYNTEST.ELF");
+    /* F1: write and execute together, even from a read-only fd. */
+    long wx = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE, ro, 0);
+    /* F2: anonymous, and MAP_SHARED, executable mappings keep -EINVAL. */
+    long anonx = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    long sharedx = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_EXEC, MAP_SHARED, ro, 0);
+    /* F3: an executable mapping only from a read-only fd. */
+    long rwfd = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, rw, 0);
+    /* F0: the legal path -- a read-only file, MAP_PRIVATE, executable. */
+    long filex = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, ro, 0);
+    /* F4: mprotect never adds X to anonymous memory (mapped read-only, so
+     * only the "came from a read-only file" rule refuses it). */
+    long anon = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    long mpanon = anon > 0 ? nsi(SYS_MPROTECT, anon, 4096, PROT_READ | PROT_EXEC) : anon;
+    /* F0 and F5: a read-only file mapping may become executable while it was
+     * never writable; once made writable, never again. */
+    long fr = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE, ro, 0);
+    long frx = fr > 0 ? nsi(SYS_MPROTECT, fr, 4096, PROT_READ | PROT_EXEC) : fr;
+    long frw = fr > 0 ? nsi(SYS_MPROTECT, fr, 4096, PROT_READ | PROT_WRITE) : fr;
+    long frwx = fr > 0 ? nsi(SYS_MPROTECT, fr, 4096, PROT_READ | PROT_EXEC) : fr;
+    nsi(SYS_CLOSE, ro, 0, 0);
+    nsi(SYS_CLOSE, rw, 0, 0);
+    wr("PRADYOS_DYN_F");
+    kv("wx", wx > 0 ? 1 : wx);
+    kv("anonx", anonx > 0 ? 1 : anonx);
+    kv("sharedx", sharedx > 0 ? 1 : sharedx);
+    kv("rwfd", rwfd > 0 ? 1 : rwfd);
+    kv("filex", filex > 0 ? 1 : filex);
+    kv("mpanon", mpanon);
+    kv("frx", frx);
+    kv("frw", frw);
+    kv("frwx", frwx);
+    wr("\n");
+}
+
 /* DDR-1189 A2 P2-5: arm C. */
 __attribute__((noreturn)) static void pie_phase(void) {
     static const char pie[] = "/DYNPIE.ELF";
@@ -160,6 +219,7 @@ __attribute__((noreturn)) static void pie_phase(void) {
     run_one(pint, "dynpint", "interp");
     run_one(ptxt, "dynptxt", "textrel");
     wr("PRADYOS_DYN_PIE_DONE n=4\n");
+    wx_phase();                            /* DDR-1189 A3: arm F */
     for (;;)
         nsi(SYS_EXIT, 0, 0, 0);
 }

@@ -179,6 +179,8 @@ static long shm_fd_map(struct tcb *t, int obj, uint64_t addr, uint64_t len, int 
     v->npages = npages;
     v->shm = obj + 1;
     v->shm_ro = 0;                               /* the fd is O_RDWR (A3.1) */
+    v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
+    v->ever_w = 1;
     v->pgoff = (uint32_t)first;
     v->wcap = 0;                                 /* nothing to write back */
     if (addr == 0)
@@ -249,6 +251,8 @@ static long file_shared_map(struct tcb *t, struct fd_entry *fe, uint64_t addr,
     v->npages = npages;
     v->shm = obj + 1;
     v->shm_ro = !wok;                            /* mprotect may not add write */
+    v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
+    v->ever_w = wok ? 1 : 0;
     v->pgoff = (uint32_t)first;
     v->wcap = wok ? (uint64_t)fe->cap : 0;
     if (addr == 0)
@@ -276,8 +280,16 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     int shared = (flags & MAP_SHARED) != 0;
     if (shared && (flags & MAP_PRIVATE))
         return -EINVAL;                         /* POSIX: exactly one of the two */
-    if (prot & PROT_EXEC)
-        return -EINVAL;                         /* W^X: no executable mapping */
+    /* DDR-1189 A3 P3a-1 (L1): an executable mapping comes only from a file
+     * opened read-only, MAP_PRIVATE, and never writable. An anonymous or
+     * MAP_SHARED request keeps -EINVAL, as before (shmtest D and systest pin
+     * it); a file-backed private request that L1 refuses is -EACCES. */
+    if (prot & PROT_EXEC) {
+        if (shared || a_fd == -1 || (flags & MAP_ANONYMOUS))
+            return -EINVAL;
+        if (prot & PROT_WRITE)
+            return -EACCES;                     /* W^X */
+    }
     if (shared && a_fd != -1) {
         /* DDR-1178 A3: a shm_open object; A4: a file. */
         struct fd_entry *se = fd_get(t, (int)a_fd);
@@ -319,6 +331,8 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
                                                  * from -EBADF on purpose, per
                                                  * DDR-1080: the return value
                                                  * should name its own family */
+        if ((prot & PROT_EXEC) && (fe->flags & OF_ACCMODE) != 0)
+            return -EACCES;                     /* L1: only a read-only fd */
         if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
             return -EINVAL;                     /* POSIX requires a page-aligned
                                                  * offset — and after this the
@@ -346,7 +360,9 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
         sched_exit(137);                         /* AGENT_OOM_KILLED; never returns */
     }
 
-    uint64_t pflags = VMM_USER | VMM_NX;
+    uint64_t pflags = VMM_USER;
+    if (!(prot & PROT_EXEC))
+        pflags |= VMM_NX;                        /* L1: only a read-only file maps X */
     if (prot & PROT_WRITE)
         pflags |= VMM_RW;
     if (shared)
@@ -386,6 +402,10 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
 
     v->base   = base;
     v->npages = npages;
+    /* DDR-1189 A3 P3a-1: a private mapping of a read-only fd, not writable,
+     * may be executable now or later; anything writable never can be. */
+    v->x_ok   = (fe && (fe->flags & OF_ACCMODE) == 0 && !(prot & PROT_WRITE)) ? 1 : 0;
+    v->ever_w = (prot & PROT_WRITE) ? 1 : 0;
     if (addr == 0)
         t->mm->mmap_next = base + npages * PAGE_SIZE;
     return (long)base;
@@ -414,6 +434,8 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
     }
     v->base = 0;
     v->npages = 0;
+    v->x_ok = 0;
+    v->ever_w = 0;
     return 0;
 }
 
@@ -437,6 +459,23 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
  *                            user pages IN rather than reporting them. Telling
  *                            the two apart needs a state that does not exist.
  */
+/* DDR-1189 A3 P3a-1 (L1): 1 when PROT_EXEC may be set on the page at `va`:
+ * it is already executable, or it lies in a vm_area that came from a
+ * read-only file and was never writable. mprotect walks page tables, so image
+ * pages, the stack and the heap reach this too; none of those may become
+ * executable after being writable. */
+static int mprot_exec_ok(struct tcb *t, uint64_t va) {
+    uint64_t pte = vmm_resolve_pte(t->cr3, va);
+    if ((pte & 1ull) && !(pte & VMM_NX))
+        return 1;
+    for (int i = 0; i < VM_AREA_MAX; i++) {
+        struct vm_area *v = &t->mm->vma[i];
+        if (v->npages && va >= v->base && va - v->base < v->npages * PAGE_SIZE)
+            return v->x_ok && !v->ever_w;
+    }
+    return 0;
+}
+
 static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a4; (void)a5; (void)a6;
     uint64_t addr = (uint64_t)a1;
@@ -473,6 +512,12 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
         }
     }
 
+    if (prot & PROT_EXEC) {                    /* DDR-1189 A3 P3a-1 (L1) */
+        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
+        for (uint64_t va = addr; va < end; va += PAGE_SIZE)
+            if (!mprot_exec_ok(t, va))
+                return -EACCES;
+    }
     uint64_t flags = 0;
     if (prot & PROT_WRITE) flags |= VMM_RW;
     if (!(prot & PROT_EXEC)) flags |= VMM_NX;   /* readable+non-exec is the default */
@@ -485,6 +530,14 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
         return -EACCES;                        /* write asked on a COW page or a kernel view */
     if (rc != 0)
         return -ENOMEM;                        /* a page is absent, or no frame for a copy */
+    if (prot & PROT_WRITE) {                   /* L1: once writable, never executable */
+        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
+        for (int i = 0; i < VM_AREA_MAX; i++) {
+            struct vm_area *v = &t->mm->vma[i];
+            if (v->npages && addr < v->base + v->npages * PAGE_SIZE && v->base < end)
+                v->ever_w = 1;
+        }
+    }
     return 0;
 }
 
@@ -571,6 +624,8 @@ static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long
     v->npages = npages;
     v->shm = obj + 1;
     v->shm_ro = ro;
+    v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
+    v->ever_w = ro ? 0 : 1;
     v->pgoff = 0;
     v->wcap = 0;
     t->mm->mmap_next = base + (uint64_t)npages * PAGE_SIZE;
