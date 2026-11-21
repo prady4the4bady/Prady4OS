@@ -112,8 +112,9 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | musl libc programs | gated | `smoke-user`, `smoke-smpuser` | Ported C programs |
 | init + service manager | gated | `smoke-init` | Start/supervise services |
 | PRISM shell (pipes, redirection, quoting, erase, jobs, `wait`, `source`, `audit`) | gated | `smoke-shell` | Interactive shell |
-| User-space ASLR: stack top and mmap base drawn per exec (DDR-1189 A1, C1.6 P1, #154) | gated (emulated-verified; not verified on real hardware) | `smoke-dynlink` A, B | 16 bits for the stack top and 18 for the mmap base (DDR-1189 L3), fewer than Linux. The program image stays at its link address until P2. The gate runs with virtio-rng; without a hardware source the TSC path runs, which is weak and not called secure |
-| Dynamic linking: static PIE, `PT_INTERP`, shared libraries (C1.6 P2–P4) | P2 (static PIE) in progress on branch `c16-p2-pie`, where DDR-1189 Amendment 2 holds its design | none yet | — |
+| User-space ASLR: stack top, mmap base and `ET_DYN` image base drawn per exec (DDR-1189 A1 and A2, C1.6 P1 #154, P2 #156) | gated (emulated-verified; not verified on real hardware) | `smoke-dynlink` A, B, C2 | 16 bits for the stack top and 18 each for the mmap base and the PIE base (DDR-1189 L3), fewer than Linux. `ET_EXEC` images stay at their link addresses. The gate runs with virtio-rng; without a hardware source the TSC path runs, which is weak and not called secure |
+| Static PIE: `ET_DYN` without `PT_INTERP`, `R_X86_64_RELATIVE` applied by the loader after a writable-target check, `AT_PHDR`/`AT_ENTRY` for `ET_DYN` (DDR-1189 A2, C1.6 P2, #156) | gated (emulated-verified; not verified on real hardware) | `smoke-dynlink` C1–C5 | `PT_GNU_RELRO` is not enforced; a musl `rcrt1` static PIE is untested; the entry check, the shared-page rule and the other P2-2 refusals are not gated |
+| Dynamic linking: `PT_INTERP`, shared libraries, shared text (C1.6 P3, P4) | not started (P4 needs C2.1) | none | — |
 
 ## Desktop (compositor)
 
