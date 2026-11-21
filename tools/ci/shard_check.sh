@@ -78,11 +78,20 @@ if [ -n "$dupes" ]; then
 fi
 
 # 2. Every smoke-* target in the Makefile is assigned or explicitly excluded.
+#    Membership is an associative-array lookup, not `printf ... | grep -qx`.
+#    That pipe was a false-FAIL: bash's printf writes one line per write(2),
+#    grep -q exits on its match, a later write raises SIGPIPE, printf exits
+#    141, and pipefail made the test fail for a gate that IS assigned (25 of
+#    3000 runs; PIPESTATUS "141 0" on every miss, 2026-11-21).
+declare -A is_assigned=()
+while read -r a; do
+    [ -n "$a" ] && is_assigned["$a"]=1
+done <<< "$assigned"
 missing=""
 while read -r t; do
     [ -n "$t" ] || continue
     excluded "$t" && continue
-    printf '%s\n' "$assigned" | grep -qx "$t" || missing="$missing $t"
+    [ -n "${is_assigned[$t]:-}" ] || missing="$missing $t"
 done < <(grep -oE '^smoke-[a-z0-9-]+:' "$MAKEFILE" | tr -d ':' | sort -u)
 
 if [ -n "$missing" ]; then
