@@ -431,9 +431,31 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     anything else is `-EACCES`.
   - `mprotect` adding `PROT_WRITE` sets `ever_w`, so the mapping can never
     become executable again.
+  - **`mprotect` covers pages that no `vm_area` describes.**
+    - It walks page tables (`vmm_protect_range`), so ELF image pages, the
+      stack and the heap are reachable too. Today any of them can be made
+      R+X after being written.
+    - The rule is therefore per page: `PROT_EXEC` is allowed on a page only
+      if the page is already executable (its NX bit clear), or if it lies in
+      a `vm_area` with `x_ok` set and `ever_w` clear.
+    - An image text page that was made writable once is NX from then on, so
+      it can never be made executable again.
   - **This changes behaviour today's tree allows**: adding `PROT_EXEC` to
-    anonymous memory. P3a lists every in-tree caller of `mprotect(PROT_EXEC)`
-    before it lands (the probes `mprotect` and `wxviol` among them).
+    anonymous memory, the stack, the heap or an image data page.
+    - In-tree callers of `PROT_EXEC` (read 2026-11-21):
+      - `mprotecttest` arm D (W+X together, `-EACCES`, unchanged);
+      - `shmtest` arm D (`MAP_SHARED|MAP_ANONYMOUS` with `PROT_RWX`, expects
+        `-EINVAL`);
+      - `systest` (anonymous `PROT_READ|PROT_EXEC` must be refused).
+      No probe adds `PROT_EXEC` with `mprotect`.
+    - **errno precedence:** `mmap` keeps `-EINVAL` for an executable mapping
+      that is anonymous or `MAP_SHARED`, as today and as `shmtest` D and
+      `systest` pin. `-EACCES` is new, and only for a file-backed
+      `MAP_PRIVATE` request that L1 refuses (a writable fd, or `PROT_WRITE`
+      with `PROT_EXEC`).
+    - §4 arm F's "`-EACCES`" for anonymous `PROT_EXEC` and for
+      `MAP_SHARED`+`PROT_EXEC` is restated to match: the existing gates
+      keep their codes, and arm F checks `-EINVAL` there.
 - **P3a-2. `MAP_FIXED` over the caller's own mapping.**
   - The fixed range must lie inside mappings the calling address space already
     holds, in the mmap arena or the interpreter window.
