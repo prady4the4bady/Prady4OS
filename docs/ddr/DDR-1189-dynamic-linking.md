@@ -470,6 +470,19 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     `x_ok` unless the new mapping is itself a non-writable mapping of a
     read-only fd. A page written through a replacement can therefore never be
     made executable.
+  - **Two known conservative limits (Codex on #158).** Both refuse a request
+    that would have been safe; neither ever permits write-then-execute.
+    - A replacement only ever clears `x_ok`. A read-only file mapping that
+      replaces a whole anonymous area therefore cannot later gain X through
+      `mprotect`. musl's `ld.so` maps each text segment with `PROT_EXEC` in the
+      `MAP_FIXED` call itself, so it never needs that path.
+    - `x_ok` and `ever_w` are per `vm_area`, not per page.
+      `mprotect(PROT_WRITE)` on one page refuses a later `PROT_EXEC` on every
+      page of that area. musl's RELRO `mprotect` only removes write, and its
+      `DT_TEXTREL` path is refused by design.
+    - Lifting either needs its own state (whole-area coverage, or a per-page
+      bitmap), its own arm and its own mutant. It is left until a caller needs
+      it.
   - On `-ENOMEM` or `-EIO` part-way, the pages not yet mapped stay absent inside
     their area. POSIX leaves the range's contents unspecified after a failed
     `MAP_FIXED`; `munmap` still frees the area.
