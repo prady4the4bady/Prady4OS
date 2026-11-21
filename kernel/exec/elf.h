@@ -53,8 +53,16 @@ struct user_layout {
     uint64_t mmap_base;   /* VMM_MMAP_BASE + r18 pages, r18 < 2^18  */
 };
 
+/* DDR-1189 A3 P3a-3: the filesystem an interpreter is opened through, with
+ * the exec caller's capability. 0 (elf_load, a kernel spawn) refuses an image
+ * with PT_INTERP, which no image the kernel spawns has. */
+struct elf_fs {
+    uint64_t cap;         /* cap_t (cap.h) */
+    int      mnt;
+};
+
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
-                    const struct exec_args *args,
+                    const struct exec_args *args, const struct elf_fs *fs,
                     uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp,
                     struct user_layout *out_lay);
 
@@ -73,7 +81,8 @@ enum elf_err {
     ELF_E_RANGE       = -7,   /* segment outside the user address range  */
     ELF_E_NOMEM       = -8,   /* out of frames / address space           */
     ELF_E_THREAD      = -9,   /* thread creation failed                  */
-    ELF_E_INTERP      = -10,  /* ET_DYN with PT_INTERP (P3; DDR-1189 A2)  */
+    ELF_E_INTERP      = -10,  /* PT_INTERP refused: no fs, a bad path, or an
+                               * interpreter that cannot be one (DDR-1189 A3) */
     ELF_E_DYN         = -11,  /* PT_DYNAMIC refused (DDR-1189 A2 P2-2)    */
     ELF_E_RELOC       = -12,  /* relocation refused (DDR-1189 A2 P2-3)    */
     ELF_E_ENTRY       = -13,  /* ET_DYN entry not in an X PT_LOAD (P2-2)  */

@@ -274,10 +274,14 @@ __attribute__((noreturn)) static void pie_phase(void) {
     static const char pie[] = "/DYNPIE.ELF";
     static const char pint[] = "/DYNPINT.ELF";
     static const char ptxt[] = "/DYNPTXT.ELF";
+    static const char d0[] = "/DYND0.ELF";      /* DDR-1189 A3: arm D0 */
+    static const char pii[] = "/DYNPII.ELF";
     for (int i = 0; i < DYN_CHILDREN; i++)
         run_one(pie, "dynpie", 0);
     run_one(pint, "dynpint", "interp");
     run_one(ptxt, "dynptxt", "textrel");
+    run_one(d0, "dynd0", 0);                    /* via /LIB/LDTEST.SO */
+    run_one(pii, "dynpii", "interp2");          /* its interpreter has one */
     wr("PRADYOS_DYN_PIE_DONE n=4\n");
     wx_phase();                            /* DDR-1189 A3: arm F */
     fixed_phase();                         /* DDR-1189 A3: arm M */

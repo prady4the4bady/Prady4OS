@@ -505,6 +505,25 @@ P3 is two parts, each with its own PR, gate arms and mutants:
       program, for an `ET_EXEC` with `PT_INTERP` too;
     - the entry is the interpreter's.
     - An `ET_EXEC` without `PT_INTERP` keeps its frame byte for byte (P2-4).
+  - **As built (2026-11-21):**
+    - `execve` passes the caller's filesystem capability and root mount
+      (`struct elf_fs`). A kernel spawn (`elf_load`) passes none, so an image
+      with `PT_INTERP` is refused there. No image the kernel spawns has one:
+      `readelf -l` over `build/*.elf` finds `PT_INTERP` only in `dynpint.elf`
+      and, after P3a, the arm D0 images, all reached through `execve`.
+    - The interpreter's ELF header and program headers must lie in its first
+      page (every linker puts them at offset 64). Its `PT_LOAD` file ranges are
+      checked against its size, with the same rules as an image (one helper,
+      `elf_scan`, serves both).
+    - A program with an interpreter must end at or below `USER_PIE_TOP`. An
+      `ET_DYN` already does; an `ET_EXEC` may otherwise reach into the
+      interpreter window, and `map_core` replaces a present leaf without a
+      check.
+    - Before A3, an `ET_EXEC` with `PT_INTERP` was loaded with the interpreter
+      ignored. It now gets its interpreter. No in-tree `ET_EXEC` has one.
+    - Arm C4's image names `/lib/ld-musl-x86_64.so.1`. That file does not exist
+      in P3a, so C4 is still refused with `-ENOEXEC`, now because the
+      interpreter cannot be opened. P3b installs that path and must re-point C4.
 - **P3a-4. Gate `smoke-dynlink`, arms D0 and F.**
   - **Arm D0, a freestanding interpreter.**
     - The probe `user/ldtest.c` is a static PIE installed as `/LIB/LDTEST.SO`.
@@ -513,6 +532,17 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     - The main probe, linked with `--dynamic-linker=/LIB/LDTEST.SO`, prints its
       relocated pointer and both bases.
     - This tests the kernel's half of `PT_INTERP` without musl.
+    - As built, the main program is `dynpie.c` built `-DDYN_D0` (`/DYND0.ELF`).
+      Its `rel=1` now means the interpreter relocated it, because the kernel
+      relocates nothing when an interpreter is present. The gate checks:
+      - D0a: `ldtest` saw `AT_BASE` equal to its own base and applied at least
+        two `RELATIVE` relocations;
+      - D0b: the program's relocated pointers and its auxv (`rel=1 aux=1`);
+      - D0c: the interpreter base, page-aligned in the first 1 GiB of
+        `[USER_PIE_TOP, USER_IMAGE_TOP)`, and the program base in the PIE window.
+  - **Arm D0r.** `/DYNPII.ELF` names `/DYNPINT.ELF` as its interpreter, which
+    has a `PT_INTERP` of its own, so `execve` returns `-ENOEXEC`. Were it
+    accepted, `dynpint` would run and print the forbidden `PRADYOS_DYN_X` line.
   - **Arm F, the W^X rules of §4.** Each refusal returns `-EACCES`:
     - `PROT_WRITE|PROT_EXEC` together;
     - `PROT_EXEC` on anonymous memory;
@@ -540,6 +570,7 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     - D4': the kernel ignores `PT_INTERP`, so the program runs without its
       interpreter; D0 is red;
     - D4'': a wrong `AT_BASE`; D0 is red;
+    - D4c: an interpreter with a `PT_INTERP` of its own is accepted; D0r is red;
     - D6, D7, D7b and D7c of §4, each red on its own F assertion;
     - D6b: the `PROT_WRITE|PROT_EXEC` refusal in `mmap` is dropped; F1 is red
       (§4 names no mutant for that assertion);
@@ -553,6 +584,13 @@ P3 is two parts, each with its own PR, gate arms and mutants:
       shootdown, old frames leaked); M0 is expected red through the stale
       translation of the page read first. If it stays green, D9e is recorded as
       not gated.
+    - **Not gated (P3a-3), recorded rather than hidden:** a relative or
+      unterminated interpreter path, an interpreter that is not `ET_DYN`, a
+      second `PT_INTERP`, and an `ET_EXEC` with an interpreter ending above
+      `USER_PIE_TOP`. Each is a refusal with no probe that builds the image.
+      The kernel relocating the program as well as the interpreter has no
+      mutant either: `RELATIVE` stores `bias + addend`, so applying it twice
+      leaves the same word.
     - M3 has no mutant: `mmap_fixed_range` and `mmap_pick_base` apply the same
       arena bound, so removing either one alone leaves M3 green. That is
       recorded, not hidden.
