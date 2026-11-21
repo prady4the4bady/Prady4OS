@@ -4534,7 +4534,7 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-dynlink: $(IMG) fat-image sfs-image
 	@rm -f build/dynlink.log
 	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
-	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=')" \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=')" \
 	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@L=build/dynlink.log ; rc=0 ; \
@@ -4575,7 +4575,15 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$(fv rwfd)" = -13 ] || { echo "[dynlink] FAIL: arm F3, executable from a writable fd: $$(fv rwfd) (want -13)"; rc=1; } ; \
 	  [ "$$(fv mpanon)" = -13 ] || { echo "[dynlink] FAIL: arm F4, mprotect(PROT_EXEC) on anonymous memory: $$(fv mpanon) (want -13)"; rc=1; } ; \
 	  [ "$$(fv frwx)" = -13 ] || { echo "[dynlink] FAIL: arm F5, mprotect(PROT_EXEC) after the mapping was writable: $$(fv frwx) (want -13)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5 and F0-F5" ; exit $$rc
+	  M=$$(grep -a 'PRADYOS_DYN_M pre=' $$L | head -1) ; echo "$$M" ; \
+	  mv() { echo "$$M" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(mv pre)" = 127 ] && [ "$$(mv anon)" = 1 ] && [ "$$(mv anonz)" = 0 ] && [ "$$(mv back)" = 1 ] && [ "$$(mv backb)" = 127 ] || { echo "[dynlink] FAIL: arm M0, MAP_FIXED replaces the caller's own pages: pre=$$(mv pre) anon=$$(mv anon) anonz=$$(mv anonz) back=$$(mv back) backb=$$(mv backb) (want 127, 1, 0, 1, 127)"; rc=1; } ; \
+	  [ "$$(mv mixed)" = -22 ] || { echo "[dynlink] FAIL: arm M1, MAP_FIXED over a range partly unmapped: $$(mv mixed) (want -22)"; rc=1; } ; \
+	  [ "$$(mv shfix)" = -22 ] && [ "$$(mv fsh)" = 1 ] && [ "$$(mv fshfix)" = -22 ] || { echo "[dynlink] FAIL: arm M2, MAP_FIXED over a shared mapping: shfix=$$(mv shfix) fsh=$$(mv fsh) fshfix=$$(mv fshfix) (want -22, 1, -22)"; rc=1; } ; \
+	  [ "$$(mv stack)" = -22 ] && [ "$$(mv image)" = -22 ] || { echo "[dynlink] FAIL: arm M3, MAP_FIXED outside the arena: stack=$$(mv stack) image=$$(mv image) (want -22, -22)"; rc=1; } ; \
+	  [ "$$(mv m4)" = -13 ] || { echo "[dynlink] FAIL: arm M4, mprotect(PROT_EXEC) after a writable replacement: $$(mv m4) (want -13)"; rc=1; } ; \
+	  [ "$$(mv fresh)" = 1 ] || { echo "[dynlink] FAIL: arm M5, MAP_FIXED on wholly unmapped arena space: $$(mv fresh) (want 1)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, F0-F5 and M0-M5" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

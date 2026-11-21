@@ -457,12 +457,32 @@ P3 is two parts, each with its own PR, gate arms and mutants:
       `MAP_SHARED`+`PROT_EXEC` is restated to match: the existing gates
       keep their codes, and arm F checks `-EINVAL` there.
 - **P3a-2. `MAP_FIXED` over the caller's own mapping.**
-  - The fixed range must lie inside mappings the calling address space already
-    holds, in the mmap arena or the interpreter window.
-  - The pages it covers are replaced and their frames freed.
-  - A range that touches anything else (an image `PT_LOAD`, the stack, a shm
-    attach, or unmapped space) is `-EINVAL`, so `MAP_FIXED` never clobbers what
-    it did not map.
+  - The fixed range must lie inside `MAP_PRIVATE` areas this address space
+    mapped with `mmap`, all in the mmap arena.
+  - The pages it covers are replaced and their frames freed. The areas keep
+    their extent, so `munmap` still takes each one whole.
+  - A range that touches anything else is `-EINVAL`, so `MAP_FIXED` never
+    clobbers what it did not map:
+    - an image `PT_LOAD`, the stack or the interpreter (all outside the arena);
+    - a shm or file `MAP_SHARED` area, or an anonymous `MAP_SHARED` page;
+    - a range that is partly mapped and partly free.
+  - **L1 holds through a replacement.** Every area the range touches loses
+    `x_ok` unless the new mapping is itself a non-writable mapping of a
+    read-only fd. A page written through a replacement can therefore never be
+    made executable.
+  - On `-ENOMEM` or `-EIO` part-way, the pages not yet mapped stay absent inside
+    their area. POSIX leaves the range's contents unspecified after a failed
+    `MAP_FIXED`; `munmap` still frees the area.
+  - **Two changes from the first text of this amendment, made when it was built
+    (2026-11-21):**
+    - **The interpreter window is excluded.** The kernel maps the interpreter as
+      image pages with no `vm_area` (P3a-3), so nothing there is the caller's own
+      `mmap`. musl's `ld.so` maps libraries in the arena and never maps over its
+      own image (it reuses the gaps in it for `malloc`).
+    - **Wholly unmapped arena space is not `-EINVAL`.** Before P3a-2 the flag was
+      ignored and the address taken as a hint, which maps exactly there when the
+      space is free. That clobbers nothing, so it stays (arm M5). Only a range
+      that is partly mapped and partly free is refused.
 - **P3a-3. `PT_INTERP`.**
   - The kernel reads the path from the file: absolute, NUL-terminated inside
     `PT_INTERP`'s file range, at most `PATH_MAX`. It opens the path through the
@@ -500,11 +520,42 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     - `MAP_SHARED` with `PROT_EXEC`;
     - `mprotect(PROT_EXEC)` on anonymous memory;
     - `mprotect(PROT_EXEC)` on a file mapping that was ever writable.
+  - **Arm M, `MAP_FIXED` (P3a-2).** `dyntest` maps a two-page span of its own
+    file read-only, as `ld.so` maps a library first, and prints one line:
+    - M0: an anonymous writable page replaces the first page and reads 0, where
+      the file (read before the replacement) has `0x7f`; then the file replaces
+      it again, executable from the read-only fd, and reads `0x7f`;
+    - M1: a range half in the span and half in unmapped space is `-EINVAL`;
+    - M2: an anonymous `MAP_SHARED` page and a file `MAP_SHARED` area are each
+      `-EINVAL`;
+    - M3: the stack and the image are `-EINVAL`;
+    - M4: after a writable replacement is written, `mprotect(PROT_EXEC)` on it is
+      `-EACCES`;
+    - M5: wholly unmapped arena space is mapped at the address asked.
+    - M1, M2, M3 and M5 also pass on the tree before P3a-2, which refused every
+      overlap and ignored the flag. They pin refusals and behaviour the old tree
+      already had, so their teeth are the mutants below, not the before/after.
+      M0 and M4 are red on the old tree.
   - **Mutants:**
     - D4': the kernel ignores `PT_INTERP`, so the program runs without its
       interpreter; D0 is red;
     - D4'': a wrong `AT_BASE`; D0 is red;
-    - D6, D7, D7b and D7c of §4, each red on its own F assertion.
+    - D6, D7, D7b and D7c of §4, each red on its own F assertion;
+    - D6b: the `PROT_WRITE|PROT_EXEC` refusal in `mmap` is dropped; F1 is red
+      (§4 names no mutant for that assertion);
+    - D9: a gap inside the range is allowed; M1 is red;
+    - D9b: the shared-page check is dropped; M2 is red (both halves). Every
+      shared page, anonymous, SysV, `shm_open` or file, is mapped
+      `PTE_SW_SHMEM`, so this one per-page test refuses them all; there is no
+      second, per-area test that a mutant could not reach.
+    - D9d: a replacement leaves `x_ok` as it was; M4 is red;
+    - D9e: the old pages are not unmapped before the new ones are mapped (no
+      shootdown, old frames leaked); M0 is expected red through the stale
+      translation of the page read first. If it stays green, D9e is recorded as
+      not gated.
+    - M3 has no mutant: `mmap_fixed_range` and `mmap_pick_base` apply the same
+      arena bound, so removing either one alone leaves M3 green. That is
+      recorded, not hidden.
 
 ### A3.4 P3b decisions
 
