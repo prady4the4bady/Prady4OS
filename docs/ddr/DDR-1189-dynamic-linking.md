@@ -1,7 +1,8 @@
 # DDR-1189: Dynamic linking, shared libraries and user-space ASLR (checklist C1.6)
 
 Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged. P1 is
-built under Amendment 1 (#154), and P2 under Amendment 2. P3 and P4 are not built.
+built under Amendment 1 (#154), and P2 under Amendment 2 (#156). P3 is designed
+under Amendment 3, as P3a and P3b, and is not built. P4 is not built.
 
 ## 1. Where the tree is (read from `dev/phase1` = `7981cd4`)
 
@@ -368,4 +369,149 @@ stand; this amendment fixes how P2 meets them.
   the shared-page rule were checked locally on patched copies of `DYNPIE.ELF`.
 - **Strength** is bounded by L3's 18 bits and, without hardware entropy, by
   L2's TSC path.
+- QEMU (TCG) only, not verified on real hardware.
+
+## Amendment 3 (2026-11-21): Part P3 designed, and split into P3a and P3b
+
+Authorised by #45 6993979920 (C1.6, part by part). Design only: no code is
+built under this amendment yet.
+
+### A3.1 Where the tree is (`dev/phase1` = `d397412`, after P2)
+
+- **The loader refuses `PT_INTERP`** for `ET_DYN` (P2-2). It relocates `ET_DYN`
+  images itself, `R_X86_64_RELATIVE` only.
+- **`execve` reads the whole image into one kernel buffer.** `EXEC_MAX` is 256 KiB
+  (`kernel/syscall/sys_exec.c`). A full musl `libc.so` is expected to exceed it;
+  its size is not measured yet (P3b measures it).
+- **`mmap`** (`kernel/syscall/sys_mmap.c`):
+  - `PROT_EXEC` is refused outright (`-EINVAL`).
+  - `MAP_FIXED` is not supported.
+  - File-backed `MAP_PRIVATE` is eager: frames are filled before they are mapped (DDR-1112).
+- **`mprotect` refuses W+X together (`-EACCES`)**, but it adds `PROT_EXEC` alone
+  to any mapping, including anonymous memory written earlier.
+  - W^X therefore holds at every instant, but "write, then execute" works today.
+  - L1 (§3) forbids that, and P3a enforces it. Recorded, not hidden.
+- **`struct vm_area`** (`kernel/proc/sched.h`) records base, length, a shm
+  object, `shm_ro`, a page offset and a write capability. It has no
+  executable or ever-writable state.
+- **No VFS implements symbolic links**; FAT32 has long names (`/LongFileName.txt`).
+- **The musl build** (`tools/build_musl.sh`) is a static subset.
+  - It maps `read`, `write`, `writev`, `mmap`, `munmap` and `exit` to NSI numbers.
+  - Every other Linux number is offset by 4096 and so returns `-ENOSYS`.
+  - NSI has `open`, `close`, `fstat`, `lseek`, `mprotect` and `SET_TLS`. It has no
+    `pread`, and its `struct stat` is not checked against Linux's layout.
+- **musl's `ld.so` does not refuse `DT_TEXTREL` itself.**
+  - It calls `mprotect(map, len, PROT_READ|PROT_WRITE|PROT_EXEC)` and fails the
+    load on any error but `ENOSYS` (`ldso/dynlink.c`, line 853 in the pinned tree).
+  - L1's kernel refusal is therefore what refuses a text-relocation library. The
+    refusal must be `-EACCES`, never `-ENOSYS`.
+- **musl's `ld.so` maps a library** by mapping its whole span, then mapping each
+  segment over it with `MAP_FIXED`, and `MAP_FIXED|MAP_ANONYMOUS` for `.bss`.
+  It needs `MAP_FIXED` over the caller's own earlier mapping.
+
+### A3.2 The split
+
+P3 is two parts, each with its own PR, gate arms and mutants:
+
+- **P3a, kernel only.** No musl is involved, so every arm is decided by kernel
+  code and freestanding probes.
+- **P3b, musl.** It builds `ld.so`/`libc.so` and extends the syscall shim, on
+  top of P3a.
+
+### A3.3 P3a decisions
+
+- **P3a-1. L1 in `mmap` and `mprotect`.**
+  - `mmap(PROT_EXEC)` is allowed only for a file-backed `MAP_PRIVATE` mapping of
+    an fd opened read-only, and never together with `PROT_WRITE`. Everything
+    else is `-EACCES` (today `-EINVAL`).
+  - A `vm_area` gains two bits:
+    - `x_ok`: the mapping came from a read-only file and was never writable;
+    - `ever_w`: it has been writable at some time.
+  - `mprotect` may add `PROT_EXEC` only when `x_ok` is set and `ever_w` is clear;
+    anything else is `-EACCES`.
+  - `mprotect` adding `PROT_WRITE` sets `ever_w`, so the mapping can never
+    become executable again.
+  - **This changes behaviour today's tree allows**: adding `PROT_EXEC` to
+    anonymous memory. P3a lists every in-tree caller of `mprotect(PROT_EXEC)`
+    before it lands (the probes `mprotect` and `wxviol` among them).
+- **P3a-2. `MAP_FIXED` over the caller's own mapping.**
+  - The fixed range must lie inside mappings the calling address space already
+    holds, in the mmap arena or the interpreter window.
+  - The pages it covers are replaced and their frames freed.
+  - A range that touches anything else (an image `PT_LOAD`, the stack, a shm
+    attach, or unmapped space) is `-EINVAL`, so `MAP_FIXED` never clobbers what
+    it did not map.
+- **P3a-3. `PT_INTERP`.**
+  - The kernel reads the path from the file: absolute, NUL-terminated inside
+    `PT_INTERP`'s file range, at most `PATH_MAX`. It opens the path through the
+    VFS with the caller's capabilities.
+  - The interpreter must be an x86-64 `ET_DYN` with no `PT_INTERP` of its own.
+    The P2-1 and P2-2 header rules apply to it too.
+  - **It is mapped page by page from the file** (`vfs_read` per page into a
+    fresh frame), not through the 256 KiB buffer. Its size is bounded only by
+    its window.
+  - **Its window** is `[USER_PIE_TOP, USER_IMAGE_TOP)` = `[0x84_0000_0000,
+    0x86_0000_0000)`, which A2 left for it. Its base is drawn in the window's
+    first 1 GiB: 18 bits (L3).
+  - **The kernel applies no relocations** to the interpreter or to a main
+    program that has a `PT_INTERP`. The interpreter relocates itself
+    (`_dlstart_c`) and then the program. Applying `RELATIVE` twice would be
+    harmless, but a half-relocated program is not.
+  - **auxv:**
+    - `AT_BASE` = the interpreter's bias;
+    - `AT_PHDR`, `AT_PHENT`, `AT_PHNUM` and `AT_ENTRY` describe the main
+      program, for an `ET_EXEC` with `PT_INTERP` too;
+    - the entry is the interpreter's.
+    - An `ET_EXEC` without `PT_INTERP` keeps its frame byte for byte (P2-4).
+- **P3a-4. Gate `smoke-dynlink`, arms D0 and F.**
+  - **Arm D0, a freestanding interpreter.**
+    - The probe `user/ldtest.c` is a static PIE installed as `/LIB/LDTEST.SO`.
+    - It checks that `AT_BASE` is its own base, applies the main program's
+      `RELATIVE` relocations, and jumps to `AT_ENTRY`.
+    - The main probe, linked with `--dynamic-linker=/LIB/LDTEST.SO`, prints its
+      relocated pointer and both bases.
+    - This tests the kernel's half of `PT_INTERP` without musl.
+  - **Arm F, the W^X rules of §4.** Each refusal returns `-EACCES`:
+    - `PROT_WRITE|PROT_EXEC` together;
+    - `PROT_EXEC` on anonymous memory;
+    - `PROT_EXEC` from an `O_RDWR` fd;
+    - `MAP_SHARED` with `PROT_EXEC`;
+    - `mprotect(PROT_EXEC)` on anonymous memory;
+    - `mprotect(PROT_EXEC)` on a file mapping that was ever writable.
+  - **Mutants:**
+    - D4': the kernel ignores `PT_INTERP`, so the program runs without its
+      interpreter; D0 is red;
+    - D4'': a wrong `AT_BASE`; D0 is red;
+    - D6, D7, D7b and D7c of §4, each red on its own F assertion.
+
+### A3.4 P3b decisions
+
+- **P3b-1. Build.**
+  - musl's full `src/` and `ldso/` from the pinned submodule, `-fPIC`, linked
+    as one `libc.so`.
+  - It installs as `/LIB/LD-MUSL-X86_64.SO.1` (long name `ld-musl-x86_64.so.1`).
+  - With no symbolic links, musl resolves a `DT_NEEDED` of `libc.so` to itself,
+    so one file serves both.
+  - The test library `libtest.so` installs beside it.
+- **P3b-2. The syscall shim** grows to what `ld.so` and the arms call:
+  - `open` with `O_RDONLY|O_CLOEXEC`, and `close`;
+  - `read`, and `pread`: a new NSI call, or a documented `lseek`+`read`
+    emulation;
+  - `fstat` with Linux's `struct stat` layout, checked field by field;
+  - `mmap` with `MAP_FIXED`, `mprotect`, `munmap`, `writev`, `exit`;
+  - `arch_prctl(ARCH_SET_FS)` to `SET_TLS`.
+  - Each mapping is listed in the DDR with its NSI call, and the rest stay
+    `-ENOSYS`.
+- **P3b-3. Gate arms D, E and G of §4.**
+  - G becomes: a library with `DT_TEXTREL` fails to load because the kernel
+    refuses musl's W+X `mprotect` with `-EACCES`.
+  - Its mutant D8 becomes "the kernel allows W+X in `mprotect`", and the library
+    then loads.
+
+### A3.5 Not decided here (stated)
+
+- Whether P3b's `pread` is a new NSI number (124 is free) or an emulation.
+- How `PT_GNU_RELRO` is enforced; musl's `ld.so` will `mprotect` it read-only
+  once P3a's `mprotect` rules land.
+- P4 (shared text) still needs C2.1.
 - QEMU (TCG) only, not verified on real hardware.
