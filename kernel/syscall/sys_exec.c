@@ -135,7 +135,8 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
      * failure here leaves the caller running unharmed. */
     uint64_t new_as = 0, entry = 0, new_rsp = 0;
     struct user_layout lay;
-    int rc = elf_build_image(buf, isize, kpath, na > 0 ? &eargs : 0,
+    struct elf_fs efs = { t->fs_cap, t->root_mnt };   /* DDR-1189 A3 P3a-3 */
+    int rc = elf_build_image(buf, isize, kpath, na > 0 ? &eargs : 0, &efs,
                              &new_as, &entry, &new_rsp, &lay);
     kfree(buf);
     if (rc != ELF_OK)
