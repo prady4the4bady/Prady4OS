@@ -561,7 +561,9 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     - M3: the stack and the image are `-EINVAL`;
     - M4: after a writable replacement is written, `mprotect(PROT_EXEC)` on it is
       `-EACCES`;
-    - M5: wholly unmapped arena space is mapped at the address asked.
+    - M5: wholly unmapped arena space is mapped at the address asked;
+    - M6: one page replaced in place 256 times leaves the free page count
+      (`SYS_MEMINFO`) within 64 of where it was. Measured 0 locally.
     - M1, M2, M3 and M5 also pass on the tree before P3a-2, which refused every
       overlap and ignored the flag. They pin refusals and behaviour the old tree
       already had, so their teeth are the mutants below, not the before/after.
@@ -581,9 +583,9 @@ P3 is two parts, each with its own PR, gate arms and mutants:
       second, per-area test that a mutant could not reach.
     - D9d: a replacement leaves `x_ok` as it was; M4 is red;
     - D9e: the old pages are not unmapped before the new ones are mapped (no
-      shootdown, old frames leaked); M0 is expected red through the stale
-      translation of the page read first. If it stays green, D9e is recorded as
-      not gated.
+      shootdown, old frames leaked). It was planned against M0's stale
+      translation, but M0 stayed green under TCG, so arm M6 was added to measure
+      the leaked frames instead; D9e is red on M6.
     - **Not gated (P3a-3), recorded rather than hidden:** a relative or
       unterminated interpreter path, an interpreter that is not `ET_DYN`, a
       second `PT_INTERP`, and an `ET_EXEC` with an interpreter ending above

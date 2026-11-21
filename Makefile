@@ -4609,7 +4609,8 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$(mv stack)" = -22 ] && [ "$$(mv image)" = -22 ] || { echo "[dynlink] FAIL: arm M3, MAP_FIXED outside the arena: stack=$$(mv stack) image=$$(mv image) (want -22, -22)"; rc=1; } ; \
 	  [ "$$(mv m4)" = -13 ] || { echo "[dynlink] FAIL: arm M4, mprotect(PROT_EXEC) after a writable replacement: $$(mv m4) (want -13)"; rc=1; } ; \
 	  [ "$$(mv fresh)" = 1 ] || { echo "[dynlink] FAIL: arm M5, MAP_FIXED on wholly unmapped arena space: $$(mv fresh) (want 1)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F5 and M0-M5" ; exit $$rc
+	  lk=$$(mv leak) ; [ -n "$$lk" ] && [ "$$lk" -gt -64 ] && [ "$$lk" -lt 64 ] || { echo "[dynlink] FAIL: arm M6, 256 in-place replacements changed the free page count by $$lk (want |n| < 64; a leak of every replaced frame is 256)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F5 and M0-M6" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

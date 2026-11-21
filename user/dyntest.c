@@ -32,6 +32,7 @@
 #define SYS_WRITE   6
 #define SYS_MMAP   12
 #define SYS_MUNMAP 13
+#define SYS_MEMINFO 74
 #define SYS_EXECVE 14
 #define SYS_FORK   15
 #define SYS_WAIT4  16
@@ -211,6 +212,21 @@ static void wx_phase(void) {
     wr("\n");
 }
 
+struct dyn_meminfo {                       /* SYS_MEMINFO (DDR-752) */
+    uint64_t total_pages;
+    uint64_t free_pages;
+    uint64_t used_pages;
+    uint32_t page_size;
+    uint32_t pad;
+};
+
+static long free_pages(void) {
+    struct dyn_meminfo mi;
+    if (nsi(SYS_MEMINFO, (long)&mi, 0, 0) != 0)
+        die("meminfo");
+    return (long)mi.free_pages;
+}
+
 /* DDR-1189 A3 P3a-2: arm M, MAP_FIXED over the caller's own mappings. One
  * line; the gate checks each rule as its own sub-arm. */
 static void fixed_phase(void) {
@@ -251,6 +267,18 @@ static void fixed_phase(void) {
     long fr = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     long un = fr > 0 ? nsi(SYS_MUNMAP, fr, 4096, 0) : fr;
     long fresh = un == 0 ? nsi6(SYS_MMAP, fr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) : un;
+    /* M6: a replacement frees the page it replaces. One page replaced in place
+     * 256 times leaves the free count where it was; leaking each replaced
+     * frame (mutant D9e) would take 256 pages. */
+    long lk = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    long leak = -1000000;
+    if (lk > 0) {
+        long f0 = free_pages();
+        for (int i = 0; i < 256; i++)
+            if (nsi6(SYS_MMAP, lk, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) != lk)
+                die("M6 replace");
+        leak = f0 - free_pages();
+    }
     nsi(SYS_CLOSE, ro, 0, 0);
     wr("PRADYOS_DYN_M");
     kv("pre", pre);
@@ -266,6 +294,7 @@ static void fixed_phase(void) {
     kv("stack", stk > 0 ? 1 : stk);
     kv("image", img > 0 ? 1 : img);
     kv("fresh", fresh == fr ? 1 : fresh);
+    kv("leak", leak);
     wr("\n");
 }
 
