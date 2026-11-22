@@ -381,7 +381,7 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     if (prot & PROT_EXEC) {
         /* MAP_SHARED|MAP_PRIVATE was refused above, so "not MAP_PRIVATE"
          * covers MAP_SHARED and neither flag alike (F2, F6). */
-        if (!(flags & MAP_PRIVATE) || a_fd == -1 || (flags & MAP_ANONYMOUS))
+        if (a_fd == -1 || (flags & MAP_ANONYMOUS))
             return -EINVAL;
         if (prot & PROT_WRITE)
             return -EACCES;                     /* W^X */
