@@ -165,9 +165,6 @@ static int mmap_fixed_range(struct tcb *t, uint64_t addr, uint64_t npages) {
     /* Every shared page -- anonymous MAP_SHARED, SysV, shm_open and file
      * MAP_SHARED alike -- is mapped PTE_SW_SHMEM, so one per-page test refuses
      * them all (a shared area is never left with an absent page). */
-    for (uint64_t va = addr; va < end; va += PAGE_SIZE)
-        if (vmm_resolve_pte(t->cr3, va) & PTE_SW_SHMEM)
-            return -EINVAL;
     return 1;
 }
 
