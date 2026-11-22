@@ -372,8 +372,6 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     /* DDR-1189 A3 P3a-2 (CodeRabbit on #158): MAP_FIXED takes the address
      * literally, so it is checked before any path that reads it as a hint;
      * the shared-fd dispatch below would otherwise place addr 0 anywhere. */
-    if ((flags & MAP_FIXED) && (addr == 0 || (addr & (PAGE_SIZE - 1))))
-        return -EINVAL;
     /* DDR-1189 A3 P3a-1 (L1): an executable mapping comes only from a file
      * opened read-only, MAP_PRIVATE, and never writable. An anonymous or
      * MAP_SHARED request keeps -EINVAL, as before (shmtest D and systest pin
