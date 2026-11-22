@@ -428,7 +428,7 @@ static int elf_interp_open(const uint8_t *img, uint64_t image_len,
     rc = elf_scan(hdr, ivf->size, ieh, &idyn, &iinterp, &ilo, &ihi);
     if (rc != ELF_OK)
         return rc;
-    if (iinterp || ihi == 0)
+    if (ihi == 0)
         return ELF_E_INTERP;                       /* no interpreter of its own */
     if (!elf_entry_exec(hdr, ieh))
         return ELF_E_ENTRY;
