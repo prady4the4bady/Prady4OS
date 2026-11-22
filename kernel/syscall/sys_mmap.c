@@ -427,8 +427,6 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
                                                  * from -EBADF on purpose, per
                                                  * DDR-1080: the return value
                                                  * should name its own family */
-        if ((prot & PROT_EXEC) && (fe->flags & OF_ACCMODE) != 0)
-            return -EACCES;                     /* L1: only a read-only fd */
         if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
             return -EINVAL;                     /* POSIX requires a page-aligned
                                                  * offset — and after this the
