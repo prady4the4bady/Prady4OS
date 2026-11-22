@@ -516,7 +516,7 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     v->npages = npages;
     /* DDR-1189 A3 P3a-1: a private mapping of a read-only fd, not writable,
      * may be executable now or later; anything writable never can be. */
-    v->x_ok   = ((flags & MAP_PRIVATE) && fe && (fe->flags & OF_ACCMODE) == 0 &&
+    v->x_ok   = (fe && (fe->flags & OF_ACCMODE) == 0 &&
                  !(prot & PROT_WRITE)) ? 1 : 0;      /* L1: MAP_PRIVATE (F6) */
     v->ever_w = (prot & PROT_WRITE) ? 1 : 0;
     if (addr == 0)
