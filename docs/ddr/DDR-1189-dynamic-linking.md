@@ -556,13 +556,18 @@ P3 is two parts, each with its own PR, gate arms and mutants:
   - **Arm D0r.** `/DYNPII.ELF` names `/DYNPINT.ELF` as its interpreter, which
     has a `PT_INTERP` of its own, so `execve` returns `-ENOEXEC`. Were it
     accepted, `dynpint` would run and print the forbidden `PRADYOS_DYN_X` line.
-  - **Arm F, the W^X rules of §4.** Each refusal returns `-EACCES`:
-    - `PROT_WRITE|PROT_EXEC` together;
-    - `PROT_EXEC` on anonymous memory;
-    - `PROT_EXEC` from an `O_RDWR` fd;
-    - `MAP_SHARED` with `PROT_EXEC`;
-    - `mprotect(PROT_EXEC)` on anonymous memory;
-    - `mprotect(PROT_EXEC)` on a file mapping that was ever writable.
+  - **Arm F, the W^X rules of §4.** Each refusal and its code (the anonymous and
+    `MAP_SHARED` cases keep `-EINVAL`, as P3a-1's errno precedence says):
+    - F1: `PROT_WRITE|PROT_EXEC` together, `-EACCES`;
+    - F2: `PROT_EXEC` on anonymous memory, and `MAP_SHARED` with `PROT_EXEC`,
+      `-EINVAL`;
+    - F3: `PROT_EXEC` from an `O_RDWR` fd, `-EACCES`;
+    - F4: `mprotect(PROT_EXEC)` on anonymous memory, `-EACCES`;
+    - F5: `mprotect(PROT_EXEC)` on a file mapping that was ever writable,
+      `-EACCES`;
+    - F6 (CodeRabbit on #158): L1 names `MAP_PRIVATE`, so `PROT_EXEC` with
+      neither `MAP_PRIVATE` nor `MAP_SHARED` is `-EINVAL`, and such a mapping
+      never becomes eligible for X (`mprotect` is `-EACCES`).
   - **Arm M, `MAP_FIXED` (P3a-2).** `dyntest` maps a two-page span of its own
     file read-only, as `ld.so` maps a library first, and prints one line:
     - M0: an anonymous writable page replaces the first page and reads 0, where
@@ -576,7 +581,10 @@ P3 is two parts, each with its own PR, gate arms and mutants:
       `-EACCES`;
     - M5: wholly unmapped arena space is mapped at the address asked;
     - M6: one page replaced in place 256 times leaves the free page count
-      (`SYS_MEMINFO`) within 64 of where it was. Measured 0 locally.
+      (`SYS_MEMINFO`) within 64 of where it was. Measured 0 locally;
+    - M7 (CodeRabbit on #158): `MAP_SHARED|MAP_FIXED` at address 0 is
+      `-EINVAL`. The `MAP_FIXED` address is checked before the shared-fd
+      dispatch, which would otherwise read 0 as a hint.
     - M1, M2, M3 and M5 also pass on the tree before P3a-2, which refused every
       overlap and ignored the flag. They pin refusals and behaviour the old tree
       already had, so their teeth are the mutants below, not the before/after.
@@ -587,6 +595,12 @@ P3 is two parts, each with its own PR, gate arms and mutants:
     - D4'': a wrong `AT_BASE`; D0 is red;
     - D4c: an interpreter with a `PT_INTERP` of its own is accepted; D0r is red;
     - D6, D7, D7b and D7c of §4, each red on its own F assertion;
+    - D7b, as built: an executable request no longer needs `MAP_PRIVATE`.
+      `MAP_SHARED|MAP_PRIVATE` is refused first, so the one test covers both
+      `MAP_SHARED` and neither flag; F2 and F6 are red;
+    - D7e: `x_ok` no longer needs `MAP_PRIVATE`; F6 is red;
+    - D9f: the `MAP_FIXED` address check before the shared dispatch is dropped;
+      M7 is red;
     - D6b: the `PROT_WRITE|PROT_EXEC` refusal in `mmap` is dropped; F1 is red
       (§4 names no mutant for that assertion);
     - D9: a gap inside the range is allowed; M1 is red;

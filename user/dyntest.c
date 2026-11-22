@@ -190,7 +190,17 @@ static void wx_phase(void) {
     /* F4: mprotect never adds X to anonymous memory (mapped read-only, so
      * only the "came from a read-only file" rule refuses it). */
     long anon = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    long mpanon = anon > 0 ? nsi(SYS_MPROTECT, anon, 4096, PROT_READ | PROT_EXEC) : anon;
+    if (anon <= 0)
+        die("F4 setup map");
+    long mpanon = nsi(SYS_MPROTECT, anon, 4096, PROT_READ | PROT_EXEC);
+    /* F6: L1 names MAP_PRIVATE. Neither flag is not "private": an executable
+     * request is refused, and a plain read-only mapping never becomes
+     * eligible for X. */
+    long noflagx = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_EXEC, 0, ro, 0);
+    long nf = nsi6(SYS_MMAP, 0, 4096, PROT_READ, 0, ro, 0);
+    if (nf <= 0)
+        die("F6 setup map");
+    long noflagmp = nsi(SYS_MPROTECT, nf, 4096, PROT_READ | PROT_EXEC);
     /* F0 and F5: a read-only file mapping may become executable while it was
      * never writable; once made writable, never again. */
     long fr = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE, ro, 0);
@@ -209,6 +219,8 @@ static void wx_phase(void) {
     kv("frx", frx);
     kv("frw", frw);
     kv("frwx", frwx);
+    kv("noflagx", noflagx > 0 ? 1 : noflagx);
+    kv("noflagmp", noflagmp);
     wr("\n");
 }
 
@@ -256,7 +268,11 @@ static void fixed_phase(void) {
     long backb = (back == sp) ? p[0] : -1;
     /* M2: an anonymous MAP_SHARED page is not the caller's to replace. */
     long sh = nsi6(SYS_MMAP, 0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    long shfix = sh > 0 ? nsi6(SYS_MMAP, sh, 4096, PROT_READ, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) : sh;
+    if (sh <= 0)
+        die("M2 setup map");
+    long shfix = nsi6(SYS_MMAP, sh, 4096, PROT_READ, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
+    /* M7: MAP_FIXED|MAP_SHARED at address 0 is refused, not placed as a hint. */
+    long fsh0 = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_SHARED | MAP_FIXED, ro, 0);
     /* M2b: neither is a file MAP_SHARED area (a shm object). */
     long fsh = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_SHARED, ro, 0);
     long fshfix = fsh > 0 ? nsi6(SYS_MMAP, fsh, 4096, PROT_READ, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) : fsh;
@@ -265,8 +281,9 @@ static void fixed_phase(void) {
     long img = nsi6(SYS_MMAP, (long)fixed_phase & ~4095L, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
     /* M5: wholly unmapped arena space keeps the pre-P3a-2 behaviour. */
     long fr = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    long un = fr > 0 ? nsi(SYS_MUNMAP, fr, 4096, 0) : fr;
-    long fresh = un == 0 ? nsi6(SYS_MMAP, fr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) : un;
+    if (fr <= 0 || nsi(SYS_MUNMAP, fr, 4096, 0) != 0)
+        die("M5 setup");
+    long fresh = nsi6(SYS_MMAP, fr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
     /* M6: a replacement frees the page it replaces. One page replaced in place
      * 256 times leaves the free count where it was; leaking each replaced
      * frame (mutant D9e) would take 256 pages. */
@@ -295,6 +312,7 @@ static void fixed_phase(void) {
     kv("image", img > 0 ? 1 : img);
     kv("fresh", fresh == fr ? 1 : fresh);
     kv("leak", leak);
+    kv("fsh0", fsh0 > 0 ? 1 : fsh0);
     wr("\n");
 }
 

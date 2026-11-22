@@ -313,9 +313,9 @@ static long file_shared_map(struct tcb *t, struct fd_entry *fe, uint64_t addr,
  * (A writable mapping is never xok, so clearing x_ok covers "written through a
  * replacement" too; ever_w needs no second write here.) */
 static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
-                          uint64_t npages, int prot, long a_off) {
+                          uint64_t npages, int prot, long a_off, int priv) {
     uint64_t end = addr + npages * PAGE_SIZE;
-    int xok = fe && (fe->flags & OF_ACCMODE) == 0 && !(prot & PROT_WRITE);
+    int xok = priv && fe && (fe->flags & OF_ACCMODE) == 0 && !(prot & PROT_WRITE);
     for (int i = 0; i < VM_AREA_MAX; i++) {
         struct vm_area *v = &t->mm->vma[i];
         if (!v->npages || addr >= v->base + v->npages * PAGE_SIZE || v->base >= end)
@@ -369,12 +369,19 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     int shared = (flags & MAP_SHARED) != 0;
     if (shared && (flags & MAP_PRIVATE))
         return -EINVAL;                         /* POSIX: exactly one of the two */
+    /* DDR-1189 A3 P3a-2 (CodeRabbit on #158): MAP_FIXED takes the address
+     * literally, so it is checked before any path that reads it as a hint;
+     * the shared-fd dispatch below would otherwise place addr 0 anywhere. */
+    if ((flags & MAP_FIXED) && (addr == 0 || (addr & (PAGE_SIZE - 1))))
+        return -EINVAL;
     /* DDR-1189 A3 P3a-1 (L1): an executable mapping comes only from a file
      * opened read-only, MAP_PRIVATE, and never writable. An anonymous or
      * MAP_SHARED request keeps -EINVAL, as before (shmtest D and systest pin
      * it); a file-backed private request that L1 refuses is -EACCES. */
     if (prot & PROT_EXEC) {
-        if (shared || a_fd == -1 || (flags & MAP_ANONYMOUS))
+        /* MAP_SHARED|MAP_PRIVATE was refused above, so "not MAP_PRIVATE"
+         * covers MAP_SHARED and neither flag alike (F2, F6). */
+        if (!(flags & MAP_PRIVATE) || a_fd == -1 || (flags & MAP_ANONYMOUS))
             return -EINVAL;
         if (prot & PROT_WRITE)
             return -EACCES;                     /* W^X */
@@ -444,7 +451,8 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
         if (fr == 1) {
             if (shared)
                 return -EINVAL;                  /* never a shared replacement */
-            return fixed_replace(t, fe, addr, npages, prot, a_off);
+            return fixed_replace(t, fe, addr, npages, prot, a_off,
+                                 (flags & MAP_PRIVATE) != 0);
         }
     }
 
@@ -508,7 +516,8 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
     v->npages = npages;
     /* DDR-1189 A3 P3a-1: a private mapping of a read-only fd, not writable,
      * may be executable now or later; anything writable never can be. */
-    v->x_ok   = (fe && (fe->flags & OF_ACCMODE) == 0 && !(prot & PROT_WRITE)) ? 1 : 0;
+    v->x_ok   = ((flags & MAP_PRIVATE) && fe && (fe->flags & OF_ACCMODE) == 0 &&
+                 !(prot & PROT_WRITE)) ? 1 : 0;      /* L1: MAP_PRIVATE (F6) */
     v->ever_w = (prot & PROT_WRITE) ? 1 : 0;
     if (addr == 0)
         t->mm->mmap_next = base + npages * PAGE_SIZE;
