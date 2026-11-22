@@ -324,9 +324,6 @@ static int elf_scan(const uint8_t *img, uint64_t file_len, const struct elf64_eh
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         const struct elf64_phdr *ph = elf_ph(img, eh, i);
         if (ph->p_type == PT_INTERP) {
-            if (interp)
-                return ELF_E_INTERP;
-            interp = ph;
             continue;
         }
         if (is_dyn && ph->p_type == PT_DYNAMIC) {
