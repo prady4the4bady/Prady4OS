@@ -328,7 +328,6 @@ static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
         pflags |= VMM_NX;
     if (prot & PROT_WRITE)
         pflags |= VMM_RW;
-    unmap_range(t->cr3, addr, npages);
     for (uint64_t i = 0; i < npages; i++) {
         void *frame = ptnode_alloc();            /* zeroed: the EOF tail is POSIX */
         if (!frame)
