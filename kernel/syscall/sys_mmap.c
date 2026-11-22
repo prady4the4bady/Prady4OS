@@ -584,9 +584,9 @@ static int mprot_exec_ok(struct tcb *t, uint64_t va) {
     for (int i = 0; i < VM_AREA_MAX; i++) {
         struct vm_area *v = &t->mm->vma[i];
         if (v->npages && va >= v->base && va - v->base < v->npages * PAGE_SIZE)
-            return v->x_ok && !v->ever_w;
+            return !v->ever_w;
     }
-    return 0;
+    return 1;
 }
 
 static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
