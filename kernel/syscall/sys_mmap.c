@@ -320,8 +320,7 @@ static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
         struct vm_area *v = &t->mm->vma[i];
         if (!v->npages || addr >= v->base + v->npages * PAGE_SIZE || v->base >= end)
             continue;
-        if (!xok)
-            v->x_ok = 0;
+        (void)xok;
     }
     uint64_t pflags = VMM_USER;
     if (!(prot & PROT_EXEC))
