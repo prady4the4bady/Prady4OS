@@ -669,7 +669,7 @@ int elf_build_image(const void *image, uint64_t image_len, const char *name,
     sp -= 8; *(uint64_t *)(kp + sp) = PAGE_SIZE;   /* auxv[0].val                */
     sp -= 8; *(uint64_t *)(kp + sp) = AT_PAGESZ;   /* auxv[0].type               */
     if (interp) {                                  /* A3 P3a-3: the interpreter's bias */
-        sp -= 8; *(uint64_t *)(kp + sp) = ibias;
+        sp -= 8; *(uint64_t *)(kp + sp) = ibias + PAGE_SIZE;
         sp -= 8; *(uint64_t *)(kp + sp) = AT_BASE;
     }
     if (aux_prog) {                                /* ahead of AT_PAGESZ (P2-4)  */
