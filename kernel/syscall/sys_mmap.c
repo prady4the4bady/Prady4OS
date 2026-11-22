@@ -383,8 +383,6 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
          * covers MAP_SHARED and neither flag alike (F2, F6). */
         if (!(flags & MAP_PRIVATE) || a_fd == -1 || (flags & MAP_ANONYMOUS))
             return -EINVAL;
-        if (prot & PROT_WRITE)
-            return -EACCES;                     /* W^X */
     }
     if (shared && a_fd != -1) {
         /* DDR-1178 A3: a shm_open object; A4: a file. */
