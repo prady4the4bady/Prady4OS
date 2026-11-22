@@ -41,7 +41,9 @@ W^X negative regression (write to RX text → #PF err=0x7 → clean kill, kernel
 survives) is asserted. New gate `smoke-user` PASS; all 5 prior FS gates still
 green. Next: 5b (~50 POSIX syscalls). Build is warning-clean and `-Werror`
 enforced (C + NASM). Deferred: 3-lane NAS, APIC, kernel-self W^X, COW fork,
-process reaping/AS-teardown on exit, dynamic linking, SFS free-space-tree/GC,
+process reaping/AS-teardown on exit, dynamic linking (since built in kernel
+part: static PIE, then PT_INTERP loading, DDR-1189 A2 and A3; see the
+2026-11-22 entry at the end), SFS free-space-tree/GC,
 ext4 write (see DEFERRED). Architecture confirmed against the user's Layer 1–6
 boards; realistic perf targets adopted (context switch ≤ 1.5 µs, syscall ≤ 250 ns).
 **5b design recorded (ADR-022 = DDR-5b):** validated user-pointer copy contract
@@ -7325,3 +7327,40 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - **Fork now copies `vma[]` and `mmap_next` into the child.** Before this, a child could not `munmap` an inherited region, and its first `addr==0` mmap could overwrite an inherited PTE.
 - **Gate `smoke-shm` (shard 0), arms A-F.** Each arm has a mutant: M1→A, M2→B, M4→C, M5→D, M6→E, M7→F. M3 also lands on A, because the parent reads a frame that was freed and reused (`shared=0x23`; not the poison value). All seven were shown red in CI on `80889fd`, and the run links are in DDR-1178 §4 (#45/6281909361). Correct code is green in run 39186711736.
 - `kernel.bin` 1,540,490 B. Emulated (QEMU TCG) only; not verified on real hardware.
+
+## 2026-11-22 — DDR-1189 A3, C1.6 P3a (kernel half of dynamic linking, PR #158)
+
+- **`PT_INTERP` is loaded by the kernel.**
+  - `execve` opens the interpreter with the caller's filesystem capability.
+  - The interpreter must be an x86-64 `ET_DYN` with no `PT_INTERP` of its own.
+  - It is mapped page by page from the file at a base drawn with 18 bits in
+    `[USER_PIE_TOP, USER_IMAGE_TOP)`.
+  - The kernel then relocates nothing. `AT_BASE` is the interpreter's bias,
+    the other auxv entries describe the program, and the entry point is the
+    interpreter's.
+  - A kernel spawn (`elf_load`) refuses `PT_INTERP`.
+- **L1 (W^X across time) in `mmap` and `mprotect`.**
+  - `PROT_EXEC` only for a `MAP_PRIVATE` mapping of a read-only fd, never with
+    `PROT_WRITE`.
+  - `mprotect` adds X only to a page that is already executable, or that lies
+    in an area from a read-only file that was never writable.
+  - This closes a pre-existing gap: memory could be made executable after it
+    had been written.
+- **`MAP_FIXED` over the caller's own private areas.**
+  - Pages are replaced in place, with one shootdown, and the old frames are
+    freed after the ack.
+  - A range that is partly free, any shared page, the stack, the image, and
+    `MAP_FIXED` at address 0 are `-EINVAL`.
+  - Wholly free arena space keeps its earlier behaviour.
+- **Gate `smoke-dynlink`:** arms F0–F6 (L1), M0–M7 (`MAP_FIXED`, M6 the frame
+  balance), D0a–D0c and D0r (`PT_INTERP` through the freestanding interpreter
+  `user/ldtest.c` at `/LIB/LDTEST.SO`; interpreter recursion refused).
+- **Mutants:** 15, each red in CI on its intended arm only (shard 8,
+  `smoke-dynlink`), runs #2521 to #2536: U, D6, D6b, D7, D7b, D7c, D7e, D9,
+  D9b, D9d, D9e, D9f, D4', D4'', D4c.
+- **Known conservative limits.** Both are recorded in DDR-1189 A3 and planned
+  as a follow-up PR. Each refuses a safe request and never permits
+  write-then-execute.
+  - `ever_w` is per area, not per page.
+  - A `MAP_FIXED` replacement never sets `x_ok`.
+- QEMU only, not verified on real hardware.

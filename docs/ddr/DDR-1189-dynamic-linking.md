@@ -481,8 +481,20 @@ P3 is two parts, each with its own PR, gate arms and mutants:
       page of that area. musl's RELRO `mprotect` only removes write, and its
       `DT_TEXTREL` path is refused by design.
     - Lifting either needs its own state (whole-area coverage, or a per-page
-      bitmap), its own arm and its own mutant. It is left until a caller needs
-      it.
+      bitmap), its own arm and its own mutant.
+    - **Operator decision on #158 (comment 7086434729):** both stay out of
+      #158, whose 15-mutant evidence covers its code. A follow-up PR from
+      `dev/phase1` after #158 merges does both:
+      - per-page `ever_w`, either a bitmap per `vm_area` or the area split at
+        the `mprotect` range edges, whichever the area code supports. New
+        arm F7: `mprotect(PROT_WRITE)` on page 0 of a two-page read-only file
+        mapping, then `mprotect(PROT_EXEC)` succeeds on page 1 and stays
+        `-EACCES` on page 0. Mutant D7f ignores the per-page record.
+      - `x_ok` set by a replacement only when it covers the whole area and
+        meets the L1 conditions (read-only fd, `MAP_PRIVATE`, no
+        `PROT_WRITE`). New arm M8, mutant D9g.
+      - Every new arm has a mutant that turns only that arm red, and its
+        setup calls die on failure (the vacuity rule used for F4, M2, M5).
   - On `-ENOMEM` or `-EIO` part-way, the pages not yet mapped stay absent inside
     their area. POSIX leaves the range's contents unspecified after a failed
     `MAP_FIXED`; `munmap` still frees the area.
