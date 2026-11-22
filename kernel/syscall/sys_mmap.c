@@ -158,8 +158,10 @@ static int mmap_fixed_range(struct tcb *t, uint64_t addr, uint64_t npages) {
                 break;
             }
         }
-        if (!v)
-            return -EINVAL;                      /* a gap */
+        if (!v) {
+            cur += PAGE_SIZE;
+            continue;
+        }
         cur = v->base + v->npages * PAGE_SIZE;
     }
     /* Every shared page -- anonymous MAP_SHARED, SysV, shm_open and file
