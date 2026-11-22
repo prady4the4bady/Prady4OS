@@ -648,7 +648,7 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
         for (int i = 0; i < VM_AREA_MAX; i++) {
             struct vm_area *v = &t->mm->vma[i];
             if (v->npages && addr < v->base + v->npages * PAGE_SIZE && v->base < end)
-                v->ever_w = 1;
+                (void)v;
         }
     }
     return 0;
