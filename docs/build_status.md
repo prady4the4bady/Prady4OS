@@ -7330,6 +7330,17 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 
 ## 2026-11-22 — DDR-1189 A3, C1.6 P3a (kernel half of dynamic linking, PR #158)
 
+The C1.6 P3a code commits shipped **without updating this file**, which breaks
+the same-commit tracker rule (AGENTS.md L43-44):
+
+- `3c4481e`, `da0d663` and `247f9fd` (`kernel/syscall/sys_mmap.c`);
+- `5b7b684` (`kernel/exec/elf.c`).
+
+This entry was added after them, in a docs-only commit, by operator decision
+on #158 (comment 7086434729). It is recorded here rather than rewritten, as for
+DDR-846: the history is not amended (no force-push), and nothing enforces the
+rule mechanically.
+
 - **`PT_INTERP` is loaded by the kernel.**
   - `execve` opens the interpreter with the caller's filesystem capability.
   - The interpreter must be an x86-64 `ET_DYN` with no `PT_INTERP` of its own.
@@ -7355,9 +7366,26 @@ already declares a `FORBIDDEN_SENTINEL` and burns its full window.
 - **Gate `smoke-dynlink`:** arms F0–F6 (L1), M0–M7 (`MAP_FIXED`, M6 the frame
   balance), D0a–D0c and D0r (`PT_INTERP` through the freestanding interpreter
   `user/ldtest.c` at `/LIB/LDTEST.SO`; interpreter recursion refused).
-- **Mutants:** 15, each red in CI on its intended arm only (shard 8,
-  `smoke-dynlink`), runs #2521 to #2536: U, D6, D6b, D7, D7b, D7c, D7e, D9,
-  D9b, D9d, D9e, D9f, D4', D4'', D4c.
+- **Mutants:** 15, all red in CI, runs #2521 to #2536. Each run fails only
+  shard 8 (`smoke-dynlink`), and the other 18 jobs pass. The arms each one
+  turns red:
+  - one arm each:
+    - D6 on F3;
+    - D6b on F1;
+    - D7c on F5;
+    - D7e on F6;
+    - D9 on M1;
+    - D9b on M2;
+    - D9d on M4;
+    - D9e on M6 (leak 256);
+    - D9f on M7;
+    - D4'' on D0;
+    - D4c on D0r;
+  - more than one arm, because the mutated check guards several:
+    - D7 on F4, M4 and F6;
+    - D7b on F2 and F6;
+    - D4' on C4 and D0r (the `PT_INTERP` images ran);
+  - U (the tree before P3a-2) dies at M6, so no M line is printed.
 - **Known conservative limits.** Both are recorded in DDR-1189 A3 and planned
   as a follow-up PR. Each refuses a safe request and never permits
   write-then-execute.
