@@ -128,7 +128,7 @@ int vmm_cow_fault(uint64_t cr3, uint64_t fault_va) {
         return -1;                               /* not COW (e.g. real W^X fault) */
 
     uint64_t frame = e & PG_ADDR;
-    uint64_t newflags = VMM_PRESENT | VMM_RW | PTE_SW_EVERW   /* DDR-1189 A4: write granted */
+    uint64_t newflags = VMM_PRESENT | VMM_RW                  /* MUTANT D7j */
                       | (e & (VMM_USER | VMM_NX));
 
     if (pmm_refcount_get(frame) > 1) {
