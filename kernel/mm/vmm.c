@@ -380,7 +380,7 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
         uint64_t *pte = leaf_pte(pml4_phys, p);
         uint64_t e = *pte;
         *pte = (e & PTE_ADDR)
-             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | PTE_SW_EVERW | VMM_PWT | VMM_PCD))
+             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | VMM_PWT | VMM_PCD))
              | everw
              | PTE_PRESENT | VMM_USER
              | (flags & VMM_RW)
