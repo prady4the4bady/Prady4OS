@@ -589,7 +589,14 @@ static int mprot_exec_ok(struct tcb *t, uint64_t va) {
     for (int i = 0; i < VM_AREA_MAX; i++) {
         struct vm_area *v = &t->mm->vma[i];
         if (v->npages && va >= v->base && va - v->base < v->npages * PAGE_SIZE)
-            return v->x_ok && !(pte & PTE_SW_EVERW);
+        {
+            if (!v->x_ok)
+                return 0;
+            for (uint64_t o = 0; o < v->npages * PAGE_SIZE; o += PAGE_SIZE)
+                if (vmm_resolve_pte(t->cr3, v->base + o) & PTE_SW_EVERW)
+                    return 0;
+            return 1;
+        }
     }
     return 0;
 }
