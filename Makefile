@@ -4551,7 +4551,7 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-dynlink: $(IMG) fat-image sfs-image
 	@rm -f build/dynlink.log
 	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
-	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_D0 base_ok=\nPRADYOS_DYN_D0M base=\nPRADYOS_DYN_R interp2 rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=')" \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_D0 base_ok=\nPRADYOS_DYN_D0M base=\nPRADYOS_DYN_R interp2 rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=\nPRADYOS_DYN_W f7x1=')" \
 	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@L=build/dynlink.log ; rc=0 ; \
@@ -4612,7 +4612,21 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  lk=$$(mv leak) ; [ -n "$$lk" ] && [ "$$lk" -gt -64 ] && [ "$$lk" -lt 64 ] || { echo "[dynlink] FAIL: arm M6, 256 in-place replacements changed the free page count by $$lk (want |n| < 64; a leak of every replaced frame is 256)"; rc=1; } ; \
 	  [ "$$(fv noflagx)" = -22 ] && [ "$$(fv noflagmp)" = -13 ] || { echo "[dynlink] FAIL: arm F6, L1 requires MAP_PRIVATE: noflagx=$$(fv noflagx) noflagmp=$$(fv noflagmp) (want -22, -13)"; rc=1; } ; \
 	  [ "$$(mv fsh0)" = -22 ] || { echo "[dynlink] FAIL: arm M7, MAP_SHARED|MAP_FIXED at address 0: $$(mv fsh0) (want -22)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F6 and M0-M7" ; exit $$rc
+	  W=$$(grep -a 'PRADYOS_DYN_W f7x1=' $$L | head -1) ; echo "$$W" ; \
+	  wv() { echo "$$W" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(wv f7x1)" = 0 ] && [ "$$(wv f7x0)" = -13 ] || { echo "[dynlink] FAIL: arm F7, write history per page: page 1 X=$$(wv f7x1), written page 0 X=$$(wv f7x0) (want 0, -13)"; rc=1; } ; \
+	  f8=$$(wv f8) ; \
+	  if [ -n "$$f8" ] && [ "$$f8" -ge 0 ] && [ "$$f8" -le 7 ]; then \
+	    [ $$(( f8 & 1 )) = 0 ] || { echo "[dynlink] FAIL: arm F8a, the fork child made a page written, then read-only, executable"; rc=1; } ; \
+	    [ $$(( f8 & 2 )) = 0 ] || { echo "[dynlink] FAIL: arm F8b, the fork child made a COW page written in the parent executable"; rc=1; } ; \
+	    [ $$(( f8 & 4 )) = 0 ] || { echo "[dynlink] FAIL: arm F8c, the fork child made a page executable after its COW fault"; rc=1; } ; \
+	  else echo "[dynlink] FAIL: arm F8, the fork child's status was '$$f8' (want 0 to 7)"; rc=1; fi ; \
+	  [ "$$(wv m8)" = 0 ] && [ "$$(wv m8b)" = 127 ] || { echo "[dynlink] FAIL: arm M8, X after a whole-area read-only replacement: m8=$$(wv m8) m8b=$$(wv m8b) (want 0, 127)"; rc=1; } ; \
+	  [ "$$(wv m8p)" = -13 ] || { echo "[dynlink] FAIL: arm M8p, X after a replacement of part of an area: $$(wv m8p) (want -13)"; rc=1; } ; \
+	  [ "$$(wv m8r)" = -13 ] || { echo "[dynlink] FAIL: arm M8r, X after a whole-area replacement from a read-write fd: $$(wv m8r) (want -13)"; rc=1; } ; \
+	  [ "$$(wv m8w)" = -13 ] || { echo "[dynlink] FAIL: arm M8w, X after a whole-area writable replacement: $$(wv m8w) (want -13)"; rc=1; } ; \
+	  [ "$$(wv m8n)" = -13 ] || { echo "[dynlink] FAIL: arm M8n, X after a whole-area replacement without MAP_PRIVATE: $$(wv m8n) (want -13)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F7, F8a-F8c, M0-M8, M8p, M8r, M8w and M8n" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

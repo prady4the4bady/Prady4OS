@@ -93,10 +93,12 @@ uint64_t vmm_fork_address_space_cow(uint64_t parent_cr3) {
                         /* Writable -> read-only + COW in both parent and child. */
                         pt[i1] = (e1 & ~VMM_RW) | PTE_SW_COW;   /* rewrite parent PTE */
                         invlpg(va);                              /* parent AS is active */
-                        childflags = (e1 & 0xFFFull & ~VMM_RW) | PTE_SW_COW | (e1 & VMM_NX);
+                        childflags = (e1 & 0xFFFull & ~VMM_RW) | PTE_SW_COW | (e1 & (VMM_NX | PTE_SW_EVERW));
                     } else {
-                        /* Read-only (e.g. text): share as-is, no COW needed. */
-                        childflags = (e1 & 0xFFFull) | (e1 & VMM_NX);
+                        /* Read-only (e.g. text): share as-is, no COW needed.
+                         * DDR-1189 A4: a page written and then made read-only
+                         * keeps its write history in the child. */
+                        childflags = (e1 & 0xFFFull) | (e1 & (VMM_NX | PTE_SW_EVERW));
                     }
 
                     if (vmm_map_in(child, va, frame, childflags) != 0) {
@@ -126,7 +128,8 @@ int vmm_cow_fault(uint64_t cr3, uint64_t fault_va) {
         return -1;                               /* not COW (e.g. real W^X fault) */
 
     uint64_t frame = e & PG_ADDR;
-    uint64_t newflags = VMM_PRESENT | VMM_RW | (e & (VMM_USER | VMM_NX));
+    uint64_t newflags = VMM_PRESENT | VMM_RW | PTE_SW_EVERW   /* DDR-1189 A4: write granted */
+                      | (e & (VMM_USER | VMM_NX));
 
     if (pmm_refcount_get(frame) > 1) {
         void *copy = ptnode_alloc();             /* zeroed; fully overwritten below */

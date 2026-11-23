@@ -7392,3 +7392,27 @@ rule mechanically.
   - `ever_w` is per area, not per page.
   - A `MAP_FIXED` replacement never sets `x_ok`.
 - QEMU only, not verified on real hardware.
+
+## 2026-11-23 — DDR-1189 A4, the C1.6 P3a follow-up (PR from `c16-p3a-fu`)
+
+Operator decision on #158 (comment 7086434729). Both conservative limits of
+the 2026-11-22 entry are lifted.
+
+- **The write history is per page.** A software PTE bit, `PTE_SW_EVERW`
+  (bit 53), replaces `vm_area.ever_w`.
+  - It is set when write is granted: `vmm_protect_range` and `vmm_cow_fault`.
+  - It is carried by every other rebuild of a user leaf: `map_core`,
+    `vmm_protect_range`, and both private branches of the fork walk.
+  - `mprotect` adds X to a page in an `x_ok` area only if that page lacks it.
+  - A bitmap per area and splitting areas were both rejected: an area has no
+    size bound, and `munmap` frees one area found by its exact base (DDR-1189
+    A4.2).
+- **A replacement sets `x_ok`** on each area it covers whole, when it meets L1
+  (`MAP_PRIVATE`, a read-only fd, no `PROT_WRITE`), after every page is refilled.
+- **Gate `smoke-dynlink`:** new arms F7 (per page), F8a–F8c (the record survives
+  fork and the COW fault), M8 (whole-area replacement), and M8p, M8r, M8w, M8n
+  (a part cover, a read-write fd, `PROT_WRITE`, no `MAP_PRIVATE`: none sets
+  `x_ok`).
+- **Mutants:** U (the kernel of `8442c87`) and D7f–D7l, D9g–D9k, run in CI; the
+  run links are in the PR.
+- QEMU only, not verified on real hardware.

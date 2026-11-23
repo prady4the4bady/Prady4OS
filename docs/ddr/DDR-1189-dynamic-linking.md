@@ -2,7 +2,9 @@
 
 Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged. P1 is
 built under Amendment 1 (#154), and P2 under Amendment 2 (#156). P3 is designed
-under Amendment 3, as P3a and P3b, and is not built. P4 is not built.
+under Amendment 3, as P3a and P3b; P3a is built (#158). Amendment 4 designs
+the P3a follow-up (per-page write history, `x_ok` from a whole-area
+replacement). P3b and P4 are not built.
 
 ## 1. Where the tree is (read from `dev/phase1` = `7981cd4`)
 
@@ -666,4 +668,170 @@ P3 is two parts, each with its own PR, gate arms and mutants:
 - How `PT_GNU_RELRO` is enforced; musl's `ld.so` will `mprotect` it read-only
   once P3a's `mprotect` rules land.
 - P4 (shared text) still needs C2.1.
+- QEMU (TCG) only, not verified on real hardware.
+
+## Amendment 4 (2026-11-23): P3a follow-up, per-page write history and `x_ok` from a whole-area replacement
+
+The operator decided on #158 (comment 7086434729) that the two conservative
+limits A3 recorded are lifted in one follow-up PR from `dev/phase1`:
+
+- (a) per-page `ever_w`, with a new arm F7 and mutant D7f;
+- (b) `x_ok` set by a replacement that covers a whole area and meets L1, with a
+  new arm M8 and mutant D9g;
+- every new arm has a mutant that turns only that arm red, and setup calls die
+  on failure.
+
+This amendment is the design. Code follows it.
+
+### A4.1 Where the tree is (`dev/phase1` = `8442c87`, after P3a)
+
+- `struct vm_area` (`kernel/proc/sched.h`) is a fixed 40-byte slot; `struct mm`
+  holds `VM_AREA_MAX` = 64 of them. It carries `x_ok` and `ever_w`, one each per
+  area.
+- `mprot_exec_ok` (`kernel/syscall/sys_mmap.c`) allows X on a page that is
+  already executable, or that lies in an area with `x_ok && !ever_w`.
+- `sys_mprotect_locked` sets `ever_w` on every area the range touches after a
+  write grant. So a write grant on one page refuses X on every other page of
+  the area: limit (a).
+- `fixed_replace` clears `x_ok` on every area the range touches unless the
+  replacement could have set it (`xok`), and never sets it: limit (b).
+- `munmap` finds the area by its exact base and frees it whole
+  (`sys_munmap_locked`, "whole-region unmap").
+
+### A4.2 Where the per-page record lives
+
+The operator named two options: a bitmap per `vm_area`, or split the area at
+the `mprotect` range edges, "whichever the existing area code supports".
+Neither is supported by the area code as it stands.
+
+- **A bitmap per `vm_area`.** An area has no size bound below the arena, and the
+  slot is fixed. A fixed bitmap caps the area's length. A `kmalloc`'d bitmap
+  needs its own lifetime on every path that creates, copies or frees an area:
+  mmap, `MAP_FIXED`, munmap, fork, exit, and each failure path.
+- **Splitting at the `mprotect` edges.** `munmap` frees one area found by its
+  exact base. After a split, `munmap(base, len)` of the original mapping frees
+  only the first piece and leaves the rest mapped. Every split also takes a
+  slot from the 64.
+
+**Decision: the record lives in the page table entry.** A software bit,
+`PTE_SW_EVERW` = bit 53, is set on a leaf when write is granted on it. Bits 52
+to 58 are ignored by the MMU in a leaf; bit 52 is `PTE_SW_SHMEM`, and bits 9 to
+11 are taken. The bit is per page by construction, costs no storage, and goes
+away with the PTE: a page replaced from a file starts with no write history,
+which is correct, because its bytes are fresh from the file.
+
+`vm_area.ever_w` is removed; `x_ok` stays per area.
+
+### A4.3 The invariant and the code that keeps it
+
+**I1.** In an area with `x_ok` = 1, every page that has been writable since its
+bytes were last read from the file carries `PTE_SW_EVERW`.
+
+Why I1 holds:
+
+- `x_ok` becomes 1 only in two places, and in both every page of the area is
+  freshly read from a read-only file and mapped without write:
+  - mmap of a read-only fd, `MAP_PRIVATE`, no `PROT_WRITE` (unchanged);
+  - a whole-area replacement (A4.4).
+- After that, write reaches a page of the area in three ways:
+  - `mprotect` with `PROT_WRITE`. `vmm_protect_range` PASS 2 **sets** the bit
+    on each page it grants write.
+  - `MAP_FIXED` with `PROT_WRITE`. That replacement is not `xok`, so it clears
+    `x_ok` for every area it touches (A3, unchanged).
+  - The COW fault, which re-grants write on a page that fork made read-only.
+    It **sets** the bit too. (The page was writable in the parent, so by I1 it
+    already carries the bit; setting rather than carrying keeps the fault's
+    own arm, F8c, apart from fork's, F8b.)
+
+Every path that rebuilds a user leaf must carry the bit:
+
+| Path | Today | Change |
+|---|---|---|
+| `map_core` | masks flags with `0xFFF \| PTE_SW_SHMEM` | the mask also passes `PTE_SW_EVERW` (fork maps the child through it) |
+| `vmm_protect_range` PASS 2 | carries COW, SHARED, SHMEM, PWT, PCD | also carries `PTE_SW_EVERW`, and sets it when `flags & VMM_RW` |
+| `vmm_protect_range` PASS 1b (copy before write) | keeps every non-address bit | none |
+| fork, parent rewrite | `(e1 & ~VMM_RW) \| PTE_SW_COW`, keeps every bit | none |
+| fork, child, writable branch | `(e1 & 0xFFF & ~VMM_RW) \| PTE_SW_COW \| NX` | also `e1 & PTE_SW_EVERW` |
+| fork, child, read-only branch | `(e1 & 0xFFF) \| NX` | also `e1 & PTE_SW_EVERW` (a page written, then made read-only, then forked) |
+| fork, child, `PTE_SW_SHMEM` branch | unchanged | none: a shared page is never in an `x_ok` area (an executable shared mapping is refused, F2) |
+| `vmm_cow_fault` | `PRESENT \| RW \| (e & (USER \| NX))` | also sets `PTE_SW_EVERW` (it grants write) |
+
+The fork carry is new work that the per-area flag did not need: fork copied
+the `vm_area`, `ever_w` included. With the bit in the PTE, fork and the COW
+fault are three new places that could drop it, so each gets an arm (F8).
+
+`mprot_exec_ok` becomes: already executable (present and not NX), or in an area
+with `x_ok` and this page's PTE without `PTE_SW_EVERW`. An absent page in an
+`x_ok` area passes this test and is then refused by `vmm_protect_range` with
+`-ENOMEM`, as today.
+
+### A4.4 `x_ok` from a whole-area replacement
+
+`fixed_replace` already computes `xok` = `MAP_PRIVATE`, a file, a read-only fd
+and no `PROT_WRITE` (the L1 conditions). New: after every page of the range is
+refilled and mapped, each area that the range covers whole gets `x_ok` = 1,
+when `xok`.
+
+- An area covered only in part keeps `x_ok` as it was when `xok`, and loses it
+  when not (the A3 rule, unchanged).
+- On `-ENOMEM` or `-EIO` part-way, nothing is set.
+- This is safe because every page of a wholly covered area now holds bytes read
+  from a read-only file, mapped without write, so no page has
+  `PTE_SW_EVERW`: I1 holds from the start.
+
+### A4.5 Arms (`smoke-dynlink`)
+
+Each arm's setup calls die on failure.
+
+| Arm | Probe | Want | On `8442c87` |
+|---|---|---|---|
+| F7 | two-page private mapping of a read-only fd; `mprotect(page 0, R\|W)` and a store; then `mprotect(page 1, R\|X)`, then `mprotect(page 0, R\|X)` | 0, then -13 | -13, -13: **red** |
+| F8a | a page of a read-only file mapping made writable, stored to, made read-only again; fork; the child asks `mprotect(R\|X)` | -13 | -13 (green; a guard) |
+| F8b | as F8a, still writable at fork (so COW in the child); the child asks X without writing | -13 | -13 (guard) |
+| F8c | as F8b, and the child writes first (the COW fault) | -13 | -13 (guard) |
+| M8 | a two-page anonymous writable area, stored to; `MAP_FIXED` of both pages from a read-only fd, `PROT_READ`, `MAP_PRIVATE`; then `mprotect(both, R\|X)`; and the first byte | 0, and 127 | -13: **red** |
+| M8p | the same, but the replacement covers page 0 only | -13 | -13 (guard) |
+| M8r | whole cover, from a read-write fd | -13 | -13 (guard) |
+| M8w | whole cover, read-only fd, `PROT_READ\|PROT_WRITE` | -13 | -13 (guard) |
+| M8n | whole cover, read-only fd, `PROT_READ`, neither `MAP_PRIVATE` nor `MAP_SHARED` | -13 | -13 (guard) |
+
+The child in F8 reports one bit per sub-arm in its exit status (bit 0 F8a,
+bit 1 F8b, bit 2 F8c). Any status outside 0 to 7 (the child died) fails F8 as a
+whole.
+
+**Vacuity.** F7 and M8 are red on the unfixed tree, as the vacuity rule asks.
+The guards pass on it by design: they stop the new code from allowing too much.
+A guard that passes on every tree proves nothing, so each guard's own mutant
+must turn it red (A4.6).
+
+### A4.6 Mutants (each red in CI on its named arm)
+
+| Mutant | Change | Red on |
+|---|---|---|
+| D7f | `mprot_exec_ok` refuses when any page of the area carries the bit (the per-area record back) | F7 |
+| D7g | PASS 2 does not set the bit on a write grant | F5, F7, F8a, F8b (the `mprotect` set point that these write-then-X arms use; F8c stays green because the COW fault sets the bit itself. Measured in CI run #2546; the first draft of this table also named F8c) |
+| D7h | fork's read-only branch drops the bit | F8a |
+| D7i | fork's writable branch drops the bit in the child | F8b |
+| D7j | `vmm_cow_fault` does not set the bit | F8c |
+| D7l | PASS 2 does not carry the bit on a rebuild | F8a |
+| D9g | `fixed_replace` never sets `x_ok` (the A3 behaviour) | M8 |
+| D9h | sets `x_ok` on any area the range touches, whole or not | M8p |
+| D9i | the set ignores the fd's access mode | M8r |
+| D9j | the set ignores `PROT_WRITE` | M8w |
+| D9k | the set ignores `MAP_PRIVATE` | M8n |
+
+D9h to D9k change only the set condition; the clear step keeps `xok`.
+
+### A4.7 Cost and limits (stated)
+
+- `dyntest.elf` is embedded in `kernel.bin`. The binding `RCU_TORTURE=1` and
+  `LOCKDEP=1` builds had 7,790 B of headroom on `4f6220d` (run 45075944820).
+  Measured locally on this change (not verified in CI yet): the default
+  build grows one 4 KiB page, 1,712,530 B to 1,716,626 B; the `RCU_TORTURE=1`
+  and `LOCKDEP=1` builds are 1,733,010 B, which leaves **3,694 B** under the
+  1,736,704 B gate. The next page crossing in those builds breaches it, so a
+  window raise (DDR-1183) comes before the next kernel or embedded-binary
+  growth.
+- `x_ok` stays per area. A partial read-only replacement of an area with
+  `x_ok` = 0 still leaves it 0; only a whole-area cover sets it.
 - QEMU (TCG) only, not verified on real hardware.

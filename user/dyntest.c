@@ -316,6 +316,97 @@ static void fixed_phase(void) {
     wr("\n");
 }
 
+/* DDR-1189 A4 M8: map two anonymous writable pages and store to them, replace
+ * `cover` bytes from the start with MAP_FIXED (prot, flags, fd), then ask for
+ * X on the replaced bytes. Setup dies on failure. *first gets the first byte
+ * after the replacement. */
+static long m8_try(long cover, int prot, int flags, long fd, long *first) {
+    long a = nsi6(SYS_MMAP, 0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (a <= 0)
+        die("M8 setup map");
+    volatile uint8_t *p = (volatile uint8_t *)a;
+    p[0] = 0xC3;
+    p[4096] = 0xC3;
+    if (nsi6(SYS_MMAP, a, cover, prot, flags | MAP_FIXED, fd, 0) != a)
+        die("M8 setup replace");
+    if (first)
+        *first = p[0];
+    return nsi(SYS_MPROTECT, a, cover, PROT_READ | PROT_EXEC);
+}
+
+/* DDR-1189 A4: arms F7 and F8a-c (the write history is per page, and fork and
+ * the COW fault keep it) and M8, M8p/r/w/n (x_ok from a replacement that
+ * covers a whole area and meets L1). One line; setup calls die on failure. */
+static void a4_phase(void) {
+    static const char self[] = "/DYNTEST.ELF";
+    long ro = nsi(SYS_OPEN, (long)self, O_RDONLY, 0);
+    long rw = nsi(SYS_OPEN, (long)self, O_RDWR, 0);
+    if (ro < 0 || rw < 0)
+        die("A4 open");
+    /* F7: write granted, and used, on page 0 only of a two-page read-only file
+     * mapping. Page 1 may still become executable; page 0 never. */
+    long f7 = nsi6(SYS_MMAP, 0, 8192, PROT_READ, MAP_PRIVATE, ro, 0);
+    if (f7 <= 0 || nsi(SYS_MPROTECT, f7, 4096, PROT_READ | PROT_WRITE) != 0)
+        die("F7 setup");
+    *(volatile uint8_t *)f7 = 0xC3;
+    long f7x1 = nsi(SYS_MPROTECT, f7 + 4096, 4096, PROT_READ | PROT_EXEC);
+    long f7x0 = nsi(SYS_MPROTECT, f7, 4096, PROT_READ | PROT_EXEC);
+    /* F8: three pages of a read-only file mapping, made writable and written
+     * here. At fork, page 0 is read-only again (F8a), pages 1 and 2 are still
+     * writable, so COW in the child (F8b). The child writes page 2 first (the
+     * COW fault, F8c). It may make none of them executable; it exits with one
+     * bit per page that it could. */
+    long f8 = nsi6(SYS_MMAP, 0, 3 * 4096, PROT_READ, MAP_PRIVATE, ro, 0);
+    if (f8 <= 0 || nsi(SYS_MPROTECT, f8, 3 * 4096, PROT_READ | PROT_WRITE) != 0)
+        die("F8 setup");
+    volatile uint8_t *q = (volatile uint8_t *)f8;
+    q[0] = 0xC3;
+    q[4096] = 0xC3;
+    q[8192] = 0xC3;
+    if (nsi(SYS_MPROTECT, f8, 4096, PROT_READ) != 0)
+        die("F8a setup");
+    long pid = nsi(SYS_FORK, 0, 0, 0);
+    if (pid < 0)
+        die("F8 fork");
+    if (pid == 0) {
+        long bits = 0;
+        if (nsi(SYS_MPROTECT, f8, 4096, PROT_READ | PROT_EXEC) != -13)
+            bits |= 1;
+        if (nsi(SYS_MPROTECT, f8 + 4096, 4096, PROT_READ | PROT_EXEC) != -13)
+            bits |= 2;
+        q[8192] = 0x90;
+        if (nsi(SYS_MPROTECT, f8 + 8192, 4096, PROT_READ | PROT_EXEC) != -13)
+            bits |= 4;
+        for (;;)
+            nsi(SYS_EXIT, bits, 0, 0);
+    }
+    int st = -1;
+    if (nsi(SYS_WAIT4, pid, (long)&st, 0) != pid)
+        die("F8 wait4");
+    /* M8: the whole area, from the read-only fd, MAP_PRIVATE, no write. */
+    long m8b = -1;
+    long m8 = m8_try(8192, PROT_READ, MAP_PRIVATE, ro, &m8b);
+    /* M8p, M8r, M8w, M8n: page 0 only; a read-write fd; PROT_WRITE; neither
+     * MAP_PRIVATE nor MAP_SHARED. None makes the area eligible for X. */
+    long m8p = m8_try(4096, PROT_READ, MAP_PRIVATE, ro, 0);
+    long m8r = m8_try(8192, PROT_READ, MAP_PRIVATE, rw, 0);
+    long m8w = m8_try(8192, PROT_READ | PROT_WRITE, MAP_PRIVATE, ro, 0);
+    long m8n = m8_try(8192, PROT_READ, 0, ro, 0);
+    nsi(SYS_CLOSE, ro, 0, 0);
+    nsi(SYS_CLOSE, rw, 0, 0);
+    wr("PRADYOS_DYN_W");
+    kv("f7x1", f7x1);
+    kv("f7x0", f7x0);
+    kv("f8", st);
+    kv("m8", m8);
+    kv("m8b", m8b);
+    kv("m8p", m8p);
+    kv("m8r", m8r);
+    kv("m8w", m8w);
+    kv("m8n", m8n);
+    wr("\n");
+}
+
 /* DDR-1189 A2 P2-5: arm C. */
 __attribute__((noreturn)) static void pie_phase(void) {
     static const char pie[] = "/DYNPIE.ELF";
@@ -332,6 +423,7 @@ __attribute__((noreturn)) static void pie_phase(void) {
     wr("PRADYOS_DYN_PIE_DONE n=4\n");
     wx_phase();                            /* DDR-1189 A3: arm F */
     fixed_phase();                         /* DDR-1189 A3: arm M */
+    a4_phase();                            /* DDR-1189 A4: arms F7, F8, M8 */
     for (;;)
         nsi(SYS_EXIT, 0, 0, 0);
 }
