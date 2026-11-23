@@ -221,7 +221,6 @@ static long shm_fd_map(struct tcb *t, int obj, uint64_t addr, uint64_t len, int 
     v->shm = obj + 1;
     v->shm_ro = 0;                               /* the fd is O_RDWR (A3.1) */
     v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
-    v->ever_w = 1;
     v->pgoff = (uint32_t)first;
     v->wcap = 0;                                 /* nothing to write back */
     if (addr == 0)
@@ -293,7 +292,6 @@ static long file_shared_map(struct tcb *t, struct fd_entry *fe, uint64_t addr,
     v->shm = obj + 1;
     v->shm_ro = !wok;                            /* mprotect may not add write */
     v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
-    v->ever_w = wok ? 1 : 0;
     v->pgoff = (uint32_t)first;
     v->wcap = wok ? (uint64_t)fe->cap : 0;
     if (addr == 0)
@@ -311,7 +309,9 @@ static long file_shared_map(struct tcb *t, struct fd_entry *fe, uint64_t addr,
  * not yet mapped stay absent inside their area: the range's contents are then
  * unspecified, as POSIX allows for a failed MAP_FIXED; munmap still frees it.
  * (A writable mapping is never xok, so clearing x_ok covers "written through a
- * replacement" too; ever_w needs no second write here.) */
+ * replacement" too.) DDR-1189 A4: when xok, each area the range covers whole
+ * gets x_ok, once every page is refilled: all its pages are then fresh from a
+ * read-only file and were never writable (arm M8). */
 static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
                           uint64_t npages, int prot, long a_off, int priv) {
     uint64_t end = addr + npages * PAGE_SIZE;
@@ -346,6 +346,12 @@ static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
             return -ENOMEM;
         }
     }
+    if (xok)
+        for (int i = 0; i < VM_AREA_MAX; i++) {
+            struct vm_area *v = &t->mm->vma[i];
+            if (v->npages && v->base >= addr && v->base + v->npages * PAGE_SIZE <= end)
+                v->x_ok = 1;
+        }
     return (long)addr;
 }
 
@@ -518,7 +524,6 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
      * may be executable now or later; anything writable never can be. */
     v->x_ok   = ((flags & MAP_PRIVATE) && fe && (fe->flags & OF_ACCMODE) == 0 &&
                  !(prot & PROT_WRITE)) ? 1 : 0;      /* L1: MAP_PRIVATE (F6) */
-    v->ever_w = (prot & PROT_WRITE) ? 1 : 0;
     if (addr == 0)
         t->mm->mmap_next = base + npages * PAGE_SIZE;
     return (long)base;
@@ -548,7 +553,6 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
     v->base = 0;
     v->npages = 0;
     v->x_ok = 0;
-    v->ever_w = 0;
     return 0;
 }
 
@@ -574,7 +578,8 @@ static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5
  */
 /* DDR-1189 A3 P3a-1 (L1): 1 when PROT_EXEC may be set on the page at `va`:
  * it is already executable, or it lies in a vm_area that came from a
- * read-only file and was never writable. mprotect walks page tables, so image
+ * read-only file and the page was never writable since (PTE_SW_EVERW, per
+ * page, DDR-1189 A4). mprotect walks page tables, so image
  * pages, the stack and the heap reach this too; none of those may become
  * executable after being writable. */
 static int mprot_exec_ok(struct tcb *t, uint64_t va) {
@@ -584,7 +589,7 @@ static int mprot_exec_ok(struct tcb *t, uint64_t va) {
     for (int i = 0; i < VM_AREA_MAX; i++) {
         struct vm_area *v = &t->mm->vma[i];
         if (v->npages && va >= v->base && va - v->base < v->npages * PAGE_SIZE)
-            return v->x_ok && !v->ever_w;
+            return v->x_ok && !(pte & PTE_SW_EVERW);
     }
     return 0;
 }
@@ -643,15 +648,7 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
         return -EACCES;                        /* write asked on a COW page or a kernel view */
     if (rc != 0)
         return -ENOMEM;                        /* a page is absent, or no frame for a copy */
-    if (prot & PROT_WRITE) {                   /* L1: once writable, never executable */
-        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
-        for (int i = 0; i < VM_AREA_MAX; i++) {
-            struct vm_area *v = &t->mm->vma[i];
-            if (v->npages && addr < v->base + v->npages * PAGE_SIZE && v->base < end)
-                v->ever_w = 1;
-        }
-    }
-    return 0;
+    return 0;                                  /* L1: the write grant set PTE_SW_EVERW */
 }
 
 /* ---- DDR-1178 Amendment 2: SysV shared memory (IPC_PRIVATE only) ----------
@@ -738,7 +735,6 @@ static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long
     v->shm = obj + 1;
     v->shm_ro = ro;
     v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
-    v->ever_w = ro ? 0 : 1;
     v->pgoff = 0;
     v->wcap = 0;
     t->mm->mmap_next = base + (uint64_t)npages * PAGE_SIZE;

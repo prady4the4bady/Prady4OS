@@ -735,12 +735,13 @@ Why I1 holds:
   - a whole-area replacement (A4.4).
 - After that, write reaches a page of the area in three ways:
   - `mprotect` with `PROT_WRITE`. `vmm_protect_range` PASS 2 **sets** the bit
-    on each page it grants write. This is the one set point.
+    on each page it grants write.
   - `MAP_FIXED` with `PROT_WRITE`. That replacement is not `xok`, so it clears
     `x_ok` for every area it touches (A3, unchanged).
   - The COW fault, which re-grants write on a page that fork made read-only.
-    That page was writable in the parent, so by I1 it already carries the bit.
-    The fault **carries** it.
+    It **sets** the bit too. (The page was writable in the parent, so by I1 it
+    already carries the bit; setting rather than carrying keeps the fault's
+    own arm, F8c, apart from fork's, F8b.)
 
 Every path that rebuilds a user leaf must carry the bit:
 
@@ -753,7 +754,7 @@ Every path that rebuilds a user leaf must carry the bit:
 | fork, child, writable branch | `(e1 & 0xFFF & ~VMM_RW) \| PTE_SW_COW \| NX` | also `e1 & PTE_SW_EVERW` |
 | fork, child, read-only branch | `(e1 & 0xFFF) \| NX` | also `e1 & PTE_SW_EVERW` (a page written, then made read-only, then forked) |
 | fork, child, `PTE_SW_SHMEM` branch | unchanged | none: a shared page is never in an `x_ok` area (an executable shared mapping is refused, F2) |
-| `vmm_cow_fault` | `PRESENT \| RW \| (e & (USER \| NX))` | also `e & PTE_SW_EVERW` |
+| `vmm_cow_fault` | `PRESENT \| RW \| (e & (USER \| NX))` | also sets `PTE_SW_EVERW` (it grants write) |
 
 The fork carry is new work that the per-area flag did not need: fork copied
 the `vm_area`, `ever_w` included. With the bit in the PTE, fork and the COW
@@ -795,7 +796,8 @@ Each arm's setup calls die on failure.
 | M8n | whole cover, read-only fd, `PROT_READ`, neither `MAP_PRIVATE` nor `MAP_SHARED` | -13 | -13 (guard) |
 
 The child in F8 reports one bit per sub-arm in its exit status (bit 0 F8a,
-bit 1 F8b, bit 2 F8c); it exits 64 if a setup call fails in the child.
+bit 1 F8b, bit 2 F8c). Any status outside 0 to 7 (the child died) fails F8 as a
+whole.
 
 **Vacuity.** F7 and M8 are red on the unfixed tree, as the vacuity rule asks.
 The guards pass on it by design: they stop the new code from allowing too much.
@@ -807,10 +809,10 @@ must turn it red (A4.6).
 | Mutant | Change | Red on |
 |---|---|---|
 | D7f | `mprot_exec_ok` refuses when any page of the area carries the bit (the per-area record back) | F7 |
-| D7g | PASS 2 does not set the bit on a write grant | F5, F7, F8a, F8b, F8c (the one set point; several arms by design) |
+| D7g | PASS 2 does not set the bit on a write grant | F5, F7, F8a, F8b, F8c (the `mprotect` set point that every write-then-X arm uses) |
 | D7h | fork's read-only branch drops the bit | F8a |
 | D7i | fork's writable branch drops the bit in the child | F8b |
-| D7j | `vmm_cow_fault` drops the bit | F8c |
+| D7j | `vmm_cow_fault` does not set the bit | F8c |
 | D7l | PASS 2 does not carry the bit on a rebuild | F8a |
 | D9g | `fixed_replace` never sets `x_ok` (the A3 behaviour) | M8 |
 | D9h | sets `x_ok` on any area the range touches, whole or not | M8p |
@@ -824,7 +826,12 @@ D9h to D9k change only the set condition; the clear step keeps `xok`.
 
 - `dyntest.elf` is embedded in `kernel.bin`. The binding `RCU_TORTURE=1` and
   `LOCKDEP=1` builds had 7,790 B of headroom on `4f6220d` (run 45075944820).
-  The PR prints the new sizes.
+  Measured locally on this change (not verified in CI yet): the default
+  build grows one 4 KiB page, 1,712,530 B to 1,716,626 B; the `RCU_TORTURE=1`
+  and `LOCKDEP=1` builds are 1,733,010 B, which leaves **3,694 B** under the
+  1,736,704 B gate. The next page crossing in those builds breaches it, so a
+  window raise (DDR-1183) comes before the next kernel or embedded-binary
+  growth.
 - `x_ok` stays per area. A partial read-only replacement of an area with
   `x_ok` = 0 still leaves it 0; only a whole-area cover sets it.
 - QEMU (TCG) only, not verified on real hardware.
