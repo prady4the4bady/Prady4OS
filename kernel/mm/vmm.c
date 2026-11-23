@@ -375,7 +375,7 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
      * vmm_cow.c:115, so the page is never copied). DDR-1189 A4: PTE_SW_EVERW is
      * carried too, and set on every page this call makes writable. */
     uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;
-    uint64_t everw = (flags & VMM_RW) ? PTE_SW_EVERW : 0;
+    uint64_t everw = 0;
     for (uint64_t p = start; p < end; p += 0x1000ull) {
         uint64_t *pte = leaf_pte(pml4_phys, p);
         uint64_t e = *pte;
