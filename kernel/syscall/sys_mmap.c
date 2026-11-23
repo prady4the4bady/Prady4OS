@@ -346,7 +346,7 @@ static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
             return -ENOMEM;
         }
     }
-    if (xok)
+    if (priv && fe && (fe->flags & OF_ACCMODE) == 0)
         for (int i = 0; i < VM_AREA_MAX; i++) {
             struct vm_area *v = &t->mm->vma[i];
             if (v->npages && v->base >= addr && v->base + v->npages * PAGE_SIZE <= end)
