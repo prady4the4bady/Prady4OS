@@ -93,7 +93,7 @@ uint64_t vmm_fork_address_space_cow(uint64_t parent_cr3) {
                         /* Writable -> read-only + COW in both parent and child. */
                         pt[i1] = (e1 & ~VMM_RW) | PTE_SW_COW;   /* rewrite parent PTE */
                         invlpg(va);                              /* parent AS is active */
-                        childflags = (e1 & 0xFFFull & ~VMM_RW) | PTE_SW_COW | (e1 & (VMM_NX | PTE_SW_EVERW));
+                        childflags = (e1 & 0xFFFull & ~VMM_RW) | PTE_SW_COW | (e1 & VMM_NX);
                     } else {
                         /* Read-only (e.g. text): share as-is, no COW needed.
                          * DDR-1189 A4: a page written and then made read-only
