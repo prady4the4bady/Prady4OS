@@ -2,14 +2,14 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-11-20)
+## State (2026-11-23)
 
-- **dev/phase1 tip:** `d397412` (#156, C1.6 P2 static PIE, DDR-1189 Amendment 2; head `1c2fe07`, run 44811275717; mutants D3–D3e red on their sub-arms). Before it: `a90693e` (#155, bookkeeping), `0d464e1` (#154, C1.6 P1).
-- **Kernel:** default `kernel.bin` 1,704,338 B (32,366 B headroom); the binding `RCU_TORTURE=1` and `LOCKDEP=1` builds 1,720,722 B (15,982 B headroom), all printed by CI on `1c2fe07` (run 44811275717), against the 1,736,704 B gate. The PT_HI ceiling (image plus BSS at or below phys 0x600000) is build-enforced (DDR-1183 A1); a build's own margin is 0x600000 minus its `__bss_end` physical address (local, before P6: default 100,672 B, `LOCKDEP=1` 72,448 B). NSI: max 124 (`SYS_PSI`); next free 125. DDR numbers: next free is 1210 (C1.6 P1 and P2 are amendments, DDR-1189 A1 and A2; P3 will be A3). Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
+- **dev/phase1 tip:** `8442c87` (#158, C1.6 P3a, DDR-1189 Amendment 3; head `4f6220d`, run 45075944820; 15 mutants red on runs #2521–#2536). Merged by the operator (comment 7086434729). Before it: `9954fd8` (#159, `shard_check.sh` SIGPIPE false-FAIL), `5241607` (#157, bookkeeping), `d397412` (#156, C1.6 P2).
+- **Kernel:** default `kernel.bin` 1,712,530 B (24,174 B headroom); the binding `RCU_TORTURE=1` and `LOCKDEP=1` builds 1,728,914 B (**7,790 B headroom**, about two 4 KiB page crossings), all printed by CI on `4f6220d` (run 45075944820), against the 1,736,704 B gate. The PT_HI ceiling (image plus BSS at or below phys 0x600000) is build-enforced (DDR-1183 A1). NSI: max 124 (`SYS_PSI`); next free 125. DDR numbers: 1210 is taken by #160 (open); next free is 1211. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
 - **Standing instruction: #45 6993979920 (Nov 19).** Build every remaining chunk in checklist order, one feature per PR: DDR, code, CI gate, mutants red, merge. Merge each PR yourself under the five conditions of 6594914166 (green on the exact head, `mergeable_state` clean, mutants red or recorded not gated, CodeRabbit answered, previous PR merged). Update the checklist and this file after each merge; post a short status on #45 after each chunk. At most 3 CI runs at a time.
   - **Still wait for the operator on:** drafts #68 and #85 (the operator merges them); any key, secret, credential or trust-root step (C3.3: write the DDR, open the PR, stop); C6.2 branding.
   - **Blocker rule:** a red or inconclusive gate you cannot explain, a recurrence of an unnamed failure, or a CodeRabbit finding that shows the design is wrong: one blocker comment, mark the chunk BLOCKED, take the next unblocked chunk.
-- **Order now (the operator's, 6993979920):** C1.5 P5 and P6 and deadlock detection (C1.4) are done; C1.6 is in progress (P1 done); then C1.7, then Phase 2 onward by `Needs`. C11.1 stays last. C1.5 stays IN PROGRESS only for memory PSI, which waits for C2.1.
+- **Order now (the operator's, 6993979920 and 7062649586):** C1.5 P5 and P6 and deadlock detection (C1.4) are done; C1.6 is in progress (P1, P2 and P3a done); then C1.7, then Phase 2 onward by `Needs`. C11.1 stays last. C1.5 stays IN PROGRESS only for memory PSI, which waits for C2.1.
 - **#135 (open):** the `-ENOMEM` mechanism is named and fixed (#142). Arm R was green in 5 CI runs on trees with P4 and the fix; it failed 2 of 6 with P4 before it. What P4 changes to raise the rate is not explained. Close it only after repeated green runs; a recurrence is a blocker.
 - **Issues open:** #135, #143 (arm C2 `net_leak_ok=0`, 1 in 202 runs, no mechanism), #116, #117, #119.
 - **Review threads left open for the operator:** the Codex `docs/build_status.md` notes on #136, #138, #140, #142, #148, #150, #154 and #156 (question in #45 6948599917).
@@ -37,8 +37,11 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 ## Next
 
 - Merge this bookkeeping PR (docs-only rule).
-- Then C1.6 P3: `PT_INTERP`, musl `ld.so` and `libc.so` from the pinned submodule, file-backed `PROT_EXEC` under L1 (DDR-1189 §2, §3; arms D, E, F, G of §4). Design first, as DDR-1189 Amendment 3. It is large: the musl build today is a static subset (`tools/build_musl.sh`), and `mmap` refuses `PROT_EXEC` outright.
-- Then P4 (shared text, needs C2.1); then C1.7 (KASLR; drafts #82, #84 and #85 exist, and #85 waits for the operator).
+- **#72 (DDR-1182, fd access mode), operator 7062649586 item 2:** merge `dev/phase1` into it, resolve the conflicts, re-run `smoke-accmode` and mutants M1–M8 on the new head, post the evidence on #72. Do not merge it: the operator does.
+- **Follow-up to #158 (operator 7086434729):** from `dev/phase1`, per-page `ever_w` (arm F7, mutant D7f) and `x_ok` set by a replacement that covers a whole area under L1 (arm M8, mutant D9g); setup calls die on failure.
+- **#160 (DDR-1210, the user-trap report as one `kwrite`):** CI green (20/20), CodeRabbit clean. Waits for the operator on Codex's "DDR before code" thread: the split needs a force-push, which this session may not do.
+- Then C1.6 P3b (musl `ld.so`/`libc.so`, the syscall shim, arms D, E, G; arm C4's image names `/lib/ld-musl-x86_64.so.1` and must be re-pointed when that file is installed), then P4 (needs C2.1), then C1.7 (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3).
+- **Watch the binding-build headroom (7,790 B):** two more page crossings breach the gate. Plan a chunk raise (DDR-1183) before the next large kernel addition.
 - DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
 
 ## Open blockers
