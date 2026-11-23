@@ -72,6 +72,8 @@ uint64_t vmm_new_address_space(void);
 
 /* Map a page into a SPECIFIC address space `pml4_phys` (need not be active). */
 int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
+/* DDR-1203 §4: the smoke-mapguard self-test (QEMU_PROBES=mapguard). */
+void vmm_mapguard_probe(void);
 
 /* ADR-038: user stack layout. Single definition — the ELF loader maps the top
  * page against these and the #PF growth path range-tests against them; two
@@ -79,6 +81,23 @@ int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags)
 #define USER_STACK_TOP   0x9000000000ull            /* 576 GiB                  */
 #define USER_STACK_SIZE  (8ull * 1024 * 1024)       /* 8 MiB (ADR-021)          */
 #define USER_STACK_BOT   (USER_STACK_TOP - USER_STACK_SIZE)
+/* DDR-1189 A1 P1-2: the stack top is drawn down from USER_STACK_TOP by up to
+ * USER_STACK_ASLR_PAGES - 1 pages, so no PT_LOAD may reach the lowest stack
+ * bottom any draw can give, nor its guard page (Codex on #154). */
+#define USER_STACK_ASLR_PAGES 0x10000ull
+#define USER_STACK_LOWEST_BOT (USER_STACK_BOT - (USER_STACK_ASLR_PAGES - 1) * PAGE_SIZE)
+/* DDR-1189 A2 P2-1: every PT_LOAD, ET_EXEC or ET_DYN after its bias, lies in
+ * [USER_MIN, USER_IMAGE_TOP): below the surface window (SURFACE_VA_BASE), the
+ * framebuffer window and the mmap arena, and so below every stack window too
+ * (CodeRabbit on #154). An ET_DYN base is USER_PIE_BASE plus up to
+ * USER_PIE_ASLR_PAGES - 1 pages (18 bits, L3), and the whole image ends at or
+ * below USER_PIE_TOP. [USER_PIE_TOP, USER_IMAGE_TOP) is left for P3's
+ * interpreter. */
+#define USER_IMAGE_TOP      0x8600000000ull
+#define USER_PIE_BASE       0x8100000000ull
+#define USER_PIE_TOP        0x8400000000ull
+#define USER_PIE_ASLR_PAGES 0x40000ull
+/* The bounds' relations are static assertions in kernel/exec/elf.c. */
 
 /* ADR-038 Option 3: pages eagerly mapped at the TOP of the stack; everything
  * below is demand-paged. This window exists because vmm_user_range_ok (ADR-022)
@@ -98,7 +117,10 @@ int vmm_map_in(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags)
  * fault (out of range, or OOM). The guard page at [BOT-PAGE, BOT) is BELOW
  * USER_STACK_BOT and therefore never satisfied here — that is what keeps it a
  * guard rather than decoration. */
-int vmm_stack_fault(uint64_t cr3, uint64_t fault_va);
+/* DDR-1189 A1 P1-3: the stack is [stack_top - USER_STACK_SIZE, stack_top). */
+/* The current thread's stack top (mm.c); USER_STACK_TOP when it has no mm. */
+uint64_t mm_cur_stack_top(void);
+int vmm_stack_fault(uint64_t cr3, uint64_t fault_va, uint64_t stack_top);
 
 /* Free a per-process address space: its private user page tables and the PML4.
  * The shared kernel entries are left intact. */
@@ -124,7 +146,13 @@ int vmm_user_range_ok(uint64_t cr3, uint64_t vaddr, uint64_t len, int writable);
  * Returns 0, -1 if any page in the range is absent or not user-accessible, or
  * -2 if VMM_RW was asked for on a PTE_SW_COW page (see DDR-1031 §3b: the
  * hardware RO bit IS the copy trigger, so granting write there would let one
- * process write a frame another still shares, with no copy and no fault). */
+ * process write a frame another still shares, with no copy and no fault).
+ *
+ * DDR-1202 (#112): -2 also when VMM_RW is asked for on a read-only
+ * PTE_SW_SHARED view (the vDSO page and the like). A read-only PRIVATE page
+ * whose frame someone else still holds (shared as-is by fork) is given its own
+ * copy before write is added; -3 if that copy cannot be allocated, with no
+ * permission changed. PTE_SW_SHMEM pages are never copied. */
 int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t flags);
 
 /* DDR-1177: unmap npages at va in the ACTIVE AS `pml4_phys`, shoot down every
@@ -137,3 +165,12 @@ void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
  * at `cr3` (4 KiB leaf), or 0 if not present. Used by sys_munmap to find the
  * frame to free after clearing the PTE. */
 uint64_t vmm_resolve(uint64_t cr3, uint64_t virt);
+/* DDR-1178 A4.4: the hardware dirty bit (bit 6) of a user leaf PTE. See
+ * vmm.c. Returns 1 dirty, 0 clean, -1 when no user page is mapped there. */
+#define VMM_DIRTY        0x40ull
+#define VMM_DIRTY_TEST   0
+#define VMM_DIRTY_CLEAR  1
+#define VMM_DIRTY_SET    2
+int vmm_dirty_op(uint64_t cr3, uint64_t virt, int op);
+/* DDR-1181 A1.2: the whole leaf PTE (flags included) for `virt`, or 0. */
+uint64_t vmm_resolve_pte(uint64_t cr3, uint64_t virt);

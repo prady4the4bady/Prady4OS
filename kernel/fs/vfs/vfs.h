@@ -55,6 +55,14 @@ struct vfs_fs_ops {
      * NULL, and vfs_truncate refuses on NULL rather than calling through
      * a garbage pointer. Unimplemented stays unimplemented. */
     int (*truncate)  (void *ctx, struct vfs_file *f, uint64_t len);
+    /* DDR-1178 A4.2 (P4): optional. A number naming the FILE (not this open)
+     * within its mount, stable across opens, for MAP_SHARED's frame table.
+     * NULL: a shared file mapping is -ENODEV. */
+    uint64_t (*ident)(void *ctx, const struct vfs_file *f);
+    /* DDR-1178 A4.2 / D5: 1 when `write` overwrites in place, so a writable
+     * shared mapping can be written back. SFS (append-only) and ext4 (no
+     * write) leave it 0: their shared mappings are read-only. */
+    int shared_write;
 };
 
 void vfs_register(const struct vfs_fs_ops *ops);
@@ -73,6 +81,19 @@ int  vfs_unmount(int mnt);             /* release a mount (frees FS resources)  
 /* DDR-866: set a file's length. Requires CAP_FS_WRITE — truncate destroys
  * data exactly as a write does, so it is gated as a write, not as metadata. */
 int  vfs_truncate(cap_t cap, struct vfs_file *f, uint64_t len);
+/* DDR-1178 A4: shared file mappings. vfs_ident: 0 and *out = the file's
+ * ident, or -ENODEV. vfs_shared_write: 1 if the mount overwrites in place.
+ * vfs_write_prepay: take `len` bytes from the caller's ADR-032 write bucket
+ * up front (-EAGAIN when short). vfs_write_prepaid: vfs_write without the
+ * bucket, for write-back whose bytes were prepaid at mmap or msync; it may run
+ * in a thread other than the mapper's (wait4, the reaper). */
+int  vfs_ident(const struct vfs_file *f, uint64_t *out);
+int  vfs_shared_write(int mnt);
+int  vfs_write_prepay(uint64_t len);
+int  vfs_write_prepaid(struct vfs_file *f, uint64_t off, const void *buf, uint32_t len);
+/* DDR-1178 A4.8: CAP_FS_WRITE on `cap` in the CALLER's table. Called at mmap,
+ * in the mapper's own context; write-back never re-resolves the handle. */
+int  vfs_write_authorized(cap_t cap);
 const char *vfs_fs_name(int mnt);      /* mounted FS name for a mount id, or NULL */
 
 /* Atomic transactions (capability-gated, CAP_FS_WRITE). FS drivers that do not

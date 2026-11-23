@@ -85,6 +85,12 @@ void sig_raise(struct tcb *t, int sig, int32_t pid, int32_t code, int32_t status
  * must return -EINTR. Ignored and default-action signals do not interrupt
  * (SIGKILL is handled separately at yield(), DDR-1090). */
 int  signal_interruptible(const struct tcb *t);
+/* DDR-1181 A1.3: SIGKILL is pending (it has no handler, so the above misses it). */
+int  signal_kill_pending(const struct tcb *t);
+/* DDR-1188 A2-3: an unmasked signal whose default action terminates (SIGTERM,
+ * SIGPIPE; DDR-805) is pending with no handler. signal_deliver would end the
+ * thread on the way out, so a wait should return and let it. */
+int  signal_fatal_pending(const struct tcb *t);
 /* Reset caught handlers to default at exec (POSIX); mask and pending survive. */
 void signal_exec_reset(struct tcb *t);
 /* Copy dispositions and mask at fork (POSIX); pending is NOT inherited. */

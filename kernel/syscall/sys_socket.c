@@ -95,7 +95,7 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
      *    the flag override the control the operator just set. The refusal is
      *    audited with the sovereign's own pid, so the attempt stays visible. */
     if (aether_privacy_active()) {
-        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+        aether_audit(current_thread->tgid, ACTION_NET_CONNECT,
                      AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
                      AR_PRIVACY_BLOCKED);
         return -EPERM;
@@ -104,7 +104,7 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
      * sovereign operator passes for diagnostics. Everyone else: audited -EPERM
      * (the AETHER pattern — denial is logged, the caller survives). */
     if (!current_thread->is_net && !current_thread->is_sovereign) {
-        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+        aether_audit(current_thread->tgid, ACTION_NET_CONNECT,
                      AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2), AR_CAP_DENIED);
         return -EPERM;
     }
@@ -112,7 +112,7 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
      * the sovereign operator bypasses it. Audited like every denial. */
     if (!current_thread->is_sovereign &&
         netallow_check((uint32_t)a1, (uint16_t)a2) != 0) {
-        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+        aether_audit(current_thread->tgid, ACTION_NET_CONNECT,
                      AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2), AR_CAP_DENIED);
         return -EPERM;
     }
@@ -133,7 +133,7 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
     if (current_thread->is_sovereign &&
         (!current_thread->is_net ||
          netallow_check((uint32_t)a1, (uint16_t)a2) != 0)) {
-        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+        aether_audit(current_thread->tgid, ACTION_NET_CONNECT,
                      AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
                      AR_SOVEREIGN_BYPASS);
     }
@@ -152,12 +152,12 @@ static long sys_sock_connect(long a1, long a2, long a3, long a4, long a5, long a
     if (!(current_thread->is_sovereign &&
           (!current_thread->is_net ||
            netallow_check((uint32_t)a1, (uint16_t)a2) != 0))) {
-        aether_audit(current_thread->pid, ACTION_NET_CONNECT,
+        aether_audit(current_thread->tgid, ACTION_NET_CONNECT,
                      AETHER_DEST_ID((uint32_t)a1, (uint16_t)a2),
                      AR_NET_CONNECT);
     }
 
-    int h = psock_connect((uint32_t)a1, (uint16_t)a2, current_thread->pid);
+    int h = psock_connect((uint32_t)a1, (uint16_t)a2, current_thread->tgid);
     return (h < 0) ? -EMFILE : (long)h;           /* no free socket / net down */
 }
 
@@ -194,9 +194,9 @@ static int privacy_refuses_io(long handle) {
         return 0;
     uint32_t host_be = 0;
     uint16_t port = 0;
-    (void)psock_dest((int)handle, current_thread->pid,
+    (void)psock_dest((int)handle, current_thread->tgid,
                      current_thread->is_sovereign, &host_be, &port);
-    aether_audit(current_thread->pid, ACTION_NET_EGRESS,
+    aether_audit(current_thread->tgid, ACTION_NET_EGRESS,
                  AETHER_DEST_ID(host_be, port), AR_PRIVACY_BLOCKED);
     return 1;
 }
@@ -215,7 +215,7 @@ static long sys_sock_write(long a1, long a2, long a3, long a4, long a5, long a6)
     if (copyin(kbuf, (const void __user *)a2, (size_t)len) < 0)
         return -EFAULT;
     /* DDR-987 sec.10: authority is checked inside psock_write, under the lock. */
-    int n = psock_write((int)a1, current_thread->pid,
+    int n = psock_write((int)a1, current_thread->tgid,
                         current_thread->is_sovereign, kbuf, len);
     /* DDR-988 sec.10: was `(n < 0) ? -EIO : n`, which flattened a STALE handle
      * into -EIO -- the read and close paths return -EBADF for the same case. */
@@ -234,7 +234,7 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
 
     uint64_t deadline = g_ticks + (timeout_ms + 9u) / 10u;   /* PIT @100 Hz */
     for (;;) {
-        int n = psock_read(slot, current_thread->pid,
+        int n = psock_read(slot, current_thread->tgid,
                            current_thread->is_sovereign, kbuf, len);
         if (n < 0)
             return sock_err(n);               /* -EPERM vs -EBADF (DDR-731) */
@@ -243,7 +243,7 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
                 return -EFAULT;
             return (long)n;
         }
-        int st = psock_state(slot, current_thread->pid,
+        int st = psock_state(slot, current_thread->tgid,
                              current_thread->is_sovereign);
         if (st < 0)
             return sock_err(st);
@@ -262,7 +262,7 @@ static long sys_sock_read(long a1, long a2, long a3, long a4, long a5, long a6) 
 static long sys_sock_close(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a5; (void)a6;
     (void)a2; (void)a3; (void)a4;
-    int rc = psock_close((int)a1, current_thread->pid,
+    int rc = psock_close((int)a1, current_thread->tgid,
                          current_thread->is_sovereign);
     if (rc < 0)
         return sock_err(rc);                  /* -EPERM vs -EBADF (DDR-731) */
@@ -282,7 +282,7 @@ static long sys_net_allow(long a1, long a2, long a3, long a4, long a5, long a6) 
     (void)a5; (void)a6;
     (void)a3; (void)a4;
     if (!current_thread->is_sovereign) {
-        aether_audit(current_thread->pid, 0, 0, AR_CAP_DENIED);
+        aether_audit(current_thread->tgid, 0, 0, AR_CAP_DENIED);
         return -EPERM;
     }
     return (netallow_add((uint32_t)a1, (uint16_t)a2) < 0) ? -ENOSPC : 0;
@@ -310,7 +310,7 @@ static long sys_dns_resolve(long a1, long a2, long a3, long a4, long a5, long a6
     uint32_t resolver = (uint32_t)a3 ? (uint32_t)a3 : pdns_default_server();
     if (!resolver) return -ENODEV;                /* no lease, so no resolver */
     uint64_t id = AETHER_DEST_ID(resolver, 53);
-    uint32_t pid = current_thread->pid;
+    uint32_t pid = current_thread->tgid;
 
     if (aether_privacy_active()) {                /* 1. ahead of everything, incl. the bypass */
         aether_audit(pid, ACTION_NET_DNS, id, AR_PRIVACY_BLOCKED);

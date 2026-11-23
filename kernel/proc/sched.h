@@ -10,6 +10,7 @@
 #include "fd.h"
 #include "regs.h"
 #include "spinlock.h"
+#include "lockdep.h"   /* DDR-1209: struct ld_held (LOCKDEP=1 only) */
 #include "signal.h"   /* DDR-1174: struct sig_rec */
 
 typedef void (*thread_fn)(void *);
@@ -40,11 +41,21 @@ enum thread_state {
 struct vm_area {
     uint64_t base;     /* page-aligned start in the user mmap arena */
     uint64_t npages;   /* length in pages; 0 = free slot            */
+    int32_t  shm;      /* DDR-1178 A2.2: attached segment object + 1; 0 = none */
+    int32_t  shm_ro;   /* 1 if attached SHM_RDONLY (mprotect may not add write) */
+    uint32_t pgoff;    /* DDR-1178 A4.3: first object page this area maps    */
+    uint16_t x_ok;     /* DDR-1189 A3 P3a-1 (L1): mapped from a read-only fd,
+                        * MAP_PRIVATE, so it may be executable               */
+    uint16_t ever_w;   /* L1: writable at some time; never executable again  */
+    uint64_t wcap;     /* DDR-1178 A4.3 (D4): the fd's cap_t, captured at mmap,
+                        * for write-back of a FILE object; 0 = read-only area */
 };
 
 /* DDR-872: 4096 covers x87+SSE (512), AVX (576), and the full AVX-512
  * component set (~2688) with margin. Asserted against CPUID.0xD at boot. */
 #define FPU_STATE_MAX 4096u
+
+struct mm;                     /* DDR-1181: kernel/mm/mm.h */
 
 struct tcb {
     uint64_t   rsp;            /* saved stack pointer (offset 0; asm relies on it) */
@@ -74,15 +85,18 @@ struct tcb {
     int        root_mnt;       /* mount paths resolve against (-1 = none)    */
     cap_t      fs_cap;         /* FS capability granted at load (5b)         */
 
-    struct vm_area vma[VM_AREA_MAX];  /* anonymous mmap regions (5b)         */
-    uint64_t   mmap_next;      /* bump pointer for addr==NULL mmaps           */
+    struct mm *mm;             /* DDR-1181: address space (cr3 owner, mmap regions,
+                                * memory charge); NULL for kernel threads (mm.h) */
 
     /* Process model (5b slice 8+). Appended at struct end so the ~30 includers
      * of sched.h keep their field offsets. */
     uint32_t   parent_pid;     /* creating process pid; 0 for kernel threads  */
     int64_t    fork_retval;    /* child's fork() return (0); -1 when unset     */
     int        exit_status;    /* set by sched_exit; collected by wait4 (5b-9) */
-    struct tcb *waiter;        /* parent blocked in wait4 on this thread, or 0 */
+    uint8_t    reap_claimed;   /* DDR-1181 §4.6: a wait4 is reaping this zombie */
+    uint8_t    in_wait4;       /* DDR-1181 §4.6: this thread sleeps in wait4    */
+    uint8_t    wait_pad[6];    /* the old 8-byte `waiter` slot: keeps sig_pending
+                                * and sig_mask where syscall_entry.asm reads them */
 
     /* POSIX signals (PROC-C). */
     uint64_t   sig_pending;      /* bitmap of pending signal numbers          */
@@ -136,8 +150,6 @@ struct tcb {
                                  * NON-NEGOTIABLE 10: kmalloc does not zero, so
                                  * sched_create initialises this explicitly. */
     uint32_t   is_sovereign;    /* 1 = CAP_SOVEREIGN (operator/daemon): mode+approve */
-    uint64_t   mem_limit;       /* hard cap in bytes; 0 -> AETHER_MEM_DEFAULT       */
-    uint64_t   mem_used;        /* charged by mmap growth; uncharged on munmap      */
     uint32_t   sc_count;        /* syscalls issued in the current rate window       */
     uint64_t   sc_window_start; /* g_ticks at the window's open                     */
     /* DDR-1170: per-task budgets, set by SYS_SPAWN_TASK BEFORE the first run.
@@ -251,7 +263,112 @@ struct tcb {
     /* DDR-955: bounded-wait fields */
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
+    struct tcb *kmx_next;        /* DDR-1181: kmutex FIFO wait link (kmutex.c) */
+    /* DDR-1181 P1c: thread groups. tgid is the process id every thread of one
+     * address space reports (getpid); pid stays unique per tcb and is the tid.
+     * is_thread marks a tcb made by SYS_THREAD_CREATE (auto-reaped, never a
+     * wait4 child). clear_tid is the user VA of a u32 the kernel zeroes when
+     * the thread exits (0 = none). */
+    uint32_t   tgid;
+    uint32_t   is_thread;
+    uint64_t   clear_tid;
+    /* DDR-1181 A1.3: the bucket lock while this thread sleeps in FUTEX_WAIT
+     * (0 otherwise), so sig_raise can wake it. Appended last: the pinned
+     * signal offsets above do not move. */
+    spinlock_t *fx_lock;
+    /* DDR-1188 Amendment 3 (C1.5 P2): the one-shot timer budget (T4) and the
+     * CPU whose table holds this thread's pending one-shot (index + 1, 0 =
+     * none). Appended after fx_lock: no pinned offset moves. */
+    uint64_t   hr_win;
+    uint32_t   hr_n;
+    uint32_t   hr_cpu;
+    /* DDR-1186 (C1.4 P1d): the one CPU this thread may run on, -1 = any.
+     * Set only by the thread itself (SYS_SCHED_CPU); never inherited. */
+    int32_t    pin_cpu;
+    /* DDR-1200 §5.2 (C1.4 P5b): the wait lock of this thread's current timed
+     * wait (sched_block_timeout), 0 otherwise. The tick sweep acts on a timed
+     * wait only under this lock. Static storage only (Amendment 2 point 4). */
+    spinlock_t *block_lk;
+    /* DDR-1200 D5: link on the list of tcbs waiting for a grace period before
+     * their memory is freed. Not the ring link: a sweep may still follow ->next. */
+    struct tcb *rcu_next;
+    /* DDR-1188 Amendment 4 (C1.5 P3): scheduling class. Appended last: no
+     * pinned offset moves. Every field has an initialiser in
+     * sched_create_state (kmalloc does not zero). */
+    uint32_t   sched_policy;   /* SCHED_OTHER / SCHED_FIFO / SCHED_RR (S3)       */
+    uint32_t   rt_prio;        /* 1-99 for FIFO and RR, 0 for OTHER              */
+    uint32_t   pi_prio;        /* S6: kmutex inheritance, 0 = not boosted        */
+    uint32_t   rr_left;        /* S5: RR ticks left in the slice                 */
+    uint32_t   rt_head;        /* S2: the next rq_push puts this thread first    */
+    uint32_t   kmx_held;       /* S6: kmutexes this thread holds                 */
+    cap_t      sched_cap;      /* S3: the RES_SCHED handle, CAP_NULL = none      */
+    /* DDR-1188 Amendment 5 (C1.5 P4): SCHED_DEADLINE. Appended last; each has
+     * an initialiser in sched_create_state. Ticks are the pinned CPU's own. */
+    uint32_t   dl_runtime;     /* D2: budget per period, ticks                   */
+    uint32_t   dl_period;      /* D2: period = relative deadline, ticks          */
+    uint64_t   dl_deadline;    /* D3: absolute deadline, ticks of pin_cpu        */
+    uint32_t   dl_left;        /* D3: budget left in this period, ticks          */
+    uint32_t   dl_thr;         /* D3: budget spent; eligible again at deadline   */
+    uint64_t   dl_bw;          /* D4: runtime/period, DL_BW_SHIFT fixed point    */
+    int32_t    dl_cpu;         /* D2: whose ticks dl_deadline counts, -1 = none  */
+    /* DDR-1188 A6 P1: set while this thread is queued by its own yield();
+     * psi_tick does not count it as stalled. Initialised in sched_create_state. */
+    uint32_t   psi_yld;
+#if LOCKDEP
+    /* DDR-1209 D3: the spinlocks this thread holds, checking build only. Last,
+     * so no offset above it moves; initialised in sched_create_state. */
+    struct ld_held ld;
+#endif
 };
+
+/* DDR-1188 Amendment 4 (C1.5 P3). */
+#define SCHED_OTHER   0u
+#define SCHED_FIFO    1u
+#define SCHED_RR      2u
+#define SCHED_RT_MAX  99u
+#define SCHED_DEADLINE 3u      /* DDR-1188 A5 */
+#define SCHED_DL_PRIO 100u     /* A5 D1: a deadline thread outranks FIFO/RR 1-99 */
+#define DL_TICK_NS    10000000ull               /* A5 D2: one tick at 100 Hz */
+#define DL_BW_SHIFT   20
+#define DL_BW_MAX     ((90ull << DL_BW_SHIFT) / 100)   /* K4: 0.90 per CPU */
+#define RR_SLICE      10u      /* K3: 100 ms at the 100 Hz tick (S5)         */
+#define RT_WIN_TICKS  20u      /* S4: RT runs at most RT_WIN_TICKS - 1 of every RT_WIN_TICKS */
+#define SCHED_RES_ID  0x52545343ull   /* "RTSC": one res_id, like RES_EXEC */
+
+/* The effective priority: the higher of the thread's own RT priority and the
+ * one it inherited through a kmutex (S6). Above 0 means "RT" for the picker. */
+static inline uint32_t sched_eff_prio(const struct tcb *t) {
+    uint32_t a = __atomic_load_n(&t->rt_prio, __ATOMIC_RELAXED);
+    uint32_t b = __atomic_load_n(&t->pi_prio, __ATOMIC_RELAXED);
+    return a > b ? a : b;
+}
+/* Threads whose effective priority is above 0, system-wide (S1). 0 = the
+ * pick and the tick take today's path. */
+extern volatile uint32_t g_rt_threads;
+/* S3: the calling thread's own policy. 0, -EINVAL or -EPERM. */
+/* DDR-1188 A6 (C1.5 P5): pressure stall information. Threads waiting for a
+ * virtio-blk read; stalled ticks of the last 100 (res 0 CPU, 1 I/O). */
+extern volatile uint32_t g_psi_io_wait;
+int  psi_read(long res, long cpu);
+
+/* DDR-1188 Amendment 7 (C1.5 P6): tickless idle on the APs. g_nohz is set
+ * after the boot self-checks; sched_iso_set is the probe-only isolate op
+ * (SYS_SCHED_CPU op 6), -1 for the BSP or an absent CPU. */
+extern volatile uint32_t g_nohz;
+int  sched_iso_set(int cpu, int on);
+uint64_t sched_nohz_stat(int cpu, int which);   /* 1 stops, 2 refused, 3 found work */
+int  sched_setsched_self(uint32_t policy, uint32_t prio, uint64_t runtime_ns,
+                         uint64_t period_ns);   /* A5 D5: -EBUSY on admission */
+/* S3: kernel-only grant of RES_SCHED with `rights`. -EPERM for an agent. */
+int  sched_grant(struct tcb *t, uint32_t rights);
+/* S3: sched_grant on the live process `pid`, found and granted under
+ * g_sched_lock (the DDR-1157 pattern). 0, -EPERM, -ESRCH or -EINVAL. */
+int  sched_grant_pid(uint32_t pid, uint32_t rights);
+/* Arm P: the schedclass probe is on (sys_thread.c; set by main.c). */
+extern volatile uint32_t g_sched_probe;
+/* S6: raise t's inherited priority to at least p / drop it to 0. */
+void sched_pi_raise(struct tcb *t, uint32_t p);
+void sched_pi_clear(struct tcb *t);
 
 /* DDR-743: read-only process snapshot for SYS_GETPROCS (ring-3 `ps`). Pure
  * value copy (no pointers), so a caller can copyout it directly. */
@@ -267,11 +384,14 @@ struct procinfo {
 /* Fill *out with the index-th thread in the scheduler ring (walked under
  * g_sched_lock). Returns 1 if filled, 0 if index is past the last thread. */
 int         sched_snapshot(int index, struct procinfo *out);
-/* DDR-1001: wait4's child lookup, walking the all-threads ring UNDER
- * g_sched_lock. sys_wait.c cannot take that lock (it is file-local to sched.c),
- * which is why the walk lives here rather than there. */
-struct tcb *sched_find_child(struct tcb *parent, int pid,
-                             struct tcb **has_live, int *any, int *ringbad);
+/* DDR-1001 / DDR-1181 §4.6: wait4's search, claim and sleep, all under
+ * g_sched_lock (file-local to sched.c, so the loop lives here). Returns a zombie
+ * child CLAIMED for the caller, or NULL with *err = -ECHILD, or -EAGAIN when
+ * `nohang`. */
+struct tcb *sched_wait_child(struct tcb *self, int pid, int nohang, int *err);
+/* Gives back a claim (wait4's status copyout failed) and wakes the process's
+ * other waiters, which skipped the claimed zombie. */
+void        sched_unclaim_child(struct tcb *child);
 
 void        sched_init(void);                                   /* boot ctx -> idle thread */
 struct tcb *sched_create(thread_fn entry, void *arg, const char *name);
@@ -295,6 +415,19 @@ int         sched_rq_walk_ok(void);   /* DDR-996 §5 arm B: runqueue links sane?
 void        sched_vr_sample(uint32_t *cur_pid, uint64_t *cur_vr, uint32_t *cur_pk,
                             uint32_t *head_pid, uint64_t *head_vr, uint32_t *head_pk);
 int         sched_rqfree_probe(int n); /* DDR-996 §5 arm A: force the window   */
+#if ZANCHOR_TEST
+/* DDR-1201 §5 (#115): ticks forced onto an on-CPU zombie that a collector has
+ * already unlinked. Test builds only. */
+struct za_result {
+    uint32_t rounds;                     /* victims per unlink path             */
+    uint32_t reap_held, reap_hit;        /* reaper path: held / took ZA_NEED hits */
+    uint32_t destroy_held, destroy_hit;  /* sched_destroy (wait4) path          */
+    uint32_t hits;                       /* all ticks on an unlinked zombie     */
+    uint32_t escaped;                    /* sweeps that never met their start   */
+    uint32_t aborted;                    /* a round timed out; the rest were not run */
+};
+void        sched_zanchor_probe(uint32_t rounds, struct za_result *out);
+#endif
 void        sched_tick(void);                                   /* from the timer IRQ      */
 void        yield(void);                                        /* cooperative switch      */
 void        sched_ap_enter(void);                               /* cap-2b: AP joins the scheduler (never returns) */
@@ -338,6 +471,15 @@ int sched_rollback_pid(uint32_t pid);   /* DDR-1171: mark + SIGKILL a live rollb
 int         sched_checkpoint_pid(uint32_t pid);                /* DDR-1157: set checkpointed=1 under g_sched_lock; 0 or -ESRCH */
 int         sched_resume_pid(uint32_t pid);                    /* DDR-1157: clear + conditional unblock under g_sched_lock; 0 or -ESRCH */
 void        sched_exit(int status);                             /* zombie + status; wakes waiter */
+/* DDR-1181 P1c: end the calling thread only (SYS_THREAD_EXIT). sched_exit ends
+ * the whole thread group: every other live thread of the same mm is sent
+ * SIGKILL first. For a single-threaded process the two are identical. */
+void        sched_exit_thread(int status);
+/* DDR-1181 P1c: a new thread in `parent`'s address space (SYS_THREAD_CREATE).
+ * Returns its id (read before it is made runnable), or 0 on failure. The tcb
+ * is not returned: once runnable it may exit and be freed at any time. */
+uint32_t    sched_create_user_thread(struct tcb *parent, uint64_t entry, uint64_t stack,
+                                     uint64_t arg, uint64_t tls, uint64_t clear_tid);
 void        sched_start_reaper(void);                           /* spawn the orphan-zombie reaper */
 void        sched_set_init_pid(uint32_t pid);                   /* 5d: designate PID 1 (init) */
 

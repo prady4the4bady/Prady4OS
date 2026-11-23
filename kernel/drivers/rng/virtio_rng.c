@@ -23,6 +23,7 @@
 #include "console.h"
 #include "string.h"
 #include "pmm.h"
+#include "spinlock.h"
 
 #define RNG_QUEUE_SIZE 8u
 #define RNG_BUF_LEN    64u                 /* one draw; callers loop for more */
@@ -31,6 +32,10 @@ static struct virtio_pci_dev g_rdev;
 static struct virtq          g_rq;
 static unsigned              g_source = RNG_NONE;
 static uint64_t              g_buf_phys;   /* identity-mapped bounce page */
+/* Serialises virtio draws: g_rq, its one descriptor and g_buf_phys are shared,
+ * and since DDR-1189 A1 every exec on every CPU draws (Codex on #154). The poll
+ * under it is bounded (S2). */
+static spinlock_t             g_rng_lk = SPINLOCK_INIT;
 
 /* ---- CPU source (x86_64 only) ------------------------------------------- */
 #if defined(__x86_64__)
@@ -173,13 +178,18 @@ int rng_bytes(void *out, uint32_t len) {
 
     if (g_source == RNG_VIRTIO) {
         uint32_t done = 0;
+        int rc = 0;
+        uint64_t fl = spin_lock_irqsave(&g_rng_lk);
         while (done < len) {
             int n = virtio_rng_draw(p + done, len - done);
-            if (n <= 0)
-                return -1;
+            if (n <= 0) {
+                rc = -1;
+                break;
+            }
             done += (uint32_t)n;
         }
-        return 0;
+        spin_unlock_irqrestore(&g_rng_lk, fl);
+        return rc;
     }
 #if defined(__x86_64__)
     if (g_source == RNG_CPU) {

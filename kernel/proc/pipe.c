@@ -10,6 +10,7 @@
 #include "sched.h"
 #include "fd.h"
 #include "vfs.h"          /* struct vfs_file (dup2 of an FD_VFS) */
+#include "shm.h"          /* shm_hold (dup2 of an FD_SHM, DDR-1178 A3) */
 #include "syscall.h"
 #include "uaccess.h"
 #include "kheap.h"
@@ -195,6 +196,8 @@ static long sys_dup2(long a_old, long a_new, long a3, long a4, long a5, long a6)
         /* DDR-787: the dup'd fd inherits its END from the source's flags, so it
          * must be counted on that same side. */
         pipe_incref(ne->pipe, ne->flags == PIPE_WRITE_END);
+    } else if (ne->kind == FD_SHM) {
+        shm_hold(ne->mnt);                  /* DDR-1178 A3.2: one per entry */
     } else if (ne->kind == FD_VFS && ne->file) {
         struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
         if (!nf) { ne->kind = FD_NONE; ne->file = 0; return -ENOMEM; }

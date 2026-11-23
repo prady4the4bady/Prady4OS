@@ -151,13 +151,18 @@ int vmm_cow_fault(uint64_t cr3, uint64_t fault_va) {
  * Replaces the eager 2048-frame-per-process loop the ELF loader used to run
  * (DDR-943: measured pmmfree=2096 of 28630 — one stack's headroom left).
  */
-int vmm_stack_fault(uint64_t cr3, uint64_t fault_va) {
+int vmm_stack_fault(uint64_t cr3, uint64_t fault_va, uint64_t stack_top) {
     uint64_t va = fault_va & ~0xFFFull;
 
-    /* Range test FIRST. The guard page lives at [USER_STACK_BOT - PAGE_SIZE,
-     * USER_STACK_BOT), i.e. strictly BELOW this range, so a guard touch can
-     * never be satisfied here and always falls through to the kill path. */
-    if (va < USER_STACK_BOT || va >= USER_STACK_TOP)
+    /* Range test FIRST, on this address space's stack (DDR-1189 A1 P1-3). The
+     * guard page is the one just below stack_top - USER_STACK_SIZE, strictly
+     * BELOW this range, so a guard touch can never be satisfied here and
+     * always falls through to the kill path. A top outside the range the
+     * layout draw can produce is refused outright. */
+    if (stack_top > USER_STACK_TOP ||
+        stack_top < USER_STACK_TOP - (USER_STACK_ASLR_PAGES - 1) * PAGE_SIZE)
+        return -1;
+    if (va < stack_top - USER_STACK_SIZE || va >= stack_top)
         return -1;
 
     uint64_t *pte = leaf_pte(cr3, va);

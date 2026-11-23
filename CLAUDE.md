@@ -16,7 +16,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 
 ## Authority and work order
 
-- Issue #45 owner comments are the standing authorization (6177490081, 6177525415, 6195615129, 6199670683, 6199872798, 6200777349, 6201120568, 6201467383, 6201619419, 6229808666, 6233854639, 6256077528, 6256365961).
+- Issue #45 owner comments are the standing authorization (6177490081, 6177525415, 6195615129, 6199670683, 6199872798, 6200777349, 6201120568, 6201467383, 6201619419, 6229808666, 6233854639, 6256077528, 6256365961, 6282431738, 6301435736, 6594914166, 6618228303, 6647074754, 6655226539, 6761846242, 6983608675, 6993979920). 6993979920 (Nov 19) is the standing instruction for the rest of V1: build every chunk in checklist order and merge each PR yourself under the five conditions of 6594914166; it lists what still waits for the operator.
 - Work order is `docs/V1_MASTER_CHECKLIST.md`. C11.1 (Rust and build system) stays **last** in build order.
 - Before each step and before each merge, re-check #45 for new owner comments and follow them first.
 - Never idle while an unblocked item exists. Stack the next item while CI runs.
@@ -53,7 +53,7 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 9. **`GLOBAL_FORBIDDEN` (in `tools/qemu_runner/boot_test.sh`) is append-only.**
    - Insert new entries BEFORE the final list line.
    - Never put a comment inside its `printf`.
-   - Verify after any edit with `source <(sed -n '/^GLOBAL_FORBIDDEN=/,/current FAIL.)"$/p' tools/qemu_runner/boot_test.sh)`; the count must be **77**.
+   - Verify after any edit with `source <(sed -n '/^GLOBAL_FORBIDDEN=/,/current FAIL.)"$/p' tools/qemu_runner/boot_test.sh)`; the count must be **78** (DDR-1203 added the 78th).
 10. **DDR numbers.** Before allocating, confirm the number is unused in BOTH `docs/ddr/` and `docs/decisions/` (`ls docs/ddr docs/decisions | grep DDR-<N>`). Free range: **DDR-1178+**.
 11. **`kmalloc` does not zero.** Every new `struct tcb` field needs an explicit initialiser in `sched_create_state`.
 12. **One QEMU at a time.** Pre-flight check: `pgrep -f "[q]emu-system-x86_64"`.
@@ -64,14 +64,14 @@ CLAUDE.md (invariants, history, old backlog tables) is preserved at
 ## Hard-won facts (full list in the archive, §INV)
 
 - **Build:**
-  - `make image` does not always rebuild after a `-D` flag or a `.c` change: remove the `.o` and verify by **hash**, never by size.
+  - `build/kernel.bin` depends on the sources, not on the `.o` files or `KCFLAGS` (`Makefile:490`): a `-D` flag alone does not rebuild it, and removing `.o` files does not either. Touch a kernel source first, then verify by **hash**, never by size (CodeRabbit on #124).
   - `TIMEOUT_S=<n> make smoke-x` is ignored; use `make TIMEOUT_S=<n> smoke-x`.
   - `kputhex` already prints `0x`; `kprintf` does not exist.
-- **Size:** `kernel.bin` is **1,532,298 B** against the 1,572,864 B size gate — **40,566 B of headroom**. `ci-docstate-check` reads this line; keep size and headroom updated together. The basis for the gate is being recorded in its own DDR (operator item 5).
-- **NSI:** max defined 107, next free 108 (verify against `kernel/syscall/syscall.h`).
+- **Size:** `kernel.bin` is **1,704,338 B** against the 1,736,704 B size gate — **32,366 B of headroom** in the default build (printed by CI on `1c2fe07`, the head merged as `d397412`, run [44811275717](https://github.com/prady4the4bady/Prady4OS/actions/runs/44811275717): `kernel: build/kernel.bin (1704338 bytes)`; C1.6 P2, DDR-1189 Amendment 2, #156). **The `RCU_TORTURE=1` build binds:** 1,720,722 B against the 1,736,704 B gate — **15,982 B of headroom** (same run, job `flag-gates (smoke-rcu)`: `kernel: build/kernel.bin (1720722 bytes)`; `LOCKDEP=1` is the same size). Previously measured: 1,700,242 B and 1,716,626 B on `da6ce27` (run 44778658685). Sections are padded to 4 KiB, so a change that crosses a page costs 4,096 B; The gate was raised to 53 chunks by DDR-1183 Amendment 1 (#147 `3971031`), because DDR-1208 (#148) took the binding build past the 52-chunk window; the PT_HI ceiling (image plus BSS at or below phys 0x600000) is build-enforced: the build fails if `__bss_end` lands past it. At a full 53-chunk window with the 324,928 B BSS measured by DDR-1183 A1, image plus BSS ends 35,520 B under it; that is a conservative bound, not either build's own margin, which is 0x600000 minus that build's `__bss_end` physical address. `ci-docstate-check` reads both pairings; keep size and headroom updated together. The gate is the BIOS stage-2 read window (53 chunks), not a design budget; its basis and every coupled number are in DDR-1183 (operator item 5).
+- **NSI:** max defined 124 on this branch (124 `SYS_PSI`, DDR-1188 Amendment 6; 122 `SYS_SCHED_SETSCHED`, 123 `SYS_SCHED_GRANT`, DDR-1188 Amendment 4; 120 `SYS_CLOCK_GETTIME`, 121 `SYS_NANOSLEEP`, DDR-1188 P1 and Amendment 1); 119 is `SYS_MSYNC` (DDR-1178 A4), 112–115 are DDR-1178 A2 SysV (#78), 116 `SYS_SHM_OPEN` is DDR-1178 A3 (#80), 117 `SYS_FUTEX`, 118 `SYS_SCHED_CPU`, so next free is 125 (verify against `kernel/syscall/syscall.h`).
 - **Boot:** PT_HI is implemented twice, in `boot/stage2/stage2.asm` and `boot/uefi/loader.c`; change both together.
 - **`[apfreeze]`** has at least five producers. Resolve its RIP before naming a cause.
-- **Container limits:** this container has no `mkfs.fat`, so most smoke gates cannot boot locally. CI is the evidence.
+- **Container limits:** `mkfs.fat` and QEMU are not preinstalled. `apt-get update && apt-get install -y dosfstools mtools qemu-system-x86` makes smoke gates boot locally (done 2026-11-13; `smoke-rcu` booted). Local runs screen; CI is the evidence.
 
 ## Open defects (do not claim closed)
 

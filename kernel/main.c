@@ -19,6 +19,7 @@
 #include "vmm.h"
 #include "cap.h"
 #include "sched.h"
+#include "rcu.h"           /* DDR-1200: RCU_TORTURE self-test (smoke-rcu) */
 #include "ipc.h"
 #include "bcast.h"
 #include "tss.h"
@@ -35,6 +36,7 @@
 #include "smp.h"
 #include "fault_expect.h"   /* DDR-1040: the one-shot expected-fault latch */
 #include "percpu.h"
+#include "lockdep.h"         /* DDR-1209: LOCKDEP=1 self-test (smoke-lockdep) */
 #include "pcie.h"
 #include "blk.h"
 #include "virtio_blk.h"
@@ -463,12 +465,17 @@ extern const unsigned char actiondeltest_elf[];       /* DDR-1016: 3C ACTION_DEL
 extern const unsigned char actiondeltest_elf_end[];
 extern const unsigned char mprotecttest_elf[];        /* DDR-1031: SYS_MPROTECT */
 extern const unsigned char mprotecttest_elf_end[];
+extern const unsigned char dyntest_elf[];             /* DDR-1189 A1: user ASLR */
+extern const unsigned char dyntest_elf_end[];
 extern const unsigned char killblocktest_elf[];       /* DDR-1090: SIGKILL vs wait */
 extern const unsigned char killblocktest_elf_end[];
 extern const unsigned char sigsemtest_elf[];          /* DDR-1174: signal semantics */
 extern const unsigned char sigsemtest_elf_end[];
 extern const unsigned char shmtest_elf[];             /* DDR-1178: MAP_SHARED anon */
 extern const unsigned char shmtest_elf_end[];
+extern const unsigned char threadtest_elf[], threadtest_elf_end[];   /* DDR-1181 */
+extern const unsigned char schedtest_elf[], schedtest_elf_end[];     /* DDR-1188 P1 */
+extern const unsigned char schedagt_elf[], schedagt_elf_end[];       /* DDR-1188 A4 arm H */
 extern const unsigned char accmodetest_elf[], accmodetest_elf_end[]; /* DDR-1182 */
 extern const unsigned char disktest_elf[], disktest_elf_end[];   /* DDR-1143 sec.10.8 */
 extern const unsigned char domcaptest_elf[], domcaptest_elf_end[]; /* DDR-1149 */
@@ -1540,18 +1547,30 @@ static void part_selftest(cap_t cap) {
     int mbr_ok = n == 2 && mp[0].index == 0 && mp[0].type == 0xEF && mp[0].lba == 64 &&
                  mp[0].count == 128 && mp[0].boot == 0x80 && mp[1].index == 1 &&
                  mp[1].type == 0xDA && mp[1].lba == 192 && mp[1].count == 320;
-    kputs("[part] mbr n="); kputdec((uint64_t)(n < 0 ? 99 : n));
-    kputs(mbr_ok ? " ok\r\n" : " BAD\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] mbr n=");
+      kline_d(&k, (uint64_t)(n < 0 ? 99 : n));
+      kline_s(&k, mbr_ok ? " ok\r\n" : " BAD\r\n");
+      kline_emit(&k); }
     b[511] = 0x00;
     int sig = blk_mbr_parse(b, pd->capacity_sectors, mp);
-    kputs("[part] sig rc="); kputs(sig == -EINVAL ? "-EINVAL" : "accepted"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] sig rc=");
+      kline_s(&k, sig == -EINVAL ? "-EINVAL" : "accepted");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= mbr_ok && sig == -EINVAL;
 
     /* mk */
     int mk1 = blk_part_create((unsigned)rd, 192, 321);
     int mk2 = blk_part_create((unsigned)rd, ~0ull, 1);
-    kputs("[part] mk over="); kputs(mk1 == -EINVAL ? "-EINVAL" : "created");
-    kputs(" wrap="); kputs(mk2 == -EINVAL ? "-EINVAL" : "created"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] mk over=");
+      kline_s(&k, mk1 == -EINVAL ? "-EINVAL" : "created");
+      kline_s(&k, " wrap=");
+      kline_s(&k, mk2 == -EINVAL ? "-EINVAL" : "created");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= mk1 == -EINVAL && mk2 == -EINVAL;
 
     int p1 = blk_part_create((unsigned)rd, 64, 128);
@@ -1571,9 +1590,15 @@ static void part_selftest(cap_t cap) {
     int at192 = b[0] == 0xB2 && b[511] == 0xB2;
     pd->read(pd, 0, b, 1);
     int mbr_intact = b[510] == 0x55 && b[446 + 4] == 0xEF;
-    kputs("[part] off w="); kputdec((uint64_t)(w == 0 ? 0 : 1));
-    kputs(" parent192="); kputs(at192 ? "marker" : "missing");
-    kputs(" sector0="); kputs(mbr_intact ? "intact" : "clobbered"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] off w=");
+      kline_d(&k, (uint64_t)(w == 0 ? 0 : 1));
+      kline_s(&k, " parent192=");
+      kline_s(&k, at192 ? "marker" : "missing");
+      kline_s(&k, " sector0=");
+      kline_s(&k, mbr_intact ? "intact" : "clobbered");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= w == 0 && at192 && mbr_intact;
 
     /* bnd: P1 is 128 sectors, so LBA 128 is P2's first sector in the parent.
@@ -1586,15 +1611,26 @@ static void part_selftest(cap_t cap) {
     memset(b, 0, 512);
     pd->read(pd, 192, b, 1);
     int kept = b[0] == 0xB2;
-    kputs("[part] bnd w128="); kputs(bw == -EINVAL ? "-EINVAL" : "written");
-    kputs(" r127x2="); kputs(br == -EINVAL ? "-EINVAL" : "read");
-    kputs(" r127="); kputdec((uint64_t)(last == 0 ? 0 : 1));
-    kputs(" neighbour="); kputs(kept ? "kept" : "overwritten"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] bnd w128=");
+      kline_s(&k, bw == -EINVAL ? "-EINVAL" : "written");
+      kline_s(&k, " r127x2=");
+      kline_s(&k, br == -EINVAL ? "-EINVAL" : "read");
+      kline_s(&k, " r127=");
+      kline_d(&k, (uint64_t)(last == 0 ? 0 : 1));
+      kline_s(&k, " neighbour=");
+      kline_s(&k, kept ? "kept" : "overwritten");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= bw == -EINVAL && br == -EINVAL && last == 0 && kept;
 
     /* wrap */
     int wr = d2->read(d2, ~0ull, b, 1);
-    kputs("[part] wrap rc="); kputs(wr == -EINVAL ? "-EINVAL" : "read"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] wrap rc=");
+      kline_s(&k, wr == -EINVAL ? "-EINVAL" : "read");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= wr == -EINVAL;
 
     /* sfs: format and mount on P2; P1 must be untouched by it. */
@@ -1607,9 +1643,15 @@ static void part_selftest(cap_t cap) {
         d1->read(d1, s, b, 1);
         for (unsigned k = 0; k < 512; k++) if (b[k] != 0x5A) { p1bad++; break; }
     }
-    kputs("[part] sfs format="); kputdec((uint64_t)(f == 0 ? 0 : 1));
-    kputs(" mount="); kputs(mt >= 0 ? "ok" : "fail");
-    kputs(" p1_dirty="); kputdec(p1bad); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] sfs format=");
+      kline_d(&k, (uint64_t)(f == 0 ? 0 : 1));
+      kline_s(&k, " mount=");
+      kline_s(&k, mt >= 0 ? "ok" : "fail");
+      kline_s(&k, " p1_dirty=");
+      kline_d(&k, p1bad);
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= f == 0 && mt >= 0 && p1bad == 0;
 
     /* DDR-1143 §10.2 -- barrier ORDER at the block interface. The trace device
@@ -1656,10 +1698,17 @@ static void part_selftest(cap_t cap) {
         memcpy(txn, t->log, t->n + 1);
         ttail = trace_tail_ok(t);
     }
-    kputs("[part] trace plain="); kputs(plain[0] ? plain : "-");
-    kputs(" txn="); kputs(txn[0] ? txn : "-");
-    kputs(" tail="); kputs(ptail && ttail ? "ok" : "BAD");
-    kputs(" setup="); kputs(tr_ok ? "ok" : "fail"); kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] trace plain=");
+      kline_s(&k, plain[0] ? plain : "-");
+      kline_s(&k, " txn=");
+      kline_s(&k, txn[0] ? txn : "-");
+      kline_s(&k, " tail=");
+      kline_s(&k, ptail && ttail ? "ok" : "BAD");
+      kline_s(&k, " setup=");
+      kline_s(&k, tr_ok ? "ok" : "fail");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= tr_ok && ptail && ttail;
 
     /* virtio: a flush on a REAL device is accepted, and every flush the
@@ -1672,10 +1721,15 @@ static void part_selftest(cap_t cap) {
         if (vd && vd->name && strcmp(vd->name, "virtio-blk") == 0) { vrc = blk_flush(i); break; }
     }
     virtio_blk_flush_stats(&neg, &iss, &fok);
-    kputs("[part] virtio neg="); kputdec((uint64_t)(neg < 0 ? 9 : neg));
-    kputs(" flush="); kputs(vrc == 0 ? "0" : "FAIL");
-    kputs(" issued=ok="); kputs(iss == fok && iss > 0 ? "yes" : "NO");
-    kputs("\r\n");
+    { kline k; kline_init(&k);                     /* DDR-1055, DDR-1194 */
+      kline_s(&k, "[part] virtio neg=");
+      kline_d(&k, (uint64_t)(neg < 0 ? 9 : neg));
+      kline_s(&k, " flush=");
+      kline_s(&k, vrc == 0 ? "0" : "FAIL");
+      kline_s(&k, " issued=ok=");
+      kline_s(&k, iss == fok && iss > 0 ? "yes" : "NO");
+      kline_s(&k, "\r\n");
+      kline_emit(&k); }
     ok &= neg == 1 && vrc == 0 && iss == fok && iss > 0;
 
     pmm_free_page(pg);
@@ -1803,6 +1857,150 @@ static void install_mark_print(cap_t cap, int mnt) {
 
 static void fs_test_thread(void *arg) {
     cap_t cap = (cap_t)(uintptr_t)arg;
+#if ZANCHOR_TEST
+    /* DDR-1201 §5 (#115), `make smoke-zanchor` only. Run first: the APs are
+     * idle (so they steal the collector and this thread off a held CPU) and
+     * init does not exist yet (so an exiting kernel thread reparents nobody). */
+    {
+        struct za_result zr;
+        unsigned zcpus = smp_online();
+        if (zcpus < 2) {
+            kputs("ZANCHOR FAIL: needs 2 CPUs, the unlink must come from another one\r\n");
+        } else {
+            sched_zanchor_probe(8, &zr);
+            kline k; kline_init(&k);
+            kline_s(&k, "[zanchor] cpus=");          kline_d(&k, zcpus);
+            kline_s(&k, " rounds=");                 kline_d(&k, zr.rounds);
+            kline_s(&k, " reap_held=");              kline_d(&k, zr.reap_held);
+            kline_s(&k, " destroy_held=");           kline_d(&k, zr.destroy_held);
+            kline_s(&k, " hits=");                   kline_d(&k, zr.hits);
+            kline_s(&k, " escaped=");                kline_d(&k, zr.escaped);
+            kline_s(&k, " aborted=");                kline_d(&k, zr.aborted);
+            kline_s(&k, " ring_max=");               kline_d(&k, (uint64_t)ZANCHOR_RING_MAX);
+            kline_s(&k, "\r\n"); kline_emit(&k);
+            /* Arm A: the state #115 needs was produced, on both unlink paths. */
+            kline_init(&k);
+            kline_s(&k, "PRADYOS_ZANCHOR_A reap_hit=");   kline_d(&k, zr.reap_hit);
+            kline_s(&k, " destroy_hit=");                 kline_d(&k, zr.destroy_hit);
+            kline_s(&k, "\r\n"); kline_emit(&k);
+            /* Arm B: every sweep on that state came back to its start. It means
+             * nothing unless arm A held, so it is withheld otherwise. */
+            if (zr.reap_hit != zr.rounds || zr.destroy_hit != zr.rounds) {
+                kputs("ZANCHOR FAIL: the window was not forced; arm B would be vacuous\r\n");
+            } else if (zr.escaped != 0) {
+                kputs("ZANCHOR FAIL: a tick sweep started off the ring and never came back\r\n");
+            } else {
+                kputs("PRADYOS_ZANCHOR_B escaped=0\r\n");
+            }
+        }
+    }
+#endif
+#if RCU_TORTURE
+    /* DDR-1200 §7 (P5a: arms RA, RB, RC), `make smoke-rcu` only. Run before init
+     * exists, while the APs are idle, so each pinned reader owns its CPU. The
+     * lines carry the measured values; the gate matches them exactly, so a
+     * stall line or an RCU FAIL during the run (stalls, fails) also fails it. */
+    {
+        struct rcu_torture_result rr;
+        rcu_torture(RCU_T_SWAPS, &rr);
+        kline k; kline_init(&k);
+        kline_s(&k, "[rcu] cpus=");          kline_d(&k, rr.cpus);
+        kline_s(&k, " swaps=");              kline_d(&k, rr.swaps);
+        kline_s(&k, " poison_seen=");        kline_d(&k, rr.poison_seen);
+        kline_s(&k, " sections_min=");       kline_d(&k, rr.sections_min);
+        kline_s(&k, " stalls=");             kline_d(&k, rr.stalls);
+        kline_s(&k, " fails=");              kline_d(&k, rr.fails);
+        kline_s(&k, " aborted=");            kline_d(&k, rr.aborted);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* Arm RA (and RB: every section is longer than a tick): no reader ever
+         * saw its node change, across every swap, on every CPU. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_A swaps=");  kline_d(&k, rr.swaps);
+        kline_s(&k, " poison_seen=");          kline_d(&k, rr.poison_seen);
+        kline_s(&k, " cpus=");                 kline_d(&k, rr.cpus);
+        kline_s(&k, " stalls=");               kline_d(&k, rr.stalls);
+        kline_s(&k, " fails=");                kline_d(&k, rr.fails);
+        kline_s(&k, " aborted=");              kline_d(&k, rr.aborted);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* Arm RC: a reader ran on every ticking CPU, often enough to matter. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_C seen_cpus=");  kline_d(&k, rr.seen_cpus);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+    }
+    /* DDR-1200 §7 (P5b: arms RD, RE, RF; Amendment 3). Each line starts with
+     * the asserted fields, computed here from the measured values, and ends
+     * with the values themselves as data. stalls and fails cover the whole
+     * run, so a stall line or an RCU FAIL during P5b also fails the gate. */
+    {
+        struct rcu_p5b_result pr;
+        rcu_torture_p5b(&pr);
+        uint64_t sweeps = __atomic_load_n(&g_rcu_sw.sweeps, __ATOMIC_RELAXED);
+        uint64_t tlock  = __atomic_load_n(&g_rcu_sw.tick_lock, __ATOMIC_RELAXED);
+        kline k; kline_init(&k);
+        /* RD: no sweep, on any CPU, ever took g_sched_lock. */
+        kline_s(&k, "PRADYOS_RCU_D tick_lock="); kline_d(&k, tlock);
+        kline_s(&k, " sweeps_ok=");             kline_d(&k, sweeps >= 1000);
+        kline_s(&k, " | sweeps=");              kline_d(&k, sweeps);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* RE: timed waits time out, on time, in every sub-arm. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_E woke=");     kline_d(&k, pr.woke);
+        kline_s(&k, " late_ok=");               kline_d(&k, pr.late_max <= 1);
+        kline_s(&k, " sat_armed=");             kline_d(&k, pr.sat_armed);
+        kline_s(&k, " sat_woke=");              kline_d(&k, pr.sat_woke);
+        kline_s(&k, " sat_late_ok=");           kline_d(&k, pr.sat_late_max <= 1);
+        kline_s(&k, " sat_acts_ok=");           kline_d(&k, pr.sat_acts_max > 32);
+        kline_s(&k, " rewait_ok=");             kline_d(&k, pr.rewait_ok);
+        kline_s(&k, " hol_ok=");                kline_d(&k, pr.hol_woke && pr.hol_late <= 1);
+        kline_s(&k, " churn_ok=");              kline_d(&k, pr.churn_woke && pr.churn_late <= 1 && pr.churn_overlap > 0);
+        kline_s(&k, " rq_woke_ok=");            kline_d(&k, pr.rq_woke_ok);
+        kline_s(&k, " rq_late_ok=");            kline_d(&k, pr.rq_late <= 2);
+        kline_s(&k, " rq_contended_ok=");       kline_d(&k, pr.rq_contended > 0);
+        kline_s(&k, " aborted=");               kline_d(&k, pr.aborted);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* RE, the measured values (data; a kline holds 256 bytes). */
+        kline_init(&k);
+        kline_s(&k, "[rcu] E late_max=");       kline_d(&k, pr.late_max);
+        kline_s(&k, " sat_late_max=");          kline_d(&k, pr.sat_late_max);
+        kline_s(&k, " sat_acts_max=");          kline_d(&k, pr.sat_acts_max);
+        kline_s(&k, " rewait_early=");          kline_d(&k, pr.rewait_early);
+        kline_s(&k, " hol_late=");              kline_d(&k, pr.hol_late);
+        kline_s(&k, " churn_late=");            kline_d(&k, pr.churn_late);
+        kline_s(&k, " churn_waits=");           kline_d(&k, pr.churn_waits);
+        kline_s(&k, " churn_overlap=");         kline_d(&k, pr.churn_overlap);
+        kline_s(&k, " rq_woke=");               kline_d(&k, pr.rq_woke);
+        kline_s(&k, " rq_rounds=");             kline_d(&k, pr.rq_rounds);
+        kline_s(&k, " rq_late=");               kline_d(&k, pr.rq_late);
+        kline_s(&k, " rq_contended=");          kline_d(&k, pr.rq_contended);
+        kline_s(&k, " sweep_max=");             kline_d(&k, __atomic_load_n(&g_rcu_sw.sweep_max_tsc, __ATOMIC_RELAXED));
+        kline_s(&k, " late_tsc_max=");          kline_d(&k, pr.late_tsc_max);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        kline_init(&k);
+        kline_s(&k, "[rcu] E2 f_armed=");       kline_d(&k, pr.f_armed);
+        kline_s(&k, " f_fin=");                 kline_d(&k, pr.f_fin);
+        kline_s(&k, " f_live=");                kline_d(&k, pr.f_live);
+        kline_s(&k, " spawn_fail=");            kline_d(&k, rcu_torture_spawn_fail());
+        kline_s(&k, " ring_base=");             kline_d(&k, pr.ring_base);
+        kline_s(&k, " settle_max=");            kline_d(&k, pr.settle_max);
+        kline_s(&k, "\r\n"); kline_emit(&k);
+        /* RF: no tcb was freed under a sweep standing on it. */
+        kline_init(&k);
+        kline_s(&k, "PRADYOS_RCU_F rounds=");   kline_d(&k, pr.rounds);
+        kline_s(&k, " bad_node=");              kline_d(&k, __atomic_load_n(&g_rcu_sw.bad_node, __ATOMIC_RELAXED));
+        kline_s(&k, " hold_rounds=");           kline_d(&k, pr.hold_rounds);
+        kline_s(&k, " stalls=");                kline_d(&k, rcu_stalls());
+        kline_s(&k, " fails=");                 kline_d(&k, rcu_fail_bits());
+        kline_s(&k, " | deferred_max=");        kline_d(&k, __atomic_load_n(&g_rcu_sw.deferred_max, __ATOMIC_RELAXED));
+        kline_s(&k, " ring_len_max=");          kline_d(&k, __atomic_load_n(&g_rcu_sw.ring_len_max, __ATOMIC_RELAXED));
+        kline_s(&k, " zhits=");                 kline_d(&k, __atomic_load_n(&g_rcu_sw.rf_zhits, __ATOMIC_RELAXED));
+        kline_s(&k, "\r\n"); kline_emit(&k);
+    }
+#endif
+#if LOCKDEP
+    /* DDR-1209 D7 (`make smoke-lockdep` only): arms LB-LE, while the APs are
+     * idle and before init, as the RCU self-test above; then ldsum. */
+    lockdep_selftest();
+#endif
     int mnt = -1, blk = -1;
     int inst_root = disk_root_select();
     for (unsigned j = 0; j < blk_count(); j++) {
@@ -2134,6 +2332,23 @@ static void fs_test_thread(void *arg) {
                 smpsched_proof();    /* ADR-031 cap-2b: a ring thread runs on an AP */
                 smppreempt_proof();  /* ADR-031 cap-3: an AP's timer preempts */
                 smpresched_proof();  /* DDR-SMP-rq-3: unblock kicks an idle AP */
+                /* DDR-1188 A7 (C1.5 P6). T2 (a): APs may stop their tick when
+                 * idle only after the proofs above measured a ticking AP.
+                 * T8: report the frequency-control features; no control. */
+                __atomic_store_n(&g_nohz, 1, __ATOMIC_RELEASE);
+                {
+                    uint32_t a, b, c, d;
+                    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0u), "c"(0u));
+                    uint32_t maxl = a, hwp = 0;
+                    if (maxl >= 6) {
+                        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(6u), "c"(0u));
+                        hwp = (a >> 7) & 1u;
+                    }
+                    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1u), "c"(0u));
+                    kputs("[cpufreq] hwp="); kputdec(hwp);
+                    kputs(" eist="); kputdec((c >> 7) & 1u);
+                    kputs(" nohz=1\r\n");
+                }
                 /* DDR-734: egress-allowlist match/deny self-test. Install one
                  * test rule directly (kernel-side; ring 3 uses SYS_NET_ALLOW)
                  * and prove exact-match allow + wrong-host/port deny. The rule
@@ -3074,6 +3289,59 @@ static void fs_test_thread(void *arg) {
                  * touches no files, so it neither needs the writable SFS root
                  * nor belongs in the DDR-967 umount wait. Not an agent: it
                  * exercises a plain POSIX syscall, not the AETHER surface. */
+                /* DDR-1181 (C1.4 P1): threads. FAT-rooted and NOT in smnt_pid:
+                 * it creates no file on the SFS root. Opt-in: it forks 34
+                 * children and runs spinning threads on every vCPU, which would
+                 * perturb every timing-sensitive gate if it ran each boot. */
+                if (probe_enabled("thread")) {
+                    kheap_large_selftest(300);  /* DDR-1207 arm KL (#135) */
+                    struct tcb *th = 0;
+                    uint64_t thlen = (uint64_t)(uintptr_t)threadtest_elf_end -
+                                     (uint64_t)(uintptr_t)threadtest_elf;
+                    if (elf_load((void *)(uintptr_t)threadtest_elf, thlen,
+                                 "THREADTEST", &th) == ELF_OK && th) {
+                        sched_unblock(th);
+                        kputs("[user] thread probe spawned\r\n");
+                    } else {
+                        kputs("[user] thread probe FAILED to load\r\n");
+                    }
+                }
+                /* DDR-1188 (C1.5 P1): smoke-schedclass. FAT-rooted, not in
+                 * smnt_pid: it touches no files. Opt-in: it pins spinning
+                 * threads to CPU 0 and CPU 1 for several seconds. */
+                if (probe_enabled("schedclass")) {
+                    struct tcb *sc = 0;
+                    uint64_t sclen = (uint64_t)(uintptr_t)schedtest_elf_end -
+                                     (uint64_t)(uintptr_t)schedtest_elf;
+                    if (elf_load((void *)(uintptr_t)schedtest_elf, sclen,
+                                 "SCHEDTEST", &sc) == ELF_OK && sc) {
+                        /* Arm H: a second, agent copy with no RES_SCHED. It is
+                         * loaded and marked an agent while SCHEDTEST is still
+                         * blocked, so SCHEDTEST can never find it without
+                         * is_agent and grant it RT (CodeRabbit on #138). */
+                        struct tcb *sa = 0;
+                        uint64_t salen = (uint64_t)(uintptr_t)schedagt_elf_end -
+                                         (uint64_t)(uintptr_t)schedagt_elf;
+                        int sa_ok = elf_load((void *)(uintptr_t)schedagt_elf, salen,
+                                             "SCHEDAGT", &sa) == ELF_OK && sa;
+                        if (sa_ok)
+                            sa->is_agent = 1;       /* authority BEFORE anyone runs */
+                        /* DDR-1188 A4 S3: this launcher plays init (K1). It
+                         * grants RES_SCHED, with the right to grant on, to
+                         * the probe only, and opens the arm-P test hooks. */
+                        g_sched_probe = 1;
+                        if (sched_grant(sc, CAP_SCHED_RT | CAP_SCHED_GRANT) != 0)
+                            kputs("[user] schedclass RES_SCHED grant FAILED\r\n");
+                        sched_unblock(sc);
+                        kputs("[user] schedclass probe spawned\r\n");
+                        if (sa_ok)
+                            sched_unblock(sa);
+                        else
+                            kputs("[user] schedclass agent copy FAILED to load\r\n");
+                    } else {
+                        kputs("[user] schedclass probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("mprotect")) {
                     struct tcb *mp = 0;
                     uint64_t mplen = (uint64_t)(uintptr_t)mprotecttest_elf_end -
@@ -3117,13 +3385,17 @@ static void fs_test_thread(void *arg) {
                         kputs("[user] SIGSEM probe FAILED to load\r\n");
                     }
                 }
-                /* DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. */
+                /* DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork.
+                 * A4.5 (P4): FAT-rooted, so arms FA-FG map a FAT32 file (a
+                 * process reaches only its root mount); arms A-T touch no
+                 * files. Root before unblock, as fat32mc. */
                 if (probe_enabled("shm")) {
                     struct tcb *sm = 0;
                     uint64_t smlen = (uint64_t)(uintptr_t)shmtest_elf_end -
                                      (uint64_t)(uintptr_t)shmtest_elf;
                     if (elf_load((void *)(uintptr_t)shmtest_elf, smlen,
                                  "SHMTEST", &sm) == ELF_OK && sm) {
+                        sm->root_mnt = mnt;
                         sched_unblock(sm);
                         kputs("[user] SHM probe spawned\r\n");
                     } else {
@@ -3135,6 +3407,19 @@ static void fs_test_thread(void *arg) {
                  * resolves against the PROCESS root (the same reason
                  * /EXECTEST.ELF lives there). Not in smnt_pid: it touches no
                  * files on the SFS root. */
+                /* DDR-1189 Amendment 1 (C1.6 P1): smoke-dynlink arms A and B. */
+                if (probe_enabled("dynlink")) {
+                    struct tcb *dy = 0;
+                    uint64_t dylen = (uint64_t)(uintptr_t)dyntest_elf_end -
+                                     (uint64_t)(uintptr_t)dyntest_elf;
+                    if (elf_load((void *)(uintptr_t)dyntest_elf, dylen,
+                                 "DYNTEST", &dy) == ELF_OK && dy) {
+                        sched_unblock(dy);
+                        kputs("[user] user ASLR probe spawned\r\n");
+                    } else {
+                        kputs("[user] DYNTEST probe FAILED to load\r\n");
+                    }
+                }
                 if (probe_enabled("argv")) {
                     struct tcb *av = 0;
                     uint64_t avlen = (uint64_t)(uintptr_t)argvtest_elf_end -
@@ -3974,11 +4259,15 @@ static void fs_test_thread(void *arg) {
 
 static void sched_demo(void) {
     uint64_t tsc_hz = calibrate_tsc_hz();
+    vdso_time_init(tsc_hz);                   /* DDR-1188 K7: CLOCK_MONOTONIC on the TSC */
     kputs("NEXUS: TSC ~");
     kputdec(tsc_hz / 1000000);
     kputs(" MHz\r\n");
 
     sched_init();
+#if LOCKDEP
+    lockdep_init();                           /* DDR-1209 D3: no-op if already on */
+#endif
     /* DDR-949: sched_create returns NULL on TCB/stack kmalloc failure. Unchecked,
      * bench_ctx_switch below would measure a context switch against a partner
      * that does not exist and report a bogus number as a real measurement. */
@@ -4803,6 +5092,8 @@ void kmain(struct boot_info *bi) {
     /* DDR-804: read the boot-time probe list before anything can consult it.
      * Two port reads, no wait, no allocation; fails closed when absent. */
     fwcfg_init();
+    if (probe_enabled("mapguard"))       /* DDR-1203: smoke-mapguard; after vmm_test filled slot 256 */
+        vmm_mapguard_probe();
     if (probe_enabled("kimg"))           /* DDR-1143 §10.4: before any FS work */
         kimg_probe();
 
@@ -4861,6 +5152,9 @@ void kmain(struct boot_info *bi) {
         kputdec(pc ? pc->apic_id : 999);
         kputs("\r\n");
         tlb_cpu_ready();                 /* DDR-1177: BSP can take the 0xF0 IPI */
+#if LOCKDEP
+        lockdep_init();                  /* DDR-1209 D3: before any AP takes a lock */
+#endif
         smp_start_aps();                 /* ADR-029: INIT-SIPI; APs idle for jobs */
         /* DDR-SMP-3c-alpha: prove cross-CPU dispatch — one job per AP. */
         unsigned jobs = 0;

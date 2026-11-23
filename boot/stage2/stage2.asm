@@ -76,7 +76,7 @@ BOOT_MAGIC  equ 0x59445250     ; 'PRDY'
 KIMG_PHYS   equ 0x00800000     ; 8 MiB, below the 16 MiB PMM floor
 KIMG_MAGIC  equ 0x474D494B     ; 'KIMG'
 KIMG_SRC    equ 1              ; KIMG_SRC_BIOS
-KIMG_SIZE   equ 48 * 0x8000    ; the read window; stage2 never learns the file size
+KIMG_SIZE   equ 53 * 0x8000    ; the read window; stage2 never learns the file size (DDR-1183)
 KIMG_CHECK  equ KIMG_MAGIC ^ KIMG_SRC ^ KIMG_PHYS ^ KIMG_SIZE   ; hi words and reserved are 0
 
 stage2_start:
@@ -185,6 +185,32 @@ enable_a20:
 ; than 56 or 64 -- at 64 the window alone equals the whole 2 MiB span, leaving
 ; zero room for BSS. All enforced by the Makefile.
 ;
+; DDR-1183: 48 -> 52 chunks = 1,703,936 B. kernel.bin had reached 1,540,490 B
+; (32,374 B of headroom) with two more probes pending that need ~20 KiB. The
+; same coupled numbers, re-checked:
+;   1. this chunk count and KIMG_SIZE above   52 x 64 x 512        [CHANGED]
+;   2. the Makefile size gate                 1,572,864 -> 1,703,936 [CHANGED]
+;      (the Makefile now also asserts 1 == 2 / 32 KiB, and KIMG_SIZE == 1)
+;   3. the disk image                         2 MiB, UNCHANGED (holds 63 chunks)
+;   4. DDR-831 scratch sector 4095            UNCHANGED: the read ends at LBA 3345
+;   5. installer: 17 + kernel sectors < INST_ESP_LBA (4096)        holds
+;   6. KIMG copy at 8 MiB: 1,703,936 B stays inside its own 2 MiB page and under
+;      the 16 MiB PMM floor; kernel/boot_info.h KIMG_WINDOW follows    [CHANGED]
+;   7. PT_HI (2 MiB): a FULL window plus the BSS measured at this change
+;      (223,414 B) is 1,927,350 B, 169,802 B under the span. The invariant
+;      "the size gate never admits an image PT_HI cannot map" holds; the next
+;      raise past ~54 chunks needs PT_HI extended in stage2.asm AND loader.c.
+;
+; DDR-1183 Amendment 1: 52 -> 53 chunks = 1,736,704 B. The binding
+; RCU_TORTURE=1 build reached 1,704,330 B (DDR-1208 on top of C1.5 P5; .text
+; 23 B past a page). Re-checked: 1 count and KIMG_SIZE 53 [CHANGED]; 2 gate
+; 1,736,704 [CHANGED]; 3 disk 2 MiB unchanged; 4 the read ends at LBA 3409;
+; 5 3409 < 4096 holds; 6 KIMG_WINDOW 0x1A8000, 8 MiB + 0x1A8000 = 0x9A8000,
+; still inside its 2 MiB page [CHANGED]; 7 PT_HI: a full window plus the BSS
+; measured now (324,928 B) ends at phys 0x5F7540, 35,520 B under 0x600000.
+; The Makefile enforces that ceiling on every build; growing past it needs
+; PT_HI extended in stage2.asm AND loader.c.
+;
 ; go_unreal: cache a 4 GiB limit into DS and ES (clobbers AX; call with IF off).
 go_unreal:
     push ds
@@ -212,7 +238,7 @@ load_kernel:
     call puts16
     mov dword [kdst], KERNEL_PHYS
     mov dword [kpdst], KIMG_PHYS
-    mov cx, 48                      ; DDR-960: 32->48 chunks = 1.5 MiB read window
+    mov cx, 53                      ; DDR-1183: 52->53 chunks = 1,736,704 B read window (A1)
 .chunk:
     push cx
     mov si, kernel_dap              ; read 64 sectors -> bounce @0x10000

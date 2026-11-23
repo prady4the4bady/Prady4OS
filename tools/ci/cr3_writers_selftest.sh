@@ -23,15 +23,20 @@ rc=0
 rm -rf "$FIX"
 mkdir -p "$FIX"
 
-# A synthetic tree carrying exactly the pinned set: elf.c 1, sched.c 2,
-# sys_exec.c 1. The bodies are irrelevant to the check and are written as the
-# real ones read, so a human opening a fixture sees why it is shaped this way.
+# A synthetic tree carrying exactly the pinned set: elf.c 1, mm.c 1, tlb.c 1,
+# sched.c 3, sys_exec.c 2 (re-pinned by DDR-1181 P1c). The bodies are
+# irrelevant to the check and are written as the real ones read, so a human
+# opening a fixture sees why it is shaped this way. The tlb.c fixture carries
+# the real file's request-record write but NOT its shootdown, so the base tree
+# is still a "no shootdown" tree for f2 and f4.
 mk_base() {
     local d="$1"
     mkdir -p "$d/kernel/exec" "$d/kernel/proc" "$d/kernel/syscall" "$d/kernel/mm" "$d/user"
     printf 'void f(void){ t->cr3 = as; }\n'                       > "$d/kernel/exec/elf.c"
-    printf 'void g(void){ t->cr3 = 0; }\nvoid h(void){ t->cr3 = child_cr3; }\n' > "$d/kernel/proc/sched.c"
-    printf 'void e(void){ t->cr3        = new_as; }\n'            > "$d/kernel/syscall/sys_exec.c"
+    printf 'void g(void){ t->cr3 = 0; }\nvoid h(void){ t->cr3 = child_cr3; }\nvoid u(void){ t->cr3 = parent->cr3; }\n' > "$d/kernel/proc/sched.c"
+    printf 'void e(void){ t->cr3        = new_as;\n    t->mm->cr3    = new_as; }\n' > "$d/kernel/syscall/sys_exec.c"
+    printf 'void c(void){ mm->cr3       = cr3; }\n'               > "$d/kernel/mm/mm.c"
+    printf 'void r(void){ g_req.cr3 = want; }\n'                  > "$d/kernel/mm/tlb.c"
     printf 'int  q(void){ return t->cr3 == 0; }\n'                > "$d/kernel/mm/vmm.c"
     printf 'int  main(void){ return 0; }\n'                       > "$d/user/probe.c"
 }
@@ -79,15 +84,15 @@ expect "f4 pinned-set-no-shootdown" PASS "$FIX/f4"
 #     zero-guard is UNCONDITIONAL rather than riding on the conjunction
 #     (DDR-1077 §3.3).
 mk_base "$FIX/f5"
-sed -i 's/->cr3/->pgdir/g' "$FIX/f5"/kernel/exec/elf.c "$FIX/f5"/kernel/proc/sched.c "$FIX/f5"/kernel/syscall/sys_exec.c
+sed -i 's/->cr3/->pgdir/g' "$FIX/f5"/kernel/exec/elf.c "$FIX/f5"/kernel/proc/sched.c "$FIX/f5"/kernel/syscall/sys_exec.c "$FIX/f5"/kernel/mm/mm.c
 printf 'void tlb_shootdown(uint64_t va){ }\n' > "$FIX/f5/kernel/mm/tlb.c"
 expect "f5 zero-writers-pattern-broke" FAIL "$FIX/f5"
 
-# 6 — a writer MOVED between files; the TOTAL is still 4. Per-file counts are
+# 6 — a writer MOVED between files; the TOTAL is unchanged (8 since DDR-1181). Per-file counts are
 #     what catch this, and M2 is the mutant that proves the distinction is not
 #     decorative.
 mk_base "$FIX/f6"
-printf 'void g(void){ t->cr3 = 0; }\n'                          > "$FIX/f6/kernel/proc/sched.c"
+printf 'void g(void){ t->cr3 = 0; }\nvoid u(void){ t->cr3 = parent->cr3; }\n' > "$FIX/f6/kernel/proc/sched.c"
 printf 'void f(void){ t->cr3 = as; }\nvoid h(void){ t->cr3 = child_cr3; }\n' > "$FIX/f6/kernel/exec/elf.c"
 expect "f6 writer-moved-between-files" FAIL "$FIX/f6"
 

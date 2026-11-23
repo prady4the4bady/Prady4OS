@@ -239,6 +239,12 @@ static int pd_truncate(void *ctx, struct vfs_file *vf, uint64_t len) {
     return 0;
 }
 
+/* DDR-1178 A4.2: a pdrive file is its table index. */
+static uint64_t pdrive_ident(void *ctx, const struct vfs_file *f) {
+    (void)ctx;
+    return f->cookie;
+}
+
 static const struct vfs_fs_ops pdrive_ops = {
     .name     = "pdrive",
     .mount    = pd_mount,
@@ -249,6 +255,8 @@ static const struct vfs_fs_ops pdrive_ops = {
     .unlink   = pd_unlink,
     .readdir  = pd_readdir,
     .truncate = pd_truncate,
+    .ident = pdrive_ident,     /* DDR-1178 A4.2 */
+    .shared_write = 1,         /* DDR-1178 A4.2: writes in place */
 };
 
 void pdrive_register(void) {

@@ -1690,6 +1690,13 @@ int sfs_selftest_journal(struct blk_device *bd) {
     return result;
 }
 
+/* DDR-1178 A4.2: the inode (cookie) and, for a snapshot version, its root
+ * (dirent_clus), so a file and its snapshot are different objects. */
+static uint64_t sfs_ident(void *ctx, const struct vfs_file *f) {
+    (void)ctx;
+    return (uint64_t)f->cookie | ((uint64_t)f->dirent_clus << 32);
+}
+
 static const struct vfs_fs_ops sfs_ops = {
     .name       = "sfs",
     .mount      = sfs_mount,
@@ -1705,6 +1712,7 @@ static const struct vfs_fs_ops sfs_ops = {
     .txn_abort  = sfs_txn_abort,
     .umount     = sfs_umount,
     .truncate   = sfs_truncate,          /* DDR-866 */
+    .ident = sfs_ident,     /* DDR-1178 A4.2 */
 };
 
 void sfs_register(void) {

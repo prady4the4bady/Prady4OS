@@ -26,9 +26,9 @@ ssize_t copyin(void *kdst, const void __user *usrc, size_t n) {
     uaccess_begin();                    /* DDR-1041: SMAP window opens HERE --
                                          * after validation, so a bad pointer is
                                          * still rejected with AC clear. */
-    memcpy(kdst, (const void *)usrc, n);
+    long rc = uaccess_copy(kdst, (const void *)usrc, n);   /* DDR-1181 §3.7 */
     uaccess_end();
-    return (ssize_t)n;
+    return rc ? rc : (ssize_t)n;
 }
 
 ssize_t copyout(void __user *udst, const void *ksrc, size_t n) {
@@ -39,9 +39,9 @@ ssize_t copyout(void __user *udst, const void *ksrc, size_t n) {
     if (!vmm_user_range_ok(cur_cr3(), (uint64_t)(uintptr_t)udst, (uint64_t)n, 1))
         return -EFAULT;
     uaccess_begin();                    /* DDR-1041 */
-    memcpy((void *)udst, ksrc, n);
+    long rc = uaccess_copy((void *)udst, ksrc, n);         /* DDR-1181 §3.7 */
     uaccess_end();
-    return (ssize_t)n;
+    return rc ? rc : (ssize_t)n;
 }
 
 ssize_t copyinstr(char *kdst, const void __user *usrc, size_t max, size_t *lenout) {
@@ -67,9 +67,12 @@ ssize_t copyinstr(char *kdst, const void __user *usrc, size_t max, size_t *lenou
          * page-table reads — which is precisely the exposure SMAP exists to
          * remove. One stac/clac pair per byte is the honest cost of a
          * byte-at-a-time reader; a bulk reader would pay it once per page. */
+        char c;
         uaccess_begin();
-        char c = *(const volatile char *)(uintptr_t)va;
+        long rc = uaccess_copy(&c, (const void *)(uintptr_t)va, 1);  /* DDR-1181 §3.7 */
         uaccess_end();
+        if (rc)
+            return rc;
         kdst[i] = c;
         if (c == '\0') {
             if (lenout)

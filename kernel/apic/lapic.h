@@ -53,3 +53,33 @@ void lapic_send_nmi(uint32_t dest_id);
  * no locks). All-ones in every field when the LAPIC is not mapped. */
 void lapic_snapshot(uint32_t *lvt, uint32_t *tpr, uint32_t *svr,
                     uint32_t *isr48, uint32_t *irr48);
+
+/* DDR-1188 Amendment 3 (C1.5 P2): one-shot timers on the LAPIC count.
+ *
+ * A CPU's timer stays periodic unless a one-shot is pending before its next
+ * tick (T2). hrt_arm asks for a wake of `t` at `deadline_ns` (CLOCK_MONOTONIC)
+ * on the calling CPU; it returns 1 when a slot was taken and 0 when the sleep
+ * must rely on the tick (table full, budget spent, no LAPIC). The wake goes
+ * through futex_kick, so `t` must register its wait lock in t->fx_lock.
+ *
+ * Lock order (T3): the per-CPU table lock, then the wait lock. Call hrt_arm
+ * before taking the wait lock and hrt_cancel after dropping it, and cancel on
+ * every way out of the wait: a slot must never outlive its sleep.
+ *
+ * hrt_irq is called by the timer vector after the EOI. It returns 1 when this
+ * interrupt is the periodic tick and 0 when it was an early one-shot. */
+struct tcb;
+int  hrt_arm(struct tcb *t, uint64_t deadline_ns);
+void hrt_cancel(struct tcb *t);
+int  hrt_irq(void);
+
+/* DDR-1188 Amendment 7 (C1.5 P6): an idle AP's bounded tick stop. Own CPU,
+ * interrupts off. hrt_nohz_enter programs one one-shot of NOHZ_MAX_TICKS and
+ * returns 1: the count runs to the earliest pending sleeper's deadline when
+ * that comes first. It returns 0 and changes nothing when the timer is in a
+ * one-shot phase, a tick is latched, or a deadline falls in the next tick
+ * (T2 b as built). While stopped, hrt_irq wakes due sleepers and answers 0. hrt_nohz_exit restores the
+ * periodic tick and returns the whole ticks elapsed since entry (T4). */
+#define NOHZ_MAX_TICKS 100u
+int      hrt_nohz_enter(void);
+uint64_t hrt_nohz_exit(void);

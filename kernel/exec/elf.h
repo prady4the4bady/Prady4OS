@@ -46,9 +46,25 @@ struct exec_args {
     uint16_t    envc;
 };
 
+/* DDR-1189 Amendment 1 (P1-2): the layout elf_build_image drew for the image.
+ * The caller stores it in the image's mm (struct mm stack_top, mmap_base). */
+struct user_layout {
+    uint64_t stack_top;   /* USER_STACK_TOP - r16 pages, r16 < 2^16 */
+    uint64_t mmap_base;   /* VMM_MMAP_BASE + r18 pages, r18 < 2^18  */
+};
+
+/* DDR-1189 A3 P3a-3: the filesystem an interpreter is opened through, with
+ * the exec caller's capability. 0 (elf_load, a kernel spawn) refuses an image
+ * with PT_INTERP, which no image the kernel spawns has. */
+struct elf_fs {
+    uint64_t cap;         /* cap_t (cap.h) */
+    int      mnt;
+};
+
 int elf_build_image(const void *image, uint64_t image_len, const char *name,
-                    const struct exec_args *args,
-                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp);
+                    const struct exec_args *args, const struct elf_fs *fs,
+                    uint64_t *out_as, uint64_t *out_entry, uint64_t *out_rsp,
+                    struct user_layout *out_lay);
 
 /* DDR-1085: see the note beside elf_load. args == 0 is identical to elf_load. */
 int elf_load_args(const void *image, uint64_t image_len, const char *name,
@@ -58,11 +74,16 @@ enum elf_err {
     ELF_OK            =  0,
     ELF_E_ARGS        = -1,   /* null/short image                       */
     ELF_E_MAGIC       = -2,   /* not ELF / wrong class / endian / version */
-    ELF_E_MACHINE     = -3,   /* not x86-64 ET_EXEC                      */
+    ELF_E_MACHINE     = -3,   /* not x86-64 ET_EXEC or ET_DYN            */
     ELF_E_PHDR        = -4,   /* program-header table out of bounds      */
     ELF_E_SEGMENT     = -5,   /* segment file/addr range invalid         */
     ELF_E_WX          = -6,   /* segment requested write+execute (W^X)   */
     ELF_E_RANGE       = -7,   /* segment outside the user address range  */
     ELF_E_NOMEM       = -8,   /* out of frames / address space           */
     ELF_E_THREAD      = -9,   /* thread creation failed                  */
+    ELF_E_INTERP      = -10,  /* PT_INTERP refused: no fs, a bad path, or an
+                               * interpreter that cannot be one (DDR-1189 A3) */
+    ELF_E_DYN         = -11,  /* PT_DYNAMIC refused (DDR-1189 A2 P2-2)    */
+    ELF_E_RELOC       = -12,  /* relocation refused (DDR-1189 A2 P2-3)    */
+    ELF_E_ENTRY       = -13,  /* ET_DYN entry not in an X PT_LOAD (P2-2)  */
 };

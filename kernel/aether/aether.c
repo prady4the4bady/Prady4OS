@@ -7,6 +7,7 @@
  */
 #include "aether.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "string.h"
 #include "console.h"
 #include "irq.h"      /* g_ticks */
@@ -71,7 +72,11 @@ void aether_sectest(void) {
         kputs("AETHER_SEC_OOM_SKIP alloc failed\r\n");
     } else {
         memset(fake, 0, sizeof *fake);
-        fake->is_agent = 1; fake->pid = AE_TEST_PID; fake->mem_limit = 4096;
+        struct mm fmm;                     /* DDR-1181: the charge lives in the mm */
+        memset(&fmm, 0, sizeof fmm);
+        fmm.mem_limit = 4096;
+        fake->mm = &fmm;
+        fake->is_agent = 1; fake->pid = AE_TEST_PID;
         if (aether_mem_charge(fake, 8192) < 0)
             kputs("AETHER_SEC_OOM_OK\r\n");              /* AGENT_OOM_KILLED already logged */
 

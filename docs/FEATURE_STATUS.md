@@ -7,6 +7,8 @@ AND is assigned in `tools/ci/gate_shards.txt`. `make ci-shard-check` reads
 **188 gates, 10 shards, 6 excluded**. `kernel.bin` = `d8d48f39c25e0ff9`, 1,483,146 B,
 warning-clean at `-Werror` after a clean rebuild.
 
+**Added 2026-11-12 (DDR-1201, DDR-1200; CodeRabbit on #123): a second way to be gated.** A gate that rebuilds the kernel with a test flag cannot run in a shard, because every shard asserts that `kernel.bin` did not change while its gates ran. Such a gate counts as **gated** when its `smoke-*` target exists in the `Makefile`, it is in `.github/workflows/ci.yml`'s `flag-gates` matrix, and `tools/ci/shard_check.sh` excludes it from the shards with that reason. Three gates use this path: `smoke-zanchor`, `smoke-rcu` and `smoke-lockdep` (DDR-1209).
+
 **Re-measured 2026-10-15 on the combined tree `d201c2c`** (after #43, #44, #46,
 #47 merged without a combined-tree run): `make ci-shard-check` reads **193 gates,
 10 shards, 6 excluded**; `kernel.bin` = `7d429743e211a591`, **1,503,626 B**
@@ -52,13 +54,26 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 |---|---|---|---|
 | SMP bring-up, per-CPU runqueues, stealing, resched IPI | gated | `smoke-smp`, `smoke-smpsched`, `smoke-smppreempt`, `smoke-percpu-sched`, `smoke-resched`, `smoke-rqstress`, `smoke-rqstress-liveness`, `smoke-crosswake` | Multicore scheduling |
 | TCB freed-while-queued fix | gated | `smoke-rqfree` | Reaper cannot free a queued thread |
+| Tick sweep ends when the current thread is off the ring (#115, DDR-1201) | gated in a test build with the window held open (emulated-verified; not verified on real hardware) | `smoke-zanchor` A, B | A timer tick cannot loop forever on a thread that is exiting |
+| Kernel RCU grace periods: IF-off read sections, tick-counter grace periods; first user, the timer-tick timed-wake sweep (DDR-1200, C1.4 P5a and P5b) | gated in a test build (emulated-verified; not verified on real hardware) | `smoke-rcu` RA, RB, RC, RD, RE, RF | Kernel code can read shared structures without a lock and free them only when no reader can still see them. The timer tick now times out waits without taking the scheduler lock, and a thread's memory is freed only after a grace period |
+| Clocks and sleep: `CLOCK_MONOTONIC` and `CLOCK_REALTIME` on the TSC through the vDSO, `SYS_CLOCK_GETTIME` (120), `SYS_NANOSLEEP` (121) (C1.5 P1, DDR-1188) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` A, B, B2, B3 | Time that never goes back; a sleep that never ends early and can be interrupted |
+| One-shot LAPIC timers: a sleep can end between ticks (C1.5 P2, DDR-1188 A3) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` C, M | Sub-tick wake-ups, with a per-thread budget |
+| `SCHED_FIFO` and `SCHED_RR`, the 19-of-20-tick RT throttle, `RES_SCHED` refusals, one-level `kmutex` priority inheritance (C1.5 P3, DDR-1188 A4). Not gated: a successful `RES_SCHED` grant and its spread to threads (Amendment 4) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` D, E, F, G, H, HA, N, P | Real-time threads ahead of the fair class, without starving it |
+| `SCHED_DEADLINE`: EDF with a constant-bandwidth server, admission at 0.90 per CPU, pinned threads (C1.5 P4, DDR-1188 A5) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` I, J, Q | Periodic work with a guaranteed budget |
+| Pressure stall information `some`, per CPU and for virtio-blk reads, `SYS_PSI` (124) (C1.5 P5, DDR-1188 A6). Memory pressure not built (C2.1) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` K, K0, O | Tell whether a CPU or the disk is the bottleneck |
+| Tickless idle on the APs: an idle AP stops its tick, a sleeper on it still wakes at its deadline, and RCU treats it as quiescent; the BSP never stops (C1.5 P6, DDR-1188 A7). Not gated: the 1 s bound as a backstop and the "CPU frequency" CPUID report (Amendment 7) | gated (emulated-verified; not verified on real hardware) | `smoke-schedclass` L, L1, L2 | An idle AP takes no timer interrupts; a sleeper on it still wakes between ticks |
+| Lock-order checking for kernel spinlocks: deadlock detection (DDR-1209, C1.4, #152). The shipped kernel checks nothing; the checking build is `LOCKDEP=1`. The checker freezes at about 240 s, and locks taken after that are not checked | gated in a test build (emulated-verified; not verified on real hardware) | `smoke-lockdep` LA, LB, LC, LD, LE | A lock-order inversion is reported the first time the second order runs, whether the two paths ever met or not. Two locks of one annotated class taken in opposite orders are counted as same-class nesting (D5). The first such event per class prints a `[lockdep] nest` report, and none is reported as an inversion. The gate also runs the thread probe under the checker and requires no inversion in the real kernel |
+| `mprotect` cannot add write to a frame another process maps (#112, DDR-1202) | gated (emulated-verified; not verified on real hardware) | `smoke-mprotect` F, G, H | One process cannot change another's private memory, or the shared vDSO page |
 | OPEN-2 double dispatch (DDR-1139) | gated (fix confirmed) | `[schedcheck]` in GLOBAL_FORBIDDEN | One thread on one CPU at a time |
 | Capability IPC, ring-3 door | gated | `smoke-sendipc` | Agent-to-agent messages |
 | Signals (4), SIGKILL from blocked waits | gated | `smoke-syssignal`, `smoke-kill`, `smoke-killblock`, `smoke-sigpipe` | Stop a runaway process |
 | POSIX signal semantics: mask, SA_SIGINFO, SIGCHLD, EINTR, SA_RESTART, syscall-exit delivery | gated (emulated-verified; not verified on real hardware) | `smoke-sigsem` | Programs can block, inspect and safely restart around signals |
 | `sigprocmask`, `SA_SIGINFO`, `SIGCHLD`, `SA_RESTART` | not started | none | DDR-1090: no EINTR, no mask |
-| pthreads / `CLONE_VM` | not started | none | Blocked on a cross-CPU TLB shootdown that does not exist (DDR-1075, DDR-1077 tripwire) |
-| futex | not started | none | Blocked on shared memory (DDR-1038) |
+| `CLONE_VM` threads, TLS, thread groups (DDR-1181) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` A, B, C, F | Several threads of one program share memory; #76 `3358b35` |
+| `pthr.h`, a native pthreads subset on `psync.h` (DDR-1197) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` PA, PJ, PR, PD, PG, PK, PO | Create, join, detach and reap, guard page, keys, once; freestanding programs only; #111 `2a508d5`. Not gated: a fork during create, a self-detach |
+| Cross-CPU TLB coherence for threads, CPU pinning (DDR-1177, DDR-1186) | gated, QEMU only (not verified on real hardware) | `smoke-thread` P, D, E, M, G | `mprotect`/`munmap` on one CPU is seen by a thread on another; #91 `f0e1bb6` |
+| User mutex, semaphore, condition variable, barrier on futex (`psync.h`, DDR-1193) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` SA, SW, SB, SC, SH, SD | Threads in one program can lock, signal and meet at barriers; #101 `9306963`. SA catches a non-atomic acquire only probabilistically; no timed waits yet |
+| futex: WAIT/WAKE, private and shared keys, timeout, signal wake, CLEARTID wake (DDR-1181 A1) | gated (emulated-verified; not verified on real hardware) | `smoke-thread` FA-FJ | Threads can sleep on a memory word instead of spinning; #81 `cc99745`. Limit: a default-terminate signal other than SIGKILL, with no handler, does not end a FUTEX_WAIT (DDR-1181 A1.3) |
 
 ## Syscalls, files, storage
 
@@ -72,6 +87,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | SFS large files (>16 KiB from ring 3) | not started | none | DDR-1100: blocked on staging chunk and `inline_extents[4]` |
 | ext4 read / write | partial | `smoke-fs-ext4` (read) | Read Linux disks; write not started |
 | virtio-blk multi-queue, MSI-X, integrity | gated | `smoke-blkmq`, `smoke-blk-integrity`, `smoke-msixap` | Disk I/O |
+| virtio-blk: a timed-out request keeps its memory with the device (per-slot bounce buffers; a timed-out slot is held until its late completion) (DDR-1208) | gated (emulated-verified; not verified on real hardware) | `smoke-vblklate` Q, B | A caller may free its buffer after `-EIO`; a late completion cannot write into reused memory |
 | AHCI, NVMe (poll mode) | gated | `smoke-ahci`, `smoke-nvme` | Real SATA / NVMe disks; NVMe completion IRQ deferred |
 | Partitions (MBR) | gated | `smoke-part` | Installed-disk layout |
 
@@ -96,7 +112,9 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | musl libc programs | gated | `smoke-user`, `smoke-smpuser` | Ported C programs |
 | init + service manager | gated | `smoke-init` | Start/supervise services |
 | PRISM shell (pipes, redirection, quoting, erase, jobs, `wait`, `source`, `audit`) | gated | `smoke-shell` | Interactive shell |
-| Dynamic linking | not started | none | — |
+| User-space ASLR: stack top, mmap base and `ET_DYN` image base drawn per exec (DDR-1189 A1 and A2, C1.6 P1 #154, P2 #156) | gated (emulated-verified; not verified on real hardware) | `smoke-dynlink` A, B, C2 | 16 bits for the stack top and 18 each for the mmap base and the PIE base (DDR-1189 L3), fewer than Linux. `ET_EXEC` images stay at their link addresses. The gate runs with virtio-rng; without a hardware source the TSC path runs, which is weak and not called secure |
+| Static PIE: `ET_DYN` without `PT_INTERP`, `R_X86_64_RELATIVE` applied by the loader after a writable-target check, `AT_PHDR`/`AT_ENTRY` for `ET_DYN` (DDR-1189 A2, C1.6 P2, #156) | gated (emulated-verified; not verified on real hardware) | `smoke-dynlink` C1–C5 | `PT_GNU_RELRO` is not enforced; a musl `rcrt1` static PIE is untested; the entry check, the shared-page rule and the other P2-2 refusals are not gated |
+| Dynamic linking: `PT_INTERP`, shared libraries, shared text (C1.6 P3, P4) | not started (P4 needs C2.1) | none | — |
 
 ## Desktop (compositor)
 

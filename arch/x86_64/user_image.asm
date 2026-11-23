@@ -313,6 +313,14 @@ mprotecttest_elf:
     incbin "build/mprotecttest.elf"
 mprotecttest_elf_end:
 
+; DDR-1189 Amendment 1 (C1.6 P1): user ASLR probe; its children exec
+; /DYNTEST.ELF from the FAT image.
+global dyntest_elf
+global dyntest_elf_end
+dyntest_elf:
+    incbin "build/dyntest.elf"
+dyntest_elf_end:
+
 ; DDR-1032: SYS_EXECVE argv/envp launcher. Its target /ARGTEST.ELF lives on the
 ; FAT volume (execve resolves against the process root), not in this image.
 global argvtest_elf
@@ -566,6 +574,21 @@ global shmtest_elf_end
 shmtest_elf:
     incbin "build/shmtest.elf"
 shmtest_elf_end:
+global threadtest_elf
+global threadtest_elf_end
+threadtest_elf:
+    incbin "build/threadtest.elf"
+threadtest_elf_end:
+global schedtest_elf
+global schedtest_elf_end
+schedtest_elf:
+    incbin "build/schedtest.elf"
+schedtest_elf_end:
+global schedagt_elf
+global schedagt_elf_end
+schedagt_elf:
+    incbin "build/schedagt.elf"     ; DDR-1188 A4: arm H's agent copy
+schedagt_elf_end:
 global accmodetest_elf
 global accmodetest_elf_end
 accmodetest_elf:

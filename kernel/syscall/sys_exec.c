@@ -26,6 +26,8 @@
 #include "sys_exec.h"
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
+#include "shm.h"
 #include "fd.h"
 #include "vfs.h"
 #include "elf.h"
@@ -33,6 +35,7 @@
 #include "uaccess.h"
 #include "kheap.h"
 #include "errno.h"
+#include "cpu_mitigations.h"   /* cpu_wrmsr, MSR_IA32_FS_BASE (DDR-1205) */
 #include <stddef.h>
 
 #define PATH_MAX 256
@@ -82,6 +85,14 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     struct tcb *t = current_thread;
     if (t->root_mnt < 0)
         return -ENOENT;                        /* no filesystem to exec from */
+    /* DDR-1181 §3.5: exec replaces the address space every live thread runs
+     * in. POSIX kills the other threads first; P1 refuses instead (P4), which
+     * also keeps t->cr3 constant while the mm is shared. refs, not live
+     * (§4.8 R14): an exited sibling stays on its CPU, in this address space,
+     * until it switches away, and only its reap (after it is off-CPU) drops
+     * its reference. */
+    if (t->mm && __atomic_load_n(&t->mm->refs, __ATOMIC_ACQUIRE) > 1)
+        return -EBUSY;
 
     char kpath[PATH_MAX];
     ssize_t plen = copyinstr(kpath, (const void __user *)(uintptr_t)upath,
@@ -123,11 +134,19 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
     /* Build the new address space. This does NOT touch the current image, so a
      * failure here leaves the caller running unharmed. */
     uint64_t new_as = 0, entry = 0, new_rsp = 0;
-    int rc = elf_build_image(buf, isize, kpath, na > 0 ? &eargs : 0,
-                             &new_as, &entry, &new_rsp);
+    struct user_layout lay;
+    struct elf_fs efs = { t->fs_cap, t->root_mnt };   /* DDR-1189 A3 P3a-3 */
+    int rc = elf_build_image(buf, isize, kpath, na > 0 ? &eargs : 0, &efs,
+                             &new_as, &entry, &new_rsp, &lay);
     kfree(buf);
     if (rc != ELF_OK)
         return -ENOEXEC;
+
+    /* DDR-1178 A4.4: write back the old image's shared file mappings while
+     * its address space is still t->cr3 (mm->cr3 moves to new_as below) and
+     * the filesystem may still block. Only this thread runs in the mm (the
+     * refs check above), so nothing dirties a page after this. */
+    shm_writeback_vmas(t->mm);
 
     /* ---- point of no return: commit the new image (IF is clear here) ---- */
     for (int fd = 3; fd < FD_MAX; fd++)
@@ -135,11 +154,19 @@ static long sys_execve(long upath, long uargv, long uenvp, long a4, long a5, lon
 
     uint64_t old_as = t->cr3;
     t->cr3        = new_as;
+    t->mm->cr3    = new_as;   /* DDR-1181: cached copy and owner written together */
     signal_exec_reset(t);   /* DDR-1174: old handler VAs mean nothing in the new image */
+    t->fs_base = 0;         /* DDR-1205: nor does the old image's thread pointer; */
+    cpu_wrmsr(MSR_IA32_FS_BASE, 0);   /* IF is clear, so no switch reloads it first */
     t->user_rip   = entry;
     t->user_stack = new_rsp;
-    for (int i = 0; i < VM_AREA_MAX; i++) { t->vma[i].base = 0; t->vma[i].npages = 0; }
-    t->mmap_next  = VMM_MMAP_BASE;             /* anon mmap arena reset for the new image */
+    shm_release_vmas(t->mm);   /* DDR-1178 A2.2: the old image's attachments end */
+    for (int i = 0; i < VM_AREA_MAX; i++) { t->mm->vma[i].base = 0; t->mm->vma[i].npages = 0; }
+    /* DDR-1189 A1 P1-2: the new image's drawn layout (it used to be the fixed
+     * VMM_MMAP_BASE here). Mutant D2b puts that back; arm B catches it. */
+    t->mm->stack_top = lay.stack_top;
+    t->mm->mmap_base = lay.mmap_base;
+    t->mm->mmap_next = lay.mmap_base;
 
     /* Activate the new AS before freeing the old one — never free the live CR3. */
     __asm__ volatile("mov %0, %%cr3" :: "r"(new_as) : "memory");

@@ -21,7 +21,7 @@ UEFI_EFI   := build/BOOTX64.EFI
 IMG        := build/pradyos.img
 
 # Phase 2a — NEXUS kernel (flat binary loaded at 0x10000; see ADR-005)
-KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/fast_memset.asm arch/x86_64/ipc_copy.asm \
+KERNEL_ASMS := arch/x86_64/boot.asm arch/x86_64/cpu.asm arch/x86_64/isr.asm arch/x86_64/fast_memcpy.asm arch/x86_64/uaccess_copy.asm arch/x86_64/fast_memset.asm arch/x86_64/ipc_copy.asm \
                arch/x86_64/context.asm arch/x86_64/syscall_entry.asm \
                arch/x86_64/usermode.asm arch/x86_64/user_image.asm arch/x86_64/install_blobs.asm \
                arch/x86_64/ap_boot.asm
@@ -147,6 +147,13 @@ USER_SIGSEM_SRC := user/sigsemtest.c   # DDR-1174: POSIX signal semantics (C1.1)
 USER_SIGSEM_ELF := build/sigsemtest.elf
 USER_SHM_SRC := user/shmtest.c         # DDR-1178: anonymous MAP_SHARED across fork (C1.3)
 USER_SHM_ELF := build/shmtest.elf
+USER_THR_SRC := user/threadtest.c      # DDR-1181: threads sharing one address space (C1.4 P1)
+USER_THR_ELF := build/threadtest.elf
+USER_PTHR_SRC := user/pthrtest.c       # DDR-1197: pthr.h arms, linked into threadtest.elf
+USER_SCHED_SRC := user/schedtest.c     # DDR-1188: scheduler classes, smoke-schedclass (C1.5)
+USER_SCHED_ELF := build/schedtest.elf
+USER_SCHEDAGT_SRC := user/schedagt.c   # DDR-1188 A4: arm H's agent copy (is_agent, no RES_SCHED)
+USER_SCHEDAGT_ELF := build/schedagt.elf
 USER_ACCM_SRC := user/accmodetest.c    # DDR-1182: fd access mode enforced
 USER_ACCM_ELF := build/accmodetest.elf
 USER_DISK_SRC  := user/disktest.c        # DDR-1143 sec.10.8: SYS_DISK_LIST probe
@@ -162,6 +169,21 @@ USER_ARGT_SRC  := user/argtest.asm       # DDR-1032: execve argv/envp receiver
 USER_ARGT_ELF  := build/argtest.elf
 USER_ARGV_SRC  := user/argvtest.c        # DDR-1032: execve argv/envp launcher
 USER_ARGV_ELF  := build/argvtest.elf
+USER_DYN_SRC   := user/dyntest.c         # DDR-1189 A1 (C1.6 P1): user ASLR probe
+USER_DYN_ELF   := build/dyntest.elf
+# DDR-1189 A2 (C1.6 P2): a static PIE and the two images P2 must refuse. On
+# the FAT image only (execve'd by dyntest), not embedded in kernel.bin.
+USER_PIE_SRC   := user/dynpie.c
+USER_PIE_ELF   := build/dynpie.elf
+USER_PBAD_SRC  := user/dynpbad.c
+USER_PINT_ELF  := build/dynpint.elf
+USER_PTXT_ELF  := build/dynptxt.elf
+# DDR-1189 A3 P3a-3 (arm D0): a freestanding interpreter, the program it runs,
+# and an image whose interpreter has a PT_INTERP of its own.
+USER_LDT_SRC   := user/ldtest.c
+USER_LDT_ELF   := build/ldtest.elf
+USER_D0_ELF    := build/dynd0.elf
+USER_PII_ELF   := build/dynpii.elf
 USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
 USER_IPC_ELF   := build/ipctest.elf
 USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
@@ -220,10 +242,14 @@ USER_C_LD      := user/user_c.ld
 USER_C_CFLAGS  := --target=x86_64-elf -ffreestanding -fno-pic -fno-pie -mcmodel=large \
   -nostdinc -nostdlib -Wall -Wextra -Werror \
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
+# DDR-1189 A2: the same, position-independent, for the static-PIE probes.
+USER_PIE_CFLAGS := --target=x86_64-elf -ffreestanding -fPIE -fno-asynchronous-unwind-tables \
+  -nostdinc -nostdlib -Wall -Wextra -Werror \
+  -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
-               kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
-               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/ipc/ipc.c \
-               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
+               kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/mm.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
+               kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/proc/kmutex.c kernel/proc/futex.c kernel/proc/rcu.c kernel/proc/lockdep.c kernel/ipc/ipc.c kernel/ipc/shm.c \
+               kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_thread.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
                kernel/drivers/virtio/virtio.c kernel/drivers/virtio/virtio_pci.c \
                kernel/drivers/blk/blk.c kernel/drivers/blk/virtio_blk.c kernel/drivers/blk/ramdisk.c kernel/drivers/blk/blk_part.c kernel/kimg.c kernel/install/install.c \
@@ -233,7 +259,7 @@ KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
                kernel/drivers/input/ps2kbd.c kernel/drivers/input/virtio_input.c \
                kernel/drivers/rtc/rtc.c \
                kernel/drivers/fwcfg/fwcfg.c \
-               kernel/crypto/sha256.c kernel/crypto/acc.c kernel/crypto/x25519.c kernel/crypto/fe25519.c kernel/crypto/hkdf.c kernel/crypto/aead.c kernel/crypto/ed25519.c kernel/crypto/sha512.c \
+               kernel/crypto/sha256.c kernel/crypto/acc.c kernel/crypto/x25519.c kernel/crypto/fe25519.c kernel/crypto/hkdf.c kernel/crypto/aead.c kernel/crypto/ed25519.c kernel/crypto/sha512.c kernel/crypto/aslr.c \
                kernel/drivers/rng/virtio_rng.c \
                kernel/fs/vfs/vfs.c kernel/fs/fat32/fat32.c kernel/fs/sfs/sfs.c kernel/fs/pdrive/pdrive.c kernel/arch/x86_64/pstate.c \
                kernel/fs/sfs/lz4.c kernel/fs/ext4/ext4.c kernel/exec/elf.c kernel/string.c \
@@ -247,11 +273,11 @@ KERNEL_BIN  := build/kernel.bin
 KERNEL_OBJS := build/boot.o build/cpu.o build/isr.o build/context.o \
                build/syscall_entry.o build/usermode.o build/main.o \
                build/console.o build/idt.o build/irq.o build/pmm.o build/numa.o build/kheap.o \
-               build/vmm.o build/vmm_cow.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/ipc.o \
-               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
+               build/vmm.o build/vmm_cow.o build/mm.o build/tlb.o build/tlb_probe.o build/uaccess.o build/cap.o build/sched.o build/tss.o build/fd.o build/pipe.o build/epoll.o build/signal.o build/kmutex.o build/futex.o build/rcu.o build/lockdep.o build/ipc.o build/shm.o \
+               build/bcast.o build/syscall.o build/sys_io.o build/sys_file.o build/sys_proc.o build/sys_mmap.o build/sys_exec.o build/sys_fork.o build/sys_thread.o build/sys_wait.o build/sys_io_uring.o build/acpi.o build/pcie.o \
                build/virtio_ring.o build/virtio.o build/virtio_pci.o build/blk.o \
-               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
-               build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
+               build/virtio_blk.o build/ramdisk.o build/blk_part.o build/kimg.o build/virtio_net.o build/e1000e.o build/netbuf.o build/virtio_gpu.o build/display.o build/nvme.o build/xhci.o build/ahci.o build/rtc.o build/fwcfg.o build/sha256.o build/sha512.o build/fe25519.o build/x25519.o build/hkdf.o build/aead.o build/ed25519.o build/acc.o build/sys_acc.o build/ags.o build/sys_ags.o build/vault.o build/sys_vault.o build/agentmem.o build/sys_agentmem.o build/sys_checkpoint.o build/sys_rewrite.o build/experiment.o build/sys_experiment.o build/sys_audit.o build/sys_disk.o build/install.o build/install_blobs.o build/sys_ledger.o build/mldsa.o build/virtio_rng.o build/aslr.o build/vfs.o build/fat32.o build/sfs.o build/pdrive.o build/pstate.o build/lz4.o \
+               build/ext4.o build/elf.o build/user_image.o build/string.o build/fast_memcpy.o build/uaccess_copy.o build/fast_memset.o build/ipc_copy.o build/cpu_mitigations.o build/vdso_page.o build/metric_page.o \
                build/aether.o build/aether_queue.o build/aether_audit.o build/aether_mem.o build/sys_aether.o build/sys_socket.o build/sys_fb.o build/sys_input.o build/ps2kbd.o build/virtio_input.o build/sys_surface.o \
                build/lwip_port.o build/lapic.o build/ioapic.o build/smp.o build/percpu.o build/ap_boot.o build/lock_stat.o build/keccak.o
 # Kernel include search paths (so "#include "pmm.h"" resolves after the
@@ -303,6 +329,24 @@ KCFLAGS += -DOPEN2_FORCE_RECYCLE=$(OPEN2_FORCE_RECYCLE)
 OPEN2_FORCE_DD ?= 0
 OPEN2_FORCE_DD_KEEPCAS ?= 0
 KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_FORCE_DD_KEEPCAS)
+# DDR-1201 (#115): the zombie-anchor window, held open. TEST BUILDS ONLY -- 0 in
+# every shipped kernel and in every shard; only `make smoke-zanchor` sets it.
+# ZANCHOR_RING_MAX bounds the tick sweep in that build, so a sweep that started
+# off the ring is counted instead of wedging the boot; 0 removes the bound.
+ZANCHOR_TEST ?= 0
+ZANCHOR_RING_MAX ?= 4096
+KCFLAGS += -DZANCHOR_TEST=$(ZANCHOR_TEST) -DZANCHOR_RING_MAX=$(ZANCHOR_RING_MAX)
+# DDR-1200 sec.7 (C1.4 P5a): the RCU self-test, arms RA, RB, RC. Off in every
+# shipped kernel and in every shard; only `make smoke-rcu` sets it. RCU_T_SWAPS
+# is the writer's swap count, each followed by one grace period.
+RCU_TORTURE ?= 0
+RCU_T_SWAPS ?= 400
+KCFLAGS += -DRCU_TORTURE=$(RCU_TORTURE) -DRCU_T_SWAPS=$(RCU_T_SWAPS)
+# DDR-1209 (C1.4): lock-order checking. Off in every shipped kernel and in every
+# shard (DDR-1047: the spin_lock fast path stays one test-and-set); only
+# `make smoke-lockdep` sets it.
+LOCKDEP ?= 0
+KCFLAGS += -DLOCKDEP=$(LOCKDEP)
 # DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
 # $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
 # produces an IDENTICAL hash -- measured, twice, in two environments. Touch a
@@ -311,7 +355,7 @@ KCFLAGS += -DOPEN2_FORCE_DD=$(OPEN2_FORCE_DD) -DOPEN2_FORCE_DD_KEEPCAS=$(OPEN2_F
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-accmode smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check smoke-accmode
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -457,6 +501,7 @@ kernel: $(KERNEL_BIN)
 # bit-identical and the gate re-ran the OLD image, reproducing a fault that had
 # already been fixed.
 USER_ALL_SRCS := $(wildcard user/*.c) $(wildcard user/*.h) $(wildcard user/*.asm) \
+                 $(wildcard user/include/*.h) \
                  $(wildcard kernel/crypto/*.c) $(wildcard kernel/crypto/*.h) \
                  Makefile
 
@@ -633,6 +678,15 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SIGSEM_ELF) build/sigsemtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_SHM_SRC) -o build/shmtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SHM_ELF) build/shmtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_THR_SRC) -o build/threadtest.o
+	# DDR-1197 P4b: pthr.h arms. -DPTHR_FREESTANDING only here: a freestanding
+	# probe linked with $(USER_LD), never with $(MUSL_CRT)/$(MUSL_LIB) (D3).
+	$(CC) $(USER_C_CFLAGS) -DPTHR_FREESTANDING -c $(USER_PTHR_SRC) -o build/pthrtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_THR_ELF) build/threadtest.o build/pthrtest.o
+	$(CC) $(USER_C_CFLAGS) -Os -c $(USER_SCHED_SRC) -o build/schedtest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHED_ELF) build/schedtest.o
+	$(CC) $(USER_C_CFLAGS) -Os -c $(USER_SCHEDAGT_SRC) -o build/schedagt.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SCHEDAGT_ELF) build/schedagt.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ACCM_SRC) -o build/accmodetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ACCM_ELF) build/accmodetest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_DISK_SRC) -o build/disktest.o
@@ -647,6 +701,23 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGT_ELF) build/argtest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_ARGV_SRC) -o build/argvtest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_ARGV_ELF) build/argvtest.o
+	$(CC) $(USER_C_CFLAGS) -c $(USER_DYN_SRC) -o build/dyntest.o
+	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_DYN_ELF) build/dyntest.o
+	# DDR-1189 A2: a static PIE (no PT_INTERP, RELATIVE relocations only, no text
+	# relocation), one with a PT_INTERP, and one with a text relocation.
+	$(CC) $(USER_PIE_CFLAGS) -c $(USER_PIE_SRC) -o build/dynpie.o
+	$(LD) -pie --no-dynamic-linker -z text -z noexecstack --strip-all -o $(USER_PIE_ELF) build/dynpie.o
+	$(CC) $(USER_PIE_CFLAGS) -c $(USER_PBAD_SRC) -o build/dynpint.o
+	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack --strip-all -o $(USER_PINT_ELF) build/dynpint.o
+	$(CC) $(USER_PIE_CFLAGS) -DDYN_TEXTREL -c $(USER_PBAD_SRC) -o build/dynptxt.o
+	$(LD) -pie --no-dynamic-linker -z notext -z noexecstack --strip-all -o $(USER_PTXT_ELF) build/dynptxt.o
+	# DDR-1189 A3 P3a-3: arm D0. ldtest has no dynamic relocations (the kernel
+	# relocates nothing when an interpreter is present).
+	$(CC) $(USER_PIE_CFLAGS) -c $(USER_LDT_SRC) -o build/ldtest.o
+	$(LD) -pie --no-dynamic-linker -z text -z noexecstack --strip-all -o $(USER_LDT_ELF) build/ldtest.o
+	$(CC) $(USER_PIE_CFLAGS) -DDYN_D0 -c $(USER_PIE_SRC) -o build/dynd0.o
+	$(LD) -pie --dynamic-linker=/LIB/LDTEST.SO -z text -z noexecstack --strip-all -o $(USER_D0_ELF) build/dynd0.o
+	$(LD) -pie --dynamic-linker=/DYNPINT.ELF -z text -z noexecstack --strip-all -o $(USER_PII_ELF) build/dynpint.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_IPC_SRC) -o build/ipctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
@@ -677,7 +748,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_ACCM_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF) $(USER_DYN_ELF) $(USER_PIE_ELF) $(USER_PINT_ELF) $(USER_PTXT_ELF) $(USER_LDT_ELF) $(USER_D0_ELF) $(USER_PII_ELF) $(USER_ACCM_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -685,6 +756,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/isr.asm           -o build/isr.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/context.asm       -o build/context.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/fast_memcpy.asm   -o build/fast_memcpy.o
+	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/uaccess_copy.asm  -o build/uaccess_copy.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/fast_memset.asm   -o build/fast_memset.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/ipc_copy.asm      -o build/ipc_copy.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/syscall_entry.asm -o build/syscall_entry.o
@@ -698,6 +770,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/mm/kheap.c      -o build/kheap.o
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c        -o build/vmm.o
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm_cow.c    -o build/vmm_cow.o
+	$(CC) $(KCFLAGS) -c kernel/mm/mm.c         -o build/mm.o
 	$(CC) $(KCFLAGS) -c kernel/mm/tlb.c        -o build/tlb.o
 	$(CC) $(KCFLAGS) -c kernel/mm/tlb_probe.c  -o build/tlb_probe.o
 	$(CC) $(KCFLAGS) -c kernel/mm/uaccess.c    -o build/uaccess.o
@@ -708,7 +781,12 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/proc/pipe.c     -o build/pipe.o
 	$(CC) $(KCFLAGS) -c kernel/proc/epoll.c    -o build/epoll.o
 	$(CC) $(KCFLAGS) -c kernel/proc/signal.c   -o build/signal.o
+	$(CC) $(KCFLAGS) -c kernel/proc/kmutex.c   -o build/kmutex.o
+	$(CC) $(KCFLAGS) -c kernel/proc/futex.c    -o build/futex.o
+	$(CC) $(KCFLAGS) -c kernel/proc/rcu.c      -o build/rcu.o
+	$(CC) $(KCFLAGS) -c kernel/proc/lockdep.c  -o build/lockdep.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/ipc.c       -o build/ipc.o
+	$(CC) $(KCFLAGS) -c kernel/ipc/shm.c      -o build/shm.o
 	$(CC) $(KCFLAGS) -c kernel/ipc/bcast.c     -o build/bcast.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/syscall.c -o build/syscall.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io.c  -o build/sys_io.o
@@ -717,6 +795,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_mmap.c -o build/sys_mmap.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_exec.c -o build/sys_exec.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_fork.c -o build/sys_fork.o
+	$(CC) $(KCFLAGS) -c kernel/syscall/sys_thread.c -o build/sys_thread.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_wait.c -o build/sys_wait.o
 	$(CC) $(KCFLAGS) -c kernel/syscall/sys_io_uring.c -o build/sys_io_uring.o
 	$(CC) $(KCFLAGS) -c kernel/acpi/acpi.c       -o build/acpi.o
@@ -775,6 +854,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -Ikernel/aether -Ikernel/crypto -c kernel/syscall/sys_ledger.c -o build/sys_ledger.o
 	$(CC) $(KCFLAGS) -Ikernel/crypto -c kernel/crypto/mldsa.c -o build/mldsa.o
 	$(CC) $(KCFLAGS) -c kernel/drivers/rng/virtio_rng.c     -o build/virtio_rng.o
+	$(CC) $(KCFLAGS) -c kernel/crypto/aslr.c               -o build/aslr.o
 	$(CC) $(KCFLAGS) -c kernel/fs/vfs/vfs.c                  -o build/vfs.o
 	$(CC) $(KCFLAGS) -c kernel/fs/fat32/fat32.c             -o build/fat32.o
 	$(CC) $(KCFLAGS) -c kernel/fs/sfs/sfs.c                 -o build/sfs.o
@@ -799,7 +879,11 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 1572864 || { echo "kernel.bin exceeds 1.5 MiB — the stage-2 read window (48x64 sectors from LBA 17; DDR-733, raised by DDR-827 then DDR-960). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 48 chunks a full window plus BSS still fits with 372,864 B to spare, and past ~56 it does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 1736704 || { echo "kernel.bin exceeds 1,736,704 B — the stage-2 read window (53x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, then DDR-1183 A1). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 53 chunks a full window plus the BSS measured by DDR-1183 A1 (324,928 B) still fits with 35,520 B to spare, and a larger window or BSS does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
+	@c=$$(sed -n 's/^ *mov cx, \([0-9]*\) *; DDR-1183.*/\1/p' $(STAGE2_SRC)); \
+	 k=$$(sed -n 's/^KIMG_SIZE *equ \([0-9]*\) \* 0x8000.*/\1/p' $(STAGE2_SRC)); \
+	 g=$$(sed -n 's/.*wc -c < $$(KERNEL_BIN))" -le \([0-9]*\) .*/\1/p' Makefile); \
+	 test -n "$$c" && test -n "$$g" && test "$$c" = "$$k" && test $$(( c * 32768 )) -eq "$$g" || { echo "DDR-1183: the stage-2 chunk count ($$c), its KIMG_SIZE ($$k) and the size gate ($$g B, the -le above) disagree. They are ONE number: chunks x 64 sectors x 512 B. Change all three together."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
 	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
 	 test $$phys -le $$(( 0x600000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x600000 — the 2 MiB PT_HI higher-half span (DDR-733). Extend PT_HI in boot/stage2/stage2.asm (second PT) before growing further."; exit 1; }
@@ -807,8 +891,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
 #   LBA 0  stage1 (512 B MBR)   LBA 1  stage2 (<= 16 sectors)   LBA 17  kernel
-# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 48x64 sectors of the
-# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960) — LBAs
+# Stage 1 loads 16 sectors of Stage 2; Stage 2 bounce-loads 53x64 sectors of the
+# kernel from LBA 17 to 4 MiB (DDR-733, window raised by DDR-960, DDR-1183 and its A1) — LBAs
 # hard-coded in the asm, match here.
 image: $(IMG)
 
@@ -830,8 +914,8 @@ $(IMG): $(STAGE1_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
 	truncate -s 2M $(IMG)          # DDR-827: 1M->2M. DDR-960: this does NOT have to
 	                               # move with every chunk-count raise — from LBA 17
 	                               # a 2 MiB image holds 2,088,448 B, so it covers up
-	                               # to 63 chunks. The 48-chunk window reads to LBA
-	                               # 3089, clear of DDR-831's scratch sector 4095.
+	                               # to 63 chunks. The 52-chunk window (DDR-1183) reads
+	                               # to LBA 3345, clear of DDR-831's scratch sector 4095.
 	dd if=$(STAGE1_BIN) of=$(IMG) bs=512 seek=0  conv=notrunc status=none
 	dd if=$(STAGE2_BIN) of=$(IMG) bs=512 seek=1  conv=notrunc status=none
 	dd if=$(KERNEL_BIN) of=$(IMG) bs=512 seek=17 conv=notrunc status=none
@@ -904,6 +988,16 @@ fat-image: $(KERNEL_BIN)
 	mcopy -i $(FAT_IMG) $(USER_PRISM_ELF) ::/PRISM.ELF
 	# DDR-1032: the execve argv/envp receiver, on the volume execve resolves against.
 	mcopy -i $(FAT_IMG) $(USER_ARGT_ELF) ::/ARGTEST.ELF
+	# DDR-1189 A1: smoke-dynlink's probe execs its own image from here.
+	mcopy -i $(FAT_IMG) $(USER_DYN_ELF) ::/DYNTEST.ELF
+	# DDR-1189 A2: arm C's static PIE and the two images it must see refused.
+	mcopy -i $(FAT_IMG) $(USER_PIE_ELF) ::/DYNPIE.ELF
+	mcopy -i $(FAT_IMG) $(USER_PINT_ELF) ::/DYNPINT.ELF
+	mcopy -i $(FAT_IMG) $(USER_PTXT_ELF) ::/DYNPTXT.ELF
+	mmd   -i $(FAT_IMG) ::/LIB
+	mcopy -i $(FAT_IMG) $(USER_LDT_ELF) ::/LIB/LDTEST.SO
+	mcopy -i $(FAT_IMG) $(USER_D0_ELF) ::/DYND0.ELF
+	mcopy -i $(FAT_IMG) $(USER_PII_ELF) ::/DYNPII.ELF
 	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
@@ -1300,6 +1394,17 @@ smoke-iso-x86: iso
 	@grep -q 'NEXUS KERNEL OK' build/iso_uefi.log || { echo "[iso] FAIL: UEFI arm did not reach the kernel"; tail -20 build/iso_uefi.log; exit 1; }
 	@echo "[iso] UEFI arm OK — one ISO, both boot paths, same sentinel"
 
+# DDR-1192: on a graphics FAIL, print every line the compositor and the surface
+# client wrote, not only the console tail (the 2a49a73 failure left 30 heartbeat
+# lines and nothing from either program). The marker list is read from their
+# sources at gate time, so a new marker is covered without editing this.
+ISO_SURF_MARKS = build/gatelogs/iso_surf_markers.txt
+ISO_SURF_DIAG = { mkdir -p build/gatelogs; \
+	  grep -ohE 'PRADYOS_[A-Z0-9_]+' $(USER_COMP_SRC) $(USER_SURF_SRC) | sort -u > $(ISO_SURF_MARKS); \
+	  echo "[iso-user] compositor + surfacetest lines (DDR-1192):"; \
+	  grep -aFf $(ISO_SURF_MARKS) build/iso_user.log | tail -120; \
+	  echo "[iso-user] $$(grep -acFf $(ISO_SURF_MARKS) build/iso_user.log) such lines; full log: build/iso_user.log"; }
+
 # DDR-972 (fixes DDR-971): the ISO must boot an OS, not just a kernel.
 #
 # smoke-iso-x86 asserts NEXUS KERNEL OK, which prints at line 30 of 145 — about
@@ -1358,8 +1463,8 @@ smoke-iso-userspace: iso
 	@grep -qF 'rm: removed /ISOTEST.TXT' build/iso_user.log || { echo "[iso-user] FAIL: rm did not remove"; tail -30 build/iso_user.log; exit 1; }
 	@# 6. the graphics stack initialises from the ISO when a GPU is present, and
 	@#    a ring-3 client completes a surface lifecycle against it.
-	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; exit 1; }
-	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; exit 1; }
+	@grep -q 'PRADYOS_GPU_FB_OK' build/iso_user.log || { echo "[iso-user] FAIL: no framebuffer from the ISO"; tail -30 build/iso_user.log; $(ISO_SURF_DIAG); exit 1; }
+	@grep -q 'PRADYOS_SURFACE_CLIENT_OK' build/iso_user.log || { echo "[iso-user] FAIL: surface lifecycle"; tail -30 build/iso_user.log; $(ISO_SURF_DIAG); exit 1; }
 	@# 7. lwIP carries real loopback traffic — not just "the NIC linked up".
 	@grep -q 'PRADYOS_NET_LO_OK' build/iso_user.log || { echo "[iso-user] FAIL: no lwIP loopback traffic"; tail -30 build/iso_user.log; exit 1; }
 	@if grep -qiE '\[panic\]|KERNEL PANIC' build/iso_user.log; then echo "[iso-user] FAIL: kernel panic"; tail -30 build/iso_user.log; exit 1; fi
@@ -2268,7 +2373,7 @@ smoke-sysproc: $(IMG) fat-image sfs-image
 # be read, 'OFF REJECTED' needs a6, and the two expect DIFFERENT errno values, so
 # an r8/r9 swap in the marshal fails both instead of passing by symmetry.
 smoke-sysmmap: $(IMG) fat-image sfs-image
-	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP ND REJECTED\nSYSMMAP OFF REJECTED\nSYSMUNMAP OK\nSYSMMAP FILE OK\nSYSMMAP CURSOR OK\nSYSMMAP FILEOFF OK')" \
+	TIMEOUT_S=90 EXTRA_SENTINEL="$$(printf 'SYSMMAP OK\nSYSMMAP WX REJECTED\nSYSMMAP FD REJECTED\nSYSMMAP ND REJECTED\nSYSMMAP OFF REJECTED\nSYSMMAP WRAP REJECTED\nSYSMUNMAP OK\nSYSMMAP FILE OK\nSYSMMAP CURSOR OK\nSYSMMAP FILEOFF OK')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # Phase 5b slice 7 execve gate: the kernel places /EXECTEST.ELF on the FAT32
@@ -3530,11 +3635,14 @@ smoke-usbkbd: $(IMG) fat-image sfs-image
 # DDR-1160 (Fix 4): a late virtio-blk completion must not wake a reused slot.
 # Drives the driver's head/slot bookkeeping on a scratch struct (no device): a
 # real 5 s completion stall cannot be produced on demand under QEMU.
+# DDR-1208: arm Q also asserts the timed-out slot stays held until its late
+# completion frees it (mutant Q1); arm B reads unit 0's boot sector and asserts
+# the data passed through a slot's bounce, not the caller's page (mutant B1).
 smoke-vblklate: $(IMG) fat-image sfs-image
 	@echo "[vblklate] stale-head completion gate (DDR-1160)..."
 	TIMEOUT_S=120 QEMU_PROBES=vblklate \
-	EXTRA_SENTINEL="PRADYOS_VBLKLATE_OK done_stale=0 late=1 done_real=1" \
-	FORBIDDEN_SENTINEL="VBLKLATE FAIL" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_VBLKLATE_OK held=1 done_stale=0 late=1 freed=1 done_real=1\nPRADYOS_VBLKBOUNCE via=1 sig=1')" \
+	FORBIDDEN_SENTINEL="$$(printf 'VBLKLATE FAIL\nVBLKBOUNCE FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-1170: per-task budgets. A sovereign probe spawns four budgeted agent
@@ -3578,6 +3686,126 @@ smoke-part: $(IMG) fat-image sfs-image
 smoke-install: iso
 	@echo "[install] install -> reboot gate (DDR-1143 sec.5/10.9)..."
 	bash tools/qemu_runner/install_test.sh
+
+# DDR-1201 (#115): a timer tick on a ZOMBIE that is still current on its CPU and
+# that a collector on another CPU has already unlinked. Arm A proves that state
+# was produced on both unlink paths (the reaper, and wait4's sched_destroy);
+# arm B proves every tick sweep on it came back to its start.
+#
+# The kernel is REBUILT with ZANCHOR_TEST=1, so this gate is in no shard: every
+# shard asserts that kernel.bin did not change while its gates ran (ci.yml). It
+# runs in the `flag-gates` CI job. KCFLAGS is not a prerequisite of
+# $(KERNEL_BIN), so a source is touched to force the rebuild (the rule at the
+# top of this file). Both sentinels exist only in the flagged build: a stale
+# default kernel fails this gate, it cannot pass it. The default kernel is put
+# back afterwards and must come back with the hash it had.
+#
+# No FORBIDDEN_SENTINEL on purpose. Arm A's line carries the exact counts and
+# arm B's line is printed only when arm A held and no sweep escaped, so every
+# failure is a MISSING required line. That keeps the DDR-785 early exit: a green
+# run stops as soon as both lines are in the log.
+smoke-zanchor: $(IMG) fat-image sfs-image
+	@echo "[zanchor] rebuilding the kernel with ZANCHOR_TEST=1 (DDR-1201)"
+	@mkdir -p build/gatelogs
+	@sha256sum $(KERNEL_BIN) | cut -d' ' -f1 > build/gatelogs/zanchor.default.sha
+	touch kernel/proc/sched.c
+	$(MAKE) image ZANCHOR_TEST=1 ZANCHOR_RING_MAX=$(ZANCHOR_RING_MAX)
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/zanchor.log KEEP_SERIAL=1 \
+	TIMEOUT_S=120 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ZANCHOR_A reap_hit=8 destroy_hit=8\nPRADYOS_ZANCHOR_B escaped=0')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  grep -a '\[zanchor\]\|PRADYOS_ZANCHOR\|ZANCHOR FAIL' build/gatelogs/zanchor.log || true ; \
+	  echo "[zanchor] restoring the default kernel" ; \
+	  touch kernel/proc/sched.c ; \
+	  $(MAKE) image || rc=1 ; \
+	  h=$$(sha256sum $(KERNEL_BIN) | cut -d' ' -f1) ; \
+	  [ "$$h" = "$$(cat build/gatelogs/zanchor.default.sha)" ] || \
+	    { echo "[zanchor] FAIL: the default kernel did not come back with its hash"; rc=1; } ; \
+	  exit $$rc
+
+
+# DDR-1200 sec.7 (C1.4 P5a): kernel RCU, arms RA (no node changes under a reader
+# across RCU_T_SWAPS grace periods), RB (every section is longer than a tick,
+# so it is RA with IF-off sections) and RC (a reader ran on every ticking CPU).
+# Like smoke-zanchor, the kernel is REBUILT with a flag, so the gate is in no
+# shard and runs in ci.yml's `flag-gates` job; the default kernel is put back
+# and must come back with its hash. The FORBIDDEN lines of sec.7 ("[rcu] stall",
+# "RCU FAIL") are counted into arm A's line instead (stalls=0 fails=0): the
+# match is exact, so either one fails the gate, and the DDR-785 early exit is
+# kept (a FORBIDDEN_SENTINEL would turn it off).
+smoke-rcu: $(IMG) fat-image sfs-image
+	@echo "[rcu] rebuilding the kernel with RCU_TORTURE=1 (DDR-1200)"
+	@mkdir -p build/gatelogs
+	@sha256sum $(KERNEL_BIN) | cut -d' ' -f1 > build/gatelogs/rcu.default.sha
+	touch kernel/proc/rcu.c
+	$(MAKE) image RCU_TORTURE=1 RCU_T_SWAPS=$(RCU_T_SWAPS)
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/rcu.log KEEP_SERIAL=1 \
+	TIMEOUT_S=420 QEMU_SMP=4 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_RCU_A swaps=$(RCU_T_SWAPS) poison_seen=0 cpus=4 stalls=0 fails=0 aborted=0\nPRADYOS_RCU_C seen_cpus=4\nPRADYOS_RCU_D tick_lock=0 sweeps_ok=1\nPRADYOS_RCU_E woke=20 late_ok=1 sat_armed=80 sat_woke=80 sat_late_ok=1 sat_acts_ok=1 rewait_ok=20 hol_ok=1 churn_ok=1 rq_woke_ok=1 rq_late_ok=1 rq_contended_ok=1 aborted=0\nPRADYOS_RCU_F rounds=500 bad_node=0 hold_rounds=20 stalls=0 fails=0')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  grep -a '\[rcu\]\|PRADYOS_RCU\|RCU FAIL' build/gatelogs/rcu.log || true ; \
+	  echo "[rcu] restoring the default kernel" ; \
+	  touch kernel/proc/rcu.c ; \
+	  $(MAKE) image || rc=1 ; \
+	  h=$$(sha256sum $(KERNEL_BIN) | cut -d' ' -f1) ; \
+	  [ "$$h" = "$$(cat build/gatelogs/rcu.default.sha)" ] || \
+	    { echo "[rcu] FAIL: the default kernel did not come back with its hash"; rc=1; } ; \
+	  exit $$rc
+
+# DDR-1209 (C1.4): lock-order checking. The kernel is REBUILT with LOCKDEP=1 and
+# runs the thread probe on four CPUs under the checker, so, like smoke-rcu, the
+# gate is in no shard and runs in ci.yml's `flag-gates` job; the default kernel
+# is put back and must come back with its hash. Arms LB-LE are exact lines from
+# the boot self-test. Arm LA is the "[lockdep] final" line: at about 240 s the
+# ldsum thread freezes the checker (nothing is counted after it) and prints the
+# frozen counters, so that line is the state at the end of the run (CodeRabbit
+# on #152). It must exist, it must come after PRADYOS_THREAD_DONE (the freeze
+# came after the workload), and it must show no inversion, recursion, unmatched
+# release, untracked lock or overflow, and the documented heap -> PMM edge
+# recorded (hp=1, the vacuity witness). A real inversion or recursion also
+# prints a FORBIDDEN line (not in GLOBAL_FORBIDDEN: only this build can print
+# it). On a failed boot boot_test.sh keeps the log as lockdep.log.fail-<pid>,
+# and arm LA is read from that capture. A failed LOCKDEP=1 build restores the
+# default kernel before failing.
+smoke-lockdep: $(IMG) fat-image sfs-image
+	@echo "[lockdep] rebuilding the kernel with LOCKDEP=1 (DDR-1209)"
+	@mkdir -p build/gatelogs
+	@sha256sum $(KERNEL_BIN) | cut -d' ' -f1 > build/gatelogs/lockdep.default.sha
+	touch kernel/proc/lockdep.c
+	$(MAKE) image LOCKDEP=1 || { echo "[lockdep] FAIL: the LOCKDEP=1 build failed; restoring the default kernel"; \
+	  touch kernel/proc/lockdep.c ; $(MAKE) image ; exit 1; }
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/lockdep.log KEEP_SERIAL=1 \
+	TIMEOUT_S=300 QEMU_SMP=4 QEMU_PROBES=thread \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_LOCKDEP_B inv=1\nPRADYOS_LOCKDEP_C inv=1\nPRADYOS_LOCKDEP_D overlap=1 inv=0\nPRADYOS_LOCKDEP_E cross=1 inv=1\nPRADYOS_THREAD_DONE')" \
+	FORBIDDEN_SENTINEL="$$(printf 'LOCKDEP INVERSION\nLOCKDEP RECURSION')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) ; \
+	  rc=$$? ; \
+	  L=build/gatelogs/lockdep.log ; \
+	  [ -f $$L ] || L=$$(ls -t build/gatelogs/lockdep.log.fail-* 2>/dev/null | head -1) ; \
+	  L=$${L:-/dev/null} ; \
+	  grep -a '\[lockdep\]\|PRADYOS_LOCKDEP\|LOCKDEP ' $$L || true ; \
+	  s=$$(grep -a '\[lockdep\] final ' $$L | tail -1 | tr -d '\r') ; \
+	  nf=$$(grep -an '\[lockdep\] final ' $$L | tail -1 | cut -d: -f1) ; \
+	  nd=$$(grep -an 'PRADYOS_THREAD_DONE' $$L | tail -1 | cut -d: -f1) ; \
+	  if [ -z "$$s" ] ; then \
+	    echo "[lockdep] FAIL: arm LA, no final summary (the checker never froze)"; rc=1 ; \
+	  else \
+	    [ -n "$$nd" ] && [ "$$nf" -gt "$$nd" ] || \
+	      { echo "[lockdep] FAIL: arm LA, the checker froze before the workload ended (final line $$nf, done line $${nd:-none})"; rc=1; } ; \
+	    for kv in inv=0 rec=0 unmatched=0 untracked=0 ovf=0 hp=1; do \
+	      case " $$s " in *" $$kv "*) ;; \
+	        *) echo "[lockdep] FAIL: arm LA, the final summary lacks $$kv"; rc=1 ;; esac ; \
+	    done ; \
+	  fi ; \
+	  echo "[lockdep] restoring the default kernel" ; \
+	  touch kernel/proc/lockdep.c ; \
+	  $(MAKE) image || rc=1 ; \
+	  h=$$(sha256sum $(KERNEL_BIN) | cut -d' ' -f1) ; \
+	  [ "$$h" = "$$(cat build/gatelogs/lockdep.default.sha)" ] || \
+	    { echo "[lockdep] FAIL: the default kernel did not come back with its hash"; rc=1; } ; \
+	  exit $$rc
 
 smoke-rqfree: $(IMG) fat-image sfs-image
 	@echo "[rqfree] TCB-freed-while-queued gate (DDR-996)..."
@@ -4320,15 +4548,89 @@ smoke-poll: $(IMG) fat-image sfs-image
 smoke-execve-argv: $(IMG) fat-image sfs-image
 	@rm -f build/argv.log
 	@SERIAL_LOG=build/argv.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=argv \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_ARGV_ALIGN=ok\nPRADYOS_ARGC=3\nPRADYOS_ARGV=argtest\nPRADYOS_ARGV=alpha\nPRADYOS_ARGV=beta\nPRADYOS_ENVP=PRADYOSVAR=set\nPRADYOS_ARGV_OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_ARGV_ALIGN=ok\nPRADYOS_ARGC=3\nPRADYOS_ARGV=argtest\nPRADYOS_ARGV=alpha\nPRADYOS_ARGV=beta\nPRADYOS_ENVP=PRADYOSVAR=set\nPRADYOS_EXEC_FS reset=1\nPRADYOS_ARGV_OK')" \
 	FORBIDDEN_SENTINEL="ARGVTEST FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[execve-argv] PASS — $$(grep -a PRADYOS_ARGC build/argv.log | head -1)"
 
+# DDR-1189 Amendment 1 (C1.6 P1): user ASLR. The probe forks four children and
+# each execve()s /DYNTEST.ELF, so every sample comes through execve's commit.
+# Each child prints PRADYOS_DYN_L stack=0x... mmap=0x... . Arm A: the four
+# stack values lie in [USER_STACK_TOP - 256 MiB - 8 MiB, USER_STACK_TOP) and at
+# least 2 differ. Arm B: the four mmap values lie in [VMM_MMAP_BASE,
+# VMM_MMAP_BASE + 1 GiB + 1 MiB) and at least 2 differ. Runs with virtio-rng
+# and requires the primary source ([aslr] source=rng). A false red needs four
+# equal draws: 2^-48 (stack), 2^-54 (mmap). QEMU only.
+smoke-dynlink: $(IMG) fat-image sfs-image
+	@rm -f build/dynlink.log
+	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_D0 base_ok=\nPRADYOS_DYN_D0M base=\nPRADYOS_DYN_R interp2 rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=')" \
+	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@L=build/dynlink.log ; rc=0 ; \
+	  grep -a 'PRADYOS_DYN_L \|\[aslr\]\|aslr:' $$L ; \
+	  n=$$(grep -ac 'PRADYOS_DYN_L stack=0x[0-9a-f]* mmap=0x[0-9a-f]*' $$L) ; \
+	  [ "$$n" = 4 ] || { echo "[dynlink] FAIL: $$n layout lines, want 4"; rc=1; } ; \
+	  sv=$$(grep -ao 'PRADYOS_DYN_L stack=0x[0-9a-f]*' $$L | sed 's/.*stack=//') ; \
+	  mv=$$(grep -ao ' mmap=0x[0-9a-f]*' $$L | sed 's/.*mmap=//') ; \
+	  sd=$$(printf '%s\n' $$sv | sort -u | grep -c .) ; md=$$(printf '%s\n' $$mv | sort -u | grep -c .) ; \
+	  si=0 ; for v in $$sv ; do x=$$(($$v)) ; \
+	    [ $$x -ge $$((0x9000000000 - 0x10800000)) ] && [ $$x -lt $$((0x9000000000)) ] && si=$$((si+1)) ; done ; \
+	  mi=0 ; for v in $$mv ; do x=$$(($$v)) ; \
+	    [ $$x -ge $$((0x8800000000)) ] && [ $$x -lt $$((0x8800000000 + 0x40100000)) ] && mi=$$((mi+1)) ; done ; \
+	  echo "PRADYOS_DYN_A distinct=$$sd inrange=$$si" ; echo "PRADYOS_DYN_B distinct=$$md inrange=$$mi" ; \
+	  [ $$si = 4 ] && [ $$sd -ge 2 ] || { echo "[dynlink] FAIL: arm A, stack tops distinct=$$sd inrange=$$si (want >=2, 4)"; rc=1; } ; \
+	  [ $$mi = 4 ] && [ $$md -ge 2 ] || { echo "[dynlink] FAIL: arm B, mmap bases distinct=$$md inrange=$$mi (want >=2, 4)"; rc=1; } ; \
+	  grep -a 'PRADYOS_DYN_[PRX] ' $$L ; \
+	  np=$$(grep -ac 'PRADYOS_DYN_P base=0x[0-9a-f]* rel=[01] aux=[01]' $$L) ; \
+	  nr=$$(grep -ac 'PRADYOS_DYN_P base=0x[0-9a-f]* rel=1 ' $$L) ; \
+	  nx=$$(grep -ac 'PRADYOS_DYN_P base=0x[0-9a-f]* rel=[01] aux=1' $$L) ; \
+	  bv=$$(grep -ao 'PRADYOS_DYN_P base=0x[0-9a-f]*' $$L | sed 's/.*base=//') ; \
+	  bd=$$(printf '%s\n' $$bv | sort -u | grep -c .) ; \
+	  bi=0 ; for v in $$bv ; do x=$$(($$v)) ; \
+	    [ $$x -ge $$((0x8100000000)) ] && [ $$x -lt $$((0x8100000000 + 0x40000000)) ] && bi=$$((bi+1)) ; done ; \
+	  ri=$$(grep -ac 'PRADYOS_DYN_R interp rc=-8$$' $$L) ; rt=$$(grep -ac 'PRADYOS_DYN_R textrel rc=-8$$' $$L) ; \
+	  echo "PRADYOS_DYN_C1 rel=$$nr/$$np" ; echo "PRADYOS_DYN_C2 distinct=$$bd inrange=$$bi" ; \
+	  echo "PRADYOS_DYN_C3 aux=$$nx/$$np" ; echo "PRADYOS_DYN_C4 interp_refused=$$ri" ; echo "PRADYOS_DYN_C5 textrel_refused=$$rt" ; \
+	  [ "$$np" = 4 ] && [ "$$nr" = 4 ] || { echo "[dynlink] FAIL: arm C1, relocated pointers rel=$$nr of $$np PIE runs (want 4 of 4)"; rc=1; } ; \
+	  [ "$$bi" = 4 ] && [ "$$bd" -ge 2 ] || { echo "[dynlink] FAIL: arm C2, PIE bases distinct=$$bd inrange=$$bi (want >=2, 4)"; rc=1; } ; \
+	  [ "$$np" = 4 ] && [ "$$nx" = 4 ] || { echo "[dynlink] FAIL: arm C3, auxv aux=$$nx of $$np PIE runs (want 4 of 4)"; rc=1; } ; \
+	  [ "$$ri" = 1 ] || { echo "[dynlink] FAIL: arm C4, the PT_INTERP image was not refused with -ENOEXEC"; rc=1; } ; \
+	  [ "$$rt" = 1 ] || { echo "[dynlink] FAIL: arm C5, the text-relocation image was not refused with -ENOEXEC"; rc=1; } ; \
+	  F=$$(grep -a 'PRADYOS_DYN_F wx=' $$L | head -1) ; echo "$$F" ; \
+	  fv() { echo "$$F" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(fv filex)" = 1 ] && [ "$$(fv frx)" = 0 ] && [ "$$(fv frw)" = 0 ] || { echo "[dynlink] FAIL: arm F0, the legal executable path: filex=$$(fv filex) frx=$$(fv frx) frw=$$(fv frw) (want 1, 0, 0)"; rc=1; } ; \
+	  [ "$$(fv wx)" = -13 ] || { echo "[dynlink] FAIL: arm F1, write+execute from a read-only fd: $$(fv wx) (want -13)"; rc=1; } ; \
+	  [ "$$(fv anonx)" = -22 ] && [ "$$(fv sharedx)" = -22 ] || { echo "[dynlink] FAIL: arm F2, anonymous/shared executable: anonx=$$(fv anonx) sharedx=$$(fv sharedx) (want -22, -22)"; rc=1; } ; \
+	  [ "$$(fv rwfd)" = -13 ] || { echo "[dynlink] FAIL: arm F3, executable from a writable fd: $$(fv rwfd) (want -13)"; rc=1; } ; \
+	  [ "$$(fv mpanon)" = -13 ] || { echo "[dynlink] FAIL: arm F4, mprotect(PROT_EXEC) on anonymous memory: $$(fv mpanon) (want -13)"; rc=1; } ; \
+	  [ "$$(fv frwx)" = -13 ] || { echo "[dynlink] FAIL: arm F5, mprotect(PROT_EXEC) after the mapping was writable: $$(fv frwx) (want -13)"; rc=1; } ; \
+	  D0=$$(grep -a 'PRADYOS_DYN_D0 base_ok=' $$L | head -1) ; echo "$$D0" ; \
+	  D0M=$$(grep -a 'PRADYOS_DYN_D0M base=' $$L | head -1) ; echo "$$D0M" ; \
+	  d0n=$$(echo "$$D0" | sed -n 's/.* nrel=\(-*[0-9]*\).*/\1/p') ; \
+	  d0ib=$$(echo "$$D0M" | sed -n 's/.* ibase=0x\([0-9a-f]*\).*/\1/p') ; \
+	  d0mb=$$(echo "$$D0M" | sed -n 's/.* base=0x\([0-9a-f]*\).*/\1/p') ; \
+	  echo "$$D0" | grep -q ' base_ok=1 ' && [ -n "$$d0n" ] && [ "$$d0n" -ge 2 ] || { echo "[dynlink] FAIL: arm D0a, the interpreter ran with its own base as AT_BASE and relocated the program: $$D0 (want base_ok=1, nrel>=2)"; rc=1; } ; \
+	  echo "$$D0M" | grep -q ' rel=1 aux=1 ' || { echo "[dynlink] FAIL: arm D0b, the program, relocated only by its interpreter, with its own auxv: $$D0M (want rel=1 aux=1)"; rc=1; } ; \
+	  [ -n "$$d0ib" ] && [ -n "$$d0mb" ] && [ $$(( 0x$$d0ib & 0xfff )) = 0 ] && [ $$(( 0x$$d0ib >= 0x8400000000 && 0x$$d0ib < 0x8440000000 )) = 1 ] && [ $$(( 0x$$d0mb >= 0x8100000000 && 0x$$d0mb < 0x8140000000 )) = 1 ] || { echo "[dynlink] FAIL: arm D0c, the interpreter base in the first 1 GiB of its window and the program in the PIE window: ibase=0x$$d0ib base=0x$$d0mb"; rc=1; } ; \
+	  [ "$$(grep -ac 'PRADYOS_DYN_R interp2 rc=-8$$' $$L)" = 1 ] || { echo "[dynlink] FAIL: arm D0r, an interpreter with a PT_INTERP of its own was not refused with -ENOEXEC"; rc=1; } ; \
+	  M=$$(grep -a 'PRADYOS_DYN_M pre=' $$L | head -1) ; echo "$$M" ; \
+	  mv() { echo "$$M" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(mv pre)" = 127 ] && [ "$$(mv anon)" = 1 ] && [ "$$(mv anonz)" = 0 ] && [ "$$(mv back)" = 1 ] && [ "$$(mv backb)" = 127 ] || { echo "[dynlink] FAIL: arm M0, MAP_FIXED replaces the caller's own pages: pre=$$(mv pre) anon=$$(mv anon) anonz=$$(mv anonz) back=$$(mv back) backb=$$(mv backb) (want 127, 1, 0, 1, 127)"; rc=1; } ; \
+	  [ "$$(mv mixed)" = -22 ] || { echo "[dynlink] FAIL: arm M1, MAP_FIXED over a range partly unmapped: $$(mv mixed) (want -22)"; rc=1; } ; \
+	  [ "$$(mv shfix)" = -22 ] && [ "$$(mv fsh)" = 1 ] && [ "$$(mv fshfix)" = -22 ] || { echo "[dynlink] FAIL: arm M2, MAP_FIXED over a shared mapping: shfix=$$(mv shfix) fsh=$$(mv fsh) fshfix=$$(mv fshfix) (want -22, 1, -22)"; rc=1; } ; \
+	  [ "$$(mv stack)" = -22 ] && [ "$$(mv image)" = -22 ] || { echo "[dynlink] FAIL: arm M3, MAP_FIXED outside the arena: stack=$$(mv stack) image=$$(mv image) (want -22, -22)"; rc=1; } ; \
+	  [ "$$(mv m4)" = -13 ] || { echo "[dynlink] FAIL: arm M4, mprotect(PROT_EXEC) after a writable replacement: $$(mv m4) (want -13)"; rc=1; } ; \
+	  [ "$$(mv fresh)" = 1 ] || { echo "[dynlink] FAIL: arm M5, MAP_FIXED on wholly unmapped arena space: $$(mv fresh) (want 1)"; rc=1; } ; \
+	  lk=$$(mv leak) ; [ -n "$$lk" ] && [ "$$lk" -gt -64 ] && [ "$$lk" -lt 64 ] || { echo "[dynlink] FAIL: arm M6, 256 in-place replacements changed the free page count by $$lk (want |n| < 64; a leak of every replaced frame is 256)"; rc=1; } ; \
+	  [ "$$(fv noflagx)" = -22 ] && [ "$$(fv noflagmp)" = -13 ] || { echo "[dynlink] FAIL: arm F6, L1 requires MAP_PRIVATE: noflagx=$$(fv noflagx) noflagmp=$$(fv noflagmp) (want -22, -13)"; rc=1; } ; \
+	  [ "$$(mv fsh0)" = -22 ] || { echo "[dynlink] FAIL: arm M7, MAP_SHARED|MAP_FIXED at address 0: $$(mv fsh0) (want -22)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F6 and M0-M7" ; exit $$rc
+
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log
 	@SERIAL_LOG=build/mprotect.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=mprotect \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_MPROT_RO rc=0\nPRADYOS_MPROT_ENFORCED st=\nPRADYOS_MPROT_RESTORED rc=0 val=\nPRADYOS_MPROT_WX rc=\nPRADYOS_MPROT_COW rc=\nPRADYOS_MPROT_OK')" \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MPROT_RO rc=0\nPRADYOS_MPROT_ENFORCED st=\nPRADYOS_MPROT_RESTORED rc=0 val=\nPRADYOS_MPROT_WX rc=\nPRADYOS_MPROT_COW rc=\nPRADYOS_MPROT_ISO child_up=1 parent_up=1\nPRADYOS_MPROT_VIEW rc=-13\nPRADYOS_MPROT_SHKEEP shared=1\nPRADYOS_MPROT_OK')" \
 	FORBIDDEN_SENTINEL="MPROT FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[mprotect] PASS — $$(grep -a PRADYOS_MPROT_ENFORCED build/mprotect.log | head -1)"
@@ -4372,6 +4674,35 @@ smoke-sigsem: $(IMG) fat-image sfs-image
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@echo "[sigsem] PASS"
 
+# DDR-1181 (C1.4 P1): threads sharing one address space, 4 vCPUs. Arms A-G and
+# M in DDR-1181 sec.4; P and the cross-CPU placement of D, E, M and G in
+# DDR-1186 (SYS_SCHED_CPU; the scheduler never spreads one process's threads
+# under the boot's load, DDR-1181 sec.4.3). D, E and M are the DDR-1177 C1.4
+# items. Mutants T1-T8 in DDR-1181 sec.4, P1 in DDR-1186 sec.4.
+# DDR-1193 (C1.4 P3a): arms SA, SW, SB, SC, SH, SD (psync.h); mutants Y1-Y6 in
+# DDR-1193 sec.4.1 and Amendment 1.
+smoke-thread: $(IMG) fat-image sfs-image
+	@rm -f build/thread.log
+	@SERIAL_LOG=build/thread.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=thread \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_THREAD_A shared=1 joined=1\nPRADYOS_THREAD_B tls_ok=2\nPRADYOS_THREAD_C leftover=0 zombie=0\n[thread] C munmap_fail=0 first_rc=\nPRADYOS_THREAD_C2 net_leak_ok=1\nPRADYOS_THREAD_P pinned_ok=1 einval=1\n[thread] D reached=16 placed=\nPRADYOS_THREAD_D prot_stale=0 faulted=1 placed_ok=1\n[thread] E reached=16 placed=\nPRADYOS_THREAD_E stale=0 faulted=1 placed_ok=1\nPRADYOS_THREAD_M poison=0\nPRADYOS_THREAD_F group_killed=1\nPRADYOS_THREAD_G survived=1 midcopy_ok=1\nPRADYOS_FUTEX_A woke=1 rc=0\nPRADYOS_FUTEX_B eagain=-11\nPRADYOS_FUTEX_C timedout=-110 slept_ok=1\nPRADYOS_FUTEX_D max2=1 total=4\nPRADYOS_FUTEX_E shared_woke=1 rc=0\nPRADYOS_FUTEX_F private_isolated=1 asleep=1\nPRADYOS_FUTEX_G killed_waiter=1\nPRADYOS_FUTEX_H eintr=-4\nPRADYOS_FUTEX_I cleartid_woke=1\nPRADYOS_FUTEX_J rejects=4\nPRADYOS_FUTEX_K term_waiter=1\nPRADYOS_FUTEX_L handler_wait=1\nPRADYOS_SYNC_A total=80000 exp=80000 contended_ok=1 placed_ok=1\nPRADYOS_SYNC_W asleep=1 woke=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_B got=4000 asleep=1 maxin_ok=1 overlap=1 timeout=0 placed_ok=1\nPRADYOS_SYNC_C asleep=3 woke=3 timeout=0 placed_ok=1\nPRADYOS_SYNC_H rounds=1000 timeout=0 placed_ok=1\nPRADYOS_SYNC_D phases=100 bad=0 timeout=0 placed_ok=1\nPRADYOS_PTHR_A joined=8 ret_ok=8 total=8000 placed_ok=1\nPRADYOS_PTHR_J asleep=1 ret_ok=1 timeout=0\nPRADYOS_PTHR_R rounds=200 leak_ok=1 conclusive=1\nPRADYOS_PTHR_D detached=32 reclaimed=32 timeout=0\nPRADYOS_PTHR_G guard_fault=1\nPRADYOS_PTHR_K iso_ok=4 dtor=4 stale=0 placed_ok=1\nPRADYOS_PTHR_O runs=1 waited_ok=4 placed_ok=1\nPRADYOS_KHEAP_LARGE want=300 got=300 ok=1\nPRADYOS_THREAD_DONE')" \
+	FORBIDDEN_SENTINEL="$$(printf 'THREAD FAIL\nPTHR FAIL\nthread probe FAILED to load')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -a "\[thread\]\|PRADYOS_THREAD\|\[sync\]\|PRADYOS_SYNC\|\[pthr\]\|PRADYOS_PTHR\|PTHR FAIL\|PRADYOS_KHEAP_LARGE\|\[kheap\] large" build/thread.log || true
+	@echo "[thread] PASS"
+
+# DDR-1188 (C1.5): scheduler classes. P1 arms: A (CLOCK_MONOTONIC never goes
+# back, on each of two pinned CPUs and across them; syscall/vDSO agreement;
+# CLOCK_REALTIME sanity) and B (nanosleep(25 ms) >= 25 ms; EINVAL cases).
+# Mutants C1 and C2 (DDR-1188 sec. 4, Amendment 1 A1-2).
+smoke-schedclass: $(IMG) fat-image sfs-image
+	@rm -f build/schedclass.log
+	@SERIAL_LOG=build/schedclass.log KEEP_SERIAL=1 TIMEOUT_S=240 QEMU_SMP=4 QEMU_PROBES=schedclass \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SCHED_A back=0 xback=0 sys_ok=1 pin_ok=1 rt_ok=1\nPRADYOS_SCHED_B slept_ok=5 einval=3\nPRADYOS_SCHED_B2 eintr_ok=1 killed_ok=1\nPRADYOS_SCHED_B3 term_ok=1\nPRADYOS_SCHED_C early_ok=1 pin_ok=1\nPRADYOS_SCHED_M capped_ok=1\nPRADYOS_SCHED_H fork_eperm=1 agent_grant_eperm=1 own_ok=1\nPRADYOS_SCHED_HA eperm=1\nPRADYOS_SCHED_D preempt_ok=1\nPRADYOS_SCHED_N prio_ok=1\nPRADYOS_SCHED_E rr_ok=1\nPRADYOS_SCHED_F fifo_ok=1\nPRADYOS_SCHED_G throttle_ok=1\nPRADYOS_SCHED_P pi_ok=1 main_pin=1\nPRADYOS_SCHED_I adm_ok=1\nPRADYOS_SCHED_J edf_ok=1\nPRADYOS_SCHED_Q cbs_ok=1\nPRADYOS_SCHED_K some_ok=1\nPRADYOS_SCHED_K0 idle_ok=1\nPRADYOS_SCHED_O io_ok=1\nPRADYOS_SCHED_L nohz_ok=1\nPRADYOS_SCHED_L1 wake_ok=1\nPRADYOS_SCHED_L2 eqs_ok=1\nPRADYOS_SCHED_DONE')" \
+	FORBIDDEN_SENTINEL="$$(printf 'SCHED FAIL\nschedclass probe FAILED to load')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -a "\[time\] tsc skew\|\[sched\]\|PRADYOS_SCHED\|SCHED FAIL" build/schedclass.log || true
+	@echo "[schedclass] PASS"
+
 # DDR-1177 (C1.2): cross-CPU TLB shootdown, in-kernel probe on 4 CPUs. Arms A-C
 # (owner decision #45/6251086742); arm D and E are C1.4 exit criteria.
 smoke-tlbshoot: $(IMG) fat-image sfs-image
@@ -4383,11 +4714,22 @@ smoke-tlbshoot: $(IMG) fat-image sfs-image
 	@grep -a "\[tlbshoot\]" build/tlbshoot.log || true
 	@echo "[tlbshoot] PASS"
 
+# DDR-1203: map_core refuses a user leaf under a kernel-shared top-level entry.
+# Kernel self-test (QEMU_PROBES=mapguard): arms G-A..G-C refused, G-D control.
+smoke-mapguard: $(IMG) fat-image sfs-image
+	@rm -f build/mapguard.log
+	@SERIAL_LOG=build/mapguard.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=mapguard \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_MAPGUARD a=1 b=1 c=1 d=1 hits=3')" \
+	FORBIDDEN_SENTINEL="PRADYOS_MAPGUARD FAIL" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG)
+	@grep -a "\[vmm\] guard\|PRADYOS_MAPGUARD" build/mapguard.log || true
+	@echo "[mapguard] PASS"
+
 # DDR-1178 (C1.3 P1): anonymous MAP_SHARED across fork. Arms A-F (DDR-1178 §4).
 smoke-shm: $(IMG) fat-image sfs-image
 	@rm -f build/shm.log
-	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_PROBES=shm \
-	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_DONE')" \
+	@SERIAL_LOG=build/shm.log KEEP_SERIAL=1 TIMEOUT_S=180 QEMU_SMP=4 QEMU_PROBES=shm \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_SHM_A shared=0x22\nPRADYOS_SHM_B private=0x11\nPRADYOS_SHM_C cycles=256 leaked_ok=1\nPRADYOS_SHM_D rejects=3\nPRADYOS_SHM_E mprotect_shared=0x44\nPRADYOS_SHM_F child_munmap_ok=1\nPRADYOS_SHM_G key=-13\nPRADYOS_SHM_H shared=0x66\nPRADYOS_SHM_I forged=0\nPRADYOS_SHM_J eidrm=-43 freed_ok=1\nPRADYOS_SHM_K ro_faulted=1 ro_mprotect=-13\nPRADYOS_SHM_L nattch_fork=1\nPRADYOS_SHM_M reclaimed=1\nPRADYOS_SHM_T stale=-22\nPRADYOS_SHM_N fdshared=0x66\nPRADYOS_SHM_O rejects=4\nPRADYOS_SHM_P rejects=7\nPRADYOS_SHM_Q cycles=64 opened=64 leaked_ok=1\nPRADYOS_SHM_R child_hold=0x77\nPRADYOS_SHM_S dup_hold=0x88\nPRADYOS_SHM_FA msync=0xa1\nPRADYOS_SHM_FB redirty=0xb2\nPRADYOS_SHM_FC shared=0xc3\nPRADYOS_SHM_FD munmap=0xd4\nPRADYOS_SHM_FE exit=0xe5\nPRADYOS_SHM_FF rejects=8\nPRADYOS_SHM_FG cycles=40 opened=40\nPRADYOS_SHM_FH rounds=16 lost=0 placed=16\nPRADYOS_SHM_FI orphan=0xf1\nPRADYOS_SHM_FJ grow=-16 inplace=1\nPRADYOS_SHM_FR reaper=0x9c\n[shm] release wb by=reaper pages=1\nPRADYOS_SHM_DONE')" \
 	FORBIDDEN_SENTINEL="PRADYOS_SHM FAIL" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@grep -a "\[shm\]" build/shm.log || true

@@ -5,6 +5,8 @@
  * arrives via the ELF loader, not mmap). MAP_SHARED, MAP_FIXED replace
  * semantics, partial munmap, demand paging, msync and mremap are deferred
  * (see ADR-022 / docs/build_status.md).
+ * DDR-1189 A3: PROT_EXEC from a read-only file (P3a-1, L1) and MAP_FIXED over
+ * the caller's own private mappings (P3a-2, mmap_fixed_range) are now accepted.
  *
  * DDR-1112: file-backed MAP_PRIVATE is implemented and is EAGER — the frame is
  * filled from the file BEFORE it is mapped, so no page-fault path is involved.
@@ -23,6 +25,8 @@
  *       the pages are ptnode_alloc'd and freed identically to anonymous ones
  *       and munmap need not know where the bytes came from. Dirty tracking and
  *       msync are MAP_SHARED's problem, and msync has no subject under PRIVATE.
+ * DDR-1178 A4 (P4): file-backed MAP_SHARED is now accepted (file_shared_map,
+ * below); the P1 note that follows is history.
  * DDR-1178 P1: MAP_SHARED|MAP_ANONYMOUS is accepted (shared across fork via
  * PTE_SW_SHMEM). File-backed MAP_SHARED stays refused: it needs write-back and
  * a shared page cache (DDR-1178 P4, owner decisions D4/D5).
@@ -47,6 +51,7 @@
 #include "sys_mmap.h"
 #include "syscall.h"
 #include "sched.h"
+#include "mm.h"           /* DDR-1181 */
 #include "vmm.h"
 #include "kheap.h"     /* ptnode_alloc / ptnode_free */
 #include "pmm.h"       /* PAGE_SIZE */
@@ -54,6 +59,8 @@
 #include "aether.h"    /* per-agent memory cap (Layer 6, ADR-026) */
 #include "fd.h"        /* DDR-1112: fd_get / struct fd_entry (file-backed) */
 #include "vfs.h"       /* DDR-1112: vfs_read — pread-style, takes an offset */
+#include "shm.h"       /* DDR-1178 A2: SysV segment objects */
+#include "cap.h"
 
 #define PROT_READ   0x1
 #define PROT_WRITE  0x2
@@ -61,29 +68,30 @@
 
 #define MAP_SHARED     0x01
 #define MAP_PRIVATE    0x02
+#define MAP_FIXED      0x10
 #define MAP_ANONYMOUS  0x20
 
 static struct vm_area *vma_find(struct tcb *t, uint64_t base) {
     for (int i = 0; i < VM_AREA_MAX; i++)
-        if (t->vma[i].npages && t->vma[i].base == base)
-            return &t->vma[i];
+        if (t->mm->vma[i].npages && t->mm->vma[i].base == base)
+            return &t->mm->vma[i];
     return 0;
 }
 
 static struct vm_area *vma_free_slot(struct tcb *t) {
     for (int i = 0; i < VM_AREA_MAX; i++)
-        if (t->vma[i].npages == 0)
-            return &t->vma[i];
+        if (t->mm->vma[i].npages == 0)
+            return &t->mm->vma[i];
     return 0;
 }
 
 static int vma_overlaps(struct tcb *t, uint64_t base, uint64_t npages) {
     uint64_t end = base + npages * PAGE_SIZE;
     for (int i = 0; i < VM_AREA_MAX; i++) {
-        if (!t->vma[i].npages)
+        if (!t->mm->vma[i].npages)
             continue;
-        uint64_t b = t->vma[i].base;
-        uint64_t e = b + t->vma[i].npages * PAGE_SIZE;
+        uint64_t b = t->mm->vma[i].base;
+        uint64_t e = b + t->mm->vma[i].npages * PAGE_SIZE;
         if (base < e && b < end)
             return 1;
     }
@@ -102,7 +110,246 @@ static void unmap_range(uint64_t cr3, uint64_t base, uint64_t npages) {
     vmm_unmap_range_flush(cr3, base, npages, unmap_free_frame);
 }
 
-static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
+/* The mapping's base: the arena bump pointer for addr 0, else the page-aligned
+ * hint; inside the arena and overlapping no region (no silent replace). */
+static int mmap_pick_base(struct tcb *t, uint64_t addr, uint64_t npages, uint64_t *out) {
+    uint64_t base;
+    if (addr == 0) {
+        base = t->mm->mmap_next;                     /* kernel-chosen (bump) */
+    } else {
+        if (addr & (PAGE_SIZE - 1))
+            return -EINVAL;                      /* hint must be page-aligned */
+        base = addr;
+    }
+    /* DDR-1196: bound base first, then the pages against the room left, so
+     * no sum can wrap. `base + npages * PAGE_SIZE` wrapped for a hint near
+     * 2^64 and passed, mapping a user page in the shared kernel half. */
+    if (base < VMM_MMAP_BASE || base > VMM_MMAP_TOP ||
+        npages > (VMM_MMAP_TOP - base) / PAGE_SIZE)
+        return -EINVAL;                          /* outside the mmap arena */
+    if (vma_overlaps(t, base, npages))
+        return -EINVAL;                          /* no silent replace (baseline) */
+    *out = base;
+    return 0;
+}
+
+/* DDR-1189 A3 P3a-2: classify a MAP_FIXED range [addr, addr + npages pages).
+ * 0: wholly unmapped arena space (the hint path maps it, as before P3a-2);
+ * 1: wholly inside the caller's own PRIVATE areas, so its pages are replaced;
+ * -EINVAL: anything else -- partly unmapped, a shm or file-shared area, an
+ * anonymous MAP_SHARED page, or outside the arena (an image PT_LOAD, the stack,
+ * the interpreter), so MAP_FIXED never replaces what this mmap did not map. */
+static int mmap_fixed_range(struct tcb *t, uint64_t addr, uint64_t npages) {
+    if (addr == 0 || (addr & (PAGE_SIZE - 1)))
+        return -EINVAL;
+    if (addr < VMM_MMAP_BASE || addr > VMM_MMAP_TOP ||
+        npages > (VMM_MMAP_TOP - addr) / PAGE_SIZE)
+        return -EINVAL;                          /* DDR-1196 order: no wrap */
+    if (!vma_overlaps(t, addr, npages))
+        return 0;
+    uint64_t end = addr + npages * PAGE_SIZE;
+    uint64_t cur = addr;
+    while (cur < end) {                          /* each step passes one area */
+        struct vm_area *v = 0;
+        for (int i = 0; i < VM_AREA_MAX; i++) {
+            struct vm_area *w = &t->mm->vma[i];
+            if (w->npages && cur >= w->base && cur - w->base < w->npages * PAGE_SIZE) {
+                v = w;
+                break;
+            }
+        }
+        if (!v)
+            return -EINVAL;                      /* a gap */
+        cur = v->base + v->npages * PAGE_SIZE;
+    }
+    /* Every shared page -- anonymous MAP_SHARED, SysV, shm_open and file
+     * MAP_SHARED alike -- is mapped PTE_SW_SHMEM, so one per-page test refuses
+     * them all (a shared area is never left with an absent page). */
+    for (uint64_t va = addr; va < end; va += PAGE_SIZE)
+        if (vmm_resolve_pte(t->cr3, va) & PTE_SW_SHMEM)
+            return -EINVAL;
+    return 1;
+}
+
+/* Map pages [first, first + npages) of shm object `obj` at `base`, one
+ * pmm_incref per frame (this mapping's reference). 0, or -ENOMEM with the
+ * partial range unmapped; the caller owns the attach either way. */
+static int map_obj_pages(struct tcb *t, int obj, uint32_t first, uint32_t npages,
+                         uint64_t base, uint64_t pflags) {
+    for (uint32_t i = 0; i < npages; i++) {
+        uint64_t f = shm_obj_frame(obj, first + i);
+        pmm_incref(f);
+        if (vmm_map_in(t->cr3, base + (uint64_t)i * PAGE_SIZE, f, pflags) != 0) {
+            ptnode_free((void *)(uintptr_t)f);
+            unmap_range(t->cr3, base, i);
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/* DDR-1178 A3.2: mmap(MAP_SHARED) of an FD_SHM fd is an attach of pages
+ * off/4096 .. of the object, with the mmap address rules. */
+static long shm_fd_map(struct tcb *t, int obj, uint64_t addr, uint64_t len, int prot,
+                       long a_off) {
+    if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
+        return -EINVAL;
+    uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t first = (uint64_t)a_off / PAGE_SIZE;
+    uint64_t base;
+    int rc = mmap_pick_base(t, addr, npages, &base);
+    if (rc < 0)
+        return rc;
+    if (shm_attach_begin(obj) < 0)
+        return -EINVAL;                          /* not sized yet */
+    if (first + npages > shm_obj_npages(obj)) {
+        shm_detach(obj);
+        return -EINVAL;                          /* past the object's size */
+    }
+    struct vm_area *v = vma_free_slot(t);
+    if (!v) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | ((prot & PROT_WRITE) ? VMM_RW : 0);
+    if (map_obj_pages(t, obj, (uint32_t)first, (uint32_t)npages, base, pflags) != 0) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    v->base = base;
+    v->npages = npages;
+    v->shm = obj + 1;
+    v->shm_ro = 0;                               /* the fd is O_RDWR (A3.1) */
+    v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
+    v->ever_w = 1;
+    v->pgoff = (uint32_t)first;
+    v->wcap = 0;                                 /* nothing to write back */
+    if (addr == 0)
+        t->mm->mmap_next = base + npages * PAGE_SIZE;
+    return (long)base;
+}
+
+/* DDR-1178 Amendment 4 (P4): mmap(MAP_SHARED) of an FD_VFS fd attaches the
+ * file's FILE object, so every shared mapping of the file shares its frames.
+ * The area records the fd's capability (D4) for write-back. */
+#define OF_ACCMODE  3
+#define OF_WRONLY   1
+#define OF_RDWR     2
+static long file_shared_map(struct tcb *t, struct fd_entry *fe, uint64_t addr,
+                            uint64_t len, int prot, long a_off) {
+    if (!fe->file)
+        return -ENODEV;
+    int acc = fe->flags & OF_ACCMODE;
+    if (acc == OF_WRONLY)
+        return -EACCES;                          /* a mapping reads the file */
+    uint64_t ident;
+    if (vfs_ident(fe->file, &ident) != 0)
+        return -ENODEV;                          /* the fs cannot name the file */
+    /* Write-capable: an O_RDWR fd on a filesystem that overwrites in place
+     * (D5). The check reads the stored open mode; DDR-1182 enforces it for
+     * write(2) as well. */
+    int wok = acc == OF_RDWR && vfs_shared_write(fe->file->mnt) &&
+              vfs_write_authorized(fe->cap);   /* A4.8: once, as the mapper */
+    if ((prot & PROT_WRITE) && !wok)
+        return -EACCES;
+    if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
+        return -EINVAL;
+    uint64_t size = fe->file->size;
+    if (size == 0)
+        return -EINVAL;
+    uint64_t fpages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (fpages > SHM_MAX_PAGES)
+        return -EFBIG;
+    uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t first = (uint64_t)a_off / PAGE_SIZE;
+    if (first + npages > fpages)
+        return -EINVAL;                          /* past the end of the file */
+    uint64_t base;
+    int rc = mmap_pick_base(t, addr, npages, &base);
+    if (rc < 0)
+        return rc;
+    struct vm_area *v = vma_free_slot(t);
+    if (!v)
+        return -ENOMEM;
+    /* ADR-032: a writable area prepays the write-back of all its pages, so
+     * write-back at munmap, exec and release (which may run in another
+     * thread) is never charged again (A4.2). */
+    if (wok && vfs_write_prepay(npages * PAGE_SIZE) < 0)
+        return -EAGAIN;
+    int obj = shm_file_attach(fe->file, ident, fe->cap);
+    if (obj < 0)
+        return obj;
+    if (first + npages > shm_obj_npages(obj)) {
+        shm_detach(obj);                         /* the live object is shorter */
+        return -EINVAL;
+    }
+    uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | ((prot & PROT_WRITE) ? VMM_RW : 0);
+    if (map_obj_pages(t, obj, (uint32_t)first, (uint32_t)npages, base, pflags) != 0) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    v->base = base;
+    v->npages = npages;
+    v->shm = obj + 1;
+    v->shm_ro = !wok;                            /* mprotect may not add write */
+    v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
+    v->ever_w = wok ? 1 : 0;
+    v->pgoff = (uint32_t)first;
+    v->wcap = wok ? (uint64_t)fe->cap : 0;
+    if (addr == 0)
+        t->mm->mmap_next = base + npages * PAGE_SIZE;
+    return (long)base;
+}
+
+/* DDR-1189 A3 P3a-2: replace the pages of [addr, addr + npages pages), which
+ * mmap_fixed_range proved lie in the caller's private areas. L1 first: every
+ * area the range touches loses x_ok unless this mapping could have set it, so
+ * a page written through a replacement can never be made executable (arm M4).
+ * Then one unmap of the
+ * whole range (one shootdown, frames freed after the ack, DDR-1177), then each
+ * page is filled and mapped as in the plain path. On -ENOMEM or -EIO the pages
+ * not yet mapped stay absent inside their area: the range's contents are then
+ * unspecified, as POSIX allows for a failed MAP_FIXED; munmap still frees it.
+ * (A writable mapping is never xok, so clearing x_ok covers "written through a
+ * replacement" too; ever_w needs no second write here.) */
+static long fixed_replace(struct tcb *t, struct fd_entry *fe, uint64_t addr,
+                          uint64_t npages, int prot, long a_off, int priv) {
+    uint64_t end = addr + npages * PAGE_SIZE;
+    int xok = priv && fe && (fe->flags & OF_ACCMODE) == 0 && !(prot & PROT_WRITE);
+    for (int i = 0; i < VM_AREA_MAX; i++) {
+        struct vm_area *v = &t->mm->vma[i];
+        if (!v->npages || addr >= v->base + v->npages * PAGE_SIZE || v->base >= end)
+            continue;
+        if (!xok)
+            v->x_ok = 0;
+    }
+    uint64_t pflags = VMM_USER;
+    if (!(prot & PROT_EXEC))
+        pflags |= VMM_NX;
+    if (prot & PROT_WRITE)
+        pflags |= VMM_RW;
+    unmap_range(t->cr3, addr, npages);
+    for (uint64_t i = 0; i < npages; i++) {
+        void *frame = ptnode_alloc();            /* zeroed: the EOF tail is POSIX */
+        if (!frame)
+            return -ENOMEM;
+        if (fe) {
+            int n = vfs_read(fe->cap, fe->file, (uint64_t)a_off + i * PAGE_SIZE,
+                             frame, (uint32_t)PAGE_SIZE);
+            if (n < 0) {
+                ptnode_free(frame);
+                return -EIO;
+            }
+        }
+        if (vmm_map_in(t->cr3, addr + i * PAGE_SIZE, (uint64_t)(uintptr_t)frame, pflags) != 0) {
+            ptnode_free(frame);
+            return -ENOMEM;
+        }
+    }
+    return (long)addr;
+}
+
+static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
                      long a_fd, long a_off) {
     struct tcb *t = current_thread;
     uint64_t addr = (uint64_t)a_addr;
@@ -110,17 +357,46 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
     int prot  = (int)a_prot;
     int flags = (int)a_flags;
 
-    if (len == 0)
+    /* CodeRabbit 4443548860: bound len BEFORE any path rounds it to pages. A
+     * len within a page of 2^64 wraps (len + PAGE_SIZE - 1) / PAGE_SIZE to 0,
+     * and a 0-page area holding a shm attach is a free slot to every VMA walker,
+     * so the attach is never detached and the segment slot leaks. No mapping
+     * can exceed the arena anyway; mmap_pick_base answers -EINVAL for that. */
+    if (len == 0 || len > VMM_MMAP_TOP - VMM_MMAP_BASE)
         return -EINVAL;
-    /* DDR-1178 P1: MAP_SHARED is anonymous-only. File-backed shared mappings
-     * need write-back and a shared page cache (P4, owner decisions D4/D5). */
+    /* DDR-1178: MAP_SHARED is anonymous (P1), a shm_open object (P3) or a
+     * file (P4, below). */
     int shared = (flags & MAP_SHARED) != 0;
     if (shared && (flags & MAP_PRIVATE))
         return -EINVAL;                         /* POSIX: exactly one of the two */
-    if (shared && a_fd != -1)
-        return -EINVAL;                         /* P4 not implemented */
-    if (prot & PROT_EXEC)
-        return -EINVAL;                         /* W^X: no executable mapping */
+    /* DDR-1189 A3 P3a-2 (CodeRabbit on #158): MAP_FIXED takes the address
+     * literally, so it is checked before any path that reads it as a hint;
+     * the shared-fd dispatch below would otherwise place addr 0 anywhere. */
+    if ((flags & MAP_FIXED) && (addr == 0 || (addr & (PAGE_SIZE - 1))))
+        return -EINVAL;
+    /* DDR-1189 A3 P3a-1 (L1): an executable mapping comes only from a file
+     * opened read-only, MAP_PRIVATE, and never writable. An anonymous or
+     * MAP_SHARED request keeps -EINVAL, as before (shmtest D and systest pin
+     * it); a file-backed private request that L1 refuses is -EACCES. */
+    if (prot & PROT_EXEC) {
+        /* MAP_SHARED|MAP_PRIVATE was refused above, so "not MAP_PRIVATE"
+         * covers MAP_SHARED and neither flag alike (F2, F6). */
+        if (!(flags & MAP_PRIVATE) || a_fd == -1 || (flags & MAP_ANONYMOUS))
+            return -EINVAL;
+        if (prot & PROT_WRITE)
+            return -EACCES;                     /* W^X */
+    }
+    if (shared && a_fd != -1) {
+        /* DDR-1178 A3: a shm_open object; A4: a file. */
+        struct fd_entry *se = fd_get(t, (int)a_fd);
+        if (!se || (se->kind != FD_SHM && se->kind != FD_VFS) || (flags & MAP_ANONYMOUS))
+            return -EINVAL;
+        if (t->is_agent)
+            return -EPERM;                      /* A2.2, as shmat */
+        if (se->kind == FD_VFS)
+            return file_shared_map(t, se, addr, len, prot, a_off);
+        return shm_fd_map(t, se->mnt, addr, len, prot, a_off);
+    }
 
     /* fd == -1 is POSIX's anonymous form and takes the original path VERBATIM,
      * so every existing caller and every green smoke-sysmmap arm is untouched
@@ -143,6 +419,8 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
         fe = fd_get(t, (int)a_fd);
         if (!fe || fe->kind == FD_NONE)
             return -EBADF;
+        if (fe->kind == FD_SHM)
+            return -EINVAL;                     /* DDR-1178 A3.2: no private copy */
         if (fe->kind != FD_VFS || !fe->file)
             return -ENODEV;                     /* a pipe or the console has no
                                                  * byte at an offset. Distinct
@@ -153,6 +431,8 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
             return -EACCES;                     /* DDR-1182: the fill reads the
                                                  * file, so an O_WRONLY fd may
                                                  * not be mapped (POSIX) */
+        if ((prot & PROT_EXEC) && (fe->flags & OF_ACCMODE) != 0)
+            return -EACCES;                     /* L1: only a read-only fd */
         if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))
             return -EINVAL;                     /* POSIX requires a page-aligned
                                                  * offset — and after this the
@@ -164,18 +444,26 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
 
     uint64_t npages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    uint64_t base;
-    if (addr == 0) {
-        base = t->mmap_next;                     /* kernel-chosen (bump) */
-    } else {
-        if (addr & (PAGE_SIZE - 1))
-            return -EINVAL;                      /* hint must be page-aligned */
-        base = addr;
+    /* DDR-1189 A3 P3a-2: MAP_FIXED over the caller's own private areas
+     * replaces their pages in place; the areas keep their extent, so munmap
+     * still takes each whole. Wholly unmapped space falls through to the hint
+     * path below. */
+    if (flags & MAP_FIXED) {
+        int fr = mmap_fixed_range(t, addr, npages);
+        if (fr < 0)
+            return fr;
+        if (fr == 1) {
+            if (shared)
+                return -EINVAL;                  /* never a shared replacement */
+            return fixed_replace(t, fe, addr, npages, prot, a_off,
+                                 (flags & MAP_PRIVATE) != 0);
+        }
     }
-    if (base < VMM_MMAP_BASE || base + npages * PAGE_SIZE > VMM_MMAP_TOP)
-        return -EINVAL;                          /* outside the mmap arena */
-    if (vma_overlaps(t, base, npages))
-        return -EINVAL;                          /* no silent replace (baseline) */
+
+    uint64_t base;
+    int brc = mmap_pick_base(t, addr, npages, &base);
+    if (brc < 0)
+        return brc;
 
     struct vm_area *v = vma_free_slot(t);
     if (!v)
@@ -183,10 +471,14 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
 
     /* AETHER memory cap (ADR-026 D5): charge this growth against the agent's
      * 128 MiB hard cap; an over-cap agent is cleanly killed, never a panic. */
-    if (aether_mem_charge(t, npages * PAGE_SIZE) < 0)
+    if (aether_mem_charge(t, npages * PAGE_SIZE) < 0) {
+        mm_unlock(t);                            /* DDR-1181: never exit holding it */
         sched_exit(137);                         /* AGENT_OOM_KILLED; never returns */
+    }
 
-    uint64_t pflags = VMM_USER | VMM_NX;
+    uint64_t pflags = VMM_USER;
+    if (!(prot & PROT_EXEC))
+        pflags |= VMM_NX;                        /* L1: only a read-only file maps X */
     if (prot & PROT_WRITE)
         pflags |= VMM_RW;
     if (shared)
@@ -226,21 +518,41 @@ static long sys_mmap(long a_addr, long a_len, long a_prot, long a_flags,
 
     v->base   = base;
     v->npages = npages;
+    /* DDR-1189 A3 P3a-1: a private mapping of a read-only fd, not writable,
+     * may be executable now or later; anything writable never can be. */
+    v->x_ok   = ((flags & MAP_PRIVATE) && fe && (fe->flags & OF_ACCMODE) == 0 &&
+                 !(prot & PROT_WRITE)) ? 1 : 0;      /* L1: MAP_PRIVATE (F6) */
+    v->ever_w = (prot & PROT_WRITE) ? 1 : 0;
     if (addr == 0)
-        t->mmap_next = base + npages * PAGE_SIZE;
+        t->mm->mmap_next = base + npages * PAGE_SIZE;
     return (long)base;
 }
 
-static long sys_munmap(long a_addr, long a_len, long a3, long a4, long a5, long a6) {
+static long sys_munmap_locked(long a_addr, long a_len, long a3, long a4, long a5, long a6) {
     (void)a_len; (void)a3; (void)a4; (void)a5; (void)a6;  /* whole-region unmap */
     struct tcb *t = current_thread;
     struct vm_area *v = vma_find(t, (uint64_t)a_addr);
     if (!v)
         return -EINVAL;
+    /* DDR-1178 A4.4: a writable FILE area writes its dirty pages back first,
+     * while they are still mapped. */
+    if (v->shm && v->wcap)
+        shm_vma_writeback(t->cr3, v, v->base, v->base + v->npages * PAGE_SIZE,
+                          SHM_WB_RELEASE);
     unmap_range(t->cr3, v->base, v->npages);
-    aether_mem_uncharge(t, v->npages * PAGE_SIZE);
+    if (v->shm) {
+        shm_detach(v->shm - 1);      /* DDR-1178 A2.2: munmap is a detach */
+        v->shm = 0;
+        v->shm_ro = 0;
+        v->pgoff = 0;
+        v->wcap = 0;
+    } else {
+        aether_mem_uncharge(t, v->npages * PAGE_SIZE);
+    }
     v->base = 0;
     v->npages = 0;
+    v->x_ok = 0;
+    v->ever_w = 0;
     return 0;
 }
 
@@ -256,12 +568,32 @@ static long sys_munmap(long a_addr, long a_len, long a3, long a4, long a5, long 
  *                            granting write would let this process write a frame
  *                            another still shares, with no copy and no fault.
  *                            Detected in vmm_protect_range, reported as -EACCES.
+ *   PROT_WRITE on a read-only kernel view (PTE_SW_SHARED: the vDSO page, the
+ *                            metric page) -- the frame is mapped in every
+ *                            process. Also -EACCES (DDR-1202).
  *   PROT_NONE             -- making a user page absent collides with the
  *                            demand-paged stack (ADR-038), which faults absent
  *                            user pages IN rather than reporting them. Telling
  *                            the two apart needs a state that does not exist.
  */
-static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
+/* DDR-1189 A3 P3a-1 (L1): 1 when PROT_EXEC may be set on the page at `va`:
+ * it is already executable, or it lies in a vm_area that came from a
+ * read-only file and was never writable. mprotect walks page tables, so image
+ * pages, the stack and the heap reach this too; none of those may become
+ * executable after being writable. */
+static int mprot_exec_ok(struct tcb *t, uint64_t va) {
+    uint64_t pte = vmm_resolve_pte(t->cr3, va);
+    if ((pte & 1ull) && !(pte & VMM_NX))
+        return 1;
+    for (int i = 0; i < VM_AREA_MAX; i++) {
+        struct vm_area *v = &t->mm->vma[i];
+        if (v->npages && va >= v->base && va - v->base < v->npages * PAGE_SIZE)
+            return v->x_ok && !v->ever_w;
+    }
+    return 0;
+}
+
+static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a4; (void)a5; (void)a6;
     uint64_t addr = (uint64_t)a1;
     uint64_t len  = (uint64_t)a2;
@@ -286,20 +618,289 @@ static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
     if (!t)
         return -ESRCH;
 
+    /* DDR-1178 A2.2: write cannot be added back to a SHM_RDONLY attachment. */
+    if (prot & PROT_WRITE) {
+        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
+        for (int i = 0; i < VM_AREA_MAX; i++) {
+            struct vm_area *v = &t->mm->vma[i];
+            if (v->npages && v->shm_ro &&
+                addr < v->base + v->npages * PAGE_SIZE && v->base < end)
+                return -EACCES;
+        }
+    }
+
+    if (prot & PROT_EXEC) {                    /* DDR-1189 A3 P3a-1 (L1) */
+        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
+        for (uint64_t va = addr; va < end; va += PAGE_SIZE)
+            if (!mprot_exec_ok(t, va))
+                return -EACCES;
+    }
     uint64_t flags = 0;
     if (prot & PROT_WRITE) flags |= VMM_RW;
     if (!(prot & PROT_EXEC)) flags |= VMM_NX;   /* readable+non-exec is the default */
 
+    /* DDR-1202 (#112): adding write to a read-only private page that fork
+     * shared as-is copies the page first (in vmm_protect_range), so the write
+     * cannot reach the other process. */
     int rc = vmm_protect_range(t->cr3, addr, len, flags);
     if (rc == -2)
-        return -EACCES;                        /* write asked on a COW page */
+        return -EACCES;                        /* write asked on a COW page or a kernel view */
     if (rc != 0)
-        return -ENOMEM;                        /* a page in the range is absent */
+        return -ENOMEM;                        /* a page is absent, or no frame for a copy */
+    if (prot & PROT_WRITE) {                   /* L1: once writable, never executable */
+        uint64_t end = addr + ((len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1));
+        for (int i = 0; i < VM_AREA_MAX; i++) {
+            struct vm_area *v = &t->mm->vma[i];
+            if (v->npages && addr < v->base + v->npages * PAGE_SIZE && v->base < end)
+                v->ever_w = 1;
+        }
+    }
     return 0;
+}
+
+/* ---- DDR-1178 Amendment 2: SysV shared memory (IPC_PRIVATE only) ----------
+ * A shmid is a RES_SHM capability in the caller's own table, encoded as
+ * (generation << 6) | slot (A2.1): it reaches the segment only from a table
+ * that holds it -- the creator's, its threads', and fork children's. */
+#define IPC_PRIVATE 0
+#define IPC_RMID    0
+#define SHM_RDONLY  010000            /* Linux value */
+#define SHMID_GEN_MAX (1u << 24)
+
+static cap_t shmid_handle(long id) {
+    return ((cap_t)((uint64_t)id >> 6) << 32) | (cap_t)(id & 63);
+}
+
+/* The segment object a shmid names in `t`'s table, or -EINVAL. */
+static int shmid_obj(struct tcb *t, long id) {
+    if (id < 0 || id > 0x7FFFFFFFL)
+        return -EINVAL;
+    uint64_t res = 0;
+    uint32_t rights = 0;
+    if (!cap_lookup(t->caps, shmid_handle(id), RES_SHM, &res, &rights))
+        return -EINVAL;
+    return (int)res;
+}
+
+static long sys_shmget_impl(long a_key, long a_size, long a_flags, long a4, long a5, long a6) {
+    (void)a_flags; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;               /* A2.2: a segment is memory the agent cap does not see */
+    if (a_key != IPC_PRIVATE)
+        return -EACCES;              /* D1(c): no global namespace */
+    if (a_size <= 0 || (uint64_t)a_size > (uint64_t)SHM_MAX_PAGES * PAGE_SIZE)
+        return -EINVAL;
+    int obj = shm_obj_create((uint32_t)(((uint64_t)a_size + PAGE_SIZE - 1) / PAGE_SIZE));
+    if (obj < 0)
+        return obj;
+    cap_t h = cap_create(t->caps, RES_SHM, (uint64_t)obj, CAP_SHM_R | CAP_SHM_W);
+    /* The fresh object has holders == 0 until this capability holds it; if no
+     * capability could be minted, one hold/unhold pair reclaims it. */
+    if (h == CAP_NULL) {
+        shm_hold(obj);
+        shm_unhold(obj);
+        return -ENOSPC;
+    }
+    uint64_t gen = (uint64_t)h >> 32;
+    if (gen >= SHMID_GEN_MAX) {
+        cap_revoke(t->caps, h);      /* unholds: the object is reclaimed */
+        return -ENOSPC;
+    }
+    return (long)((gen << 6) | ((uint64_t)h & 63));
+}
+
+static long sys_shmat_locked(long a_id, long a_addr, long a_flags, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;
+    if (a_addr != 0)
+        return -EINVAL;              /* P2: kernel-chosen address only */
+    int obj = shmid_obj(t, a_id);
+    if (obj < 0)
+        return obj;
+    int rc = shm_attach_begin(obj);
+    if (rc < 0)
+        return rc;                   /* -EIDRM when marked (D2) */
+    uint32_t npages = shm_obj_npages(obj);
+    uint64_t base = t->mm->mmap_next;
+    struct vm_area *v = vma_free_slot(t);
+    if (!v || base + (uint64_t)npages * PAGE_SIZE > VMM_MMAP_TOP ||
+        vma_overlaps(t, base, npages)) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    int ro = (a_flags & SHM_RDONLY) != 0;
+    uint64_t pflags = VMM_USER | VMM_NX | PTE_SW_SHMEM | (ro ? 0 : VMM_RW);
+    if (map_obj_pages(t, obj, 0, npages, base, pflags) != 0) {
+        shm_detach(obj);
+        return -ENOMEM;
+    }
+    v->base = base;
+    v->npages = npages;
+    v->shm = obj + 1;
+    v->shm_ro = ro;
+    v->x_ok = 0;                                 /* DDR-1189 A3: never executable */
+    v->ever_w = ro ? 0 : 1;
+    v->pgoff = 0;
+    v->wcap = 0;
+    t->mm->mmap_next = base + (uint64_t)npages * PAGE_SIZE;
+    return (long)base;
+}
+
+static long sys_shmdt_locked(long a_addr, long a2, long a3, long a4, long a5, long a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    struct vm_area *v = vma_find(current_thread, (uint64_t)a_addr);
+    if (!v || !v->shm)
+        return -EINVAL;
+    return sys_munmap_locked(a_addr, 0, 0, 0, 0, 0);
+}
+
+static long sys_shmctl_impl(long a_id, long a_cmd, long a_buf, long a4, long a5, long a6) {
+    (void)a_buf; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;
+    if (a_cmd != IPC_RMID)
+        return -EINVAL;              /* IPC_STAT / IPC_SET: not in P2 */
+    int obj = shmid_obj(t, a_id);
+    if (obj < 0)
+        return obj;
+    return shm_mark(obj);
+}
+
+/* ---- DDR-1178 Amendment 3: POSIX shm_open(SHM_ANON) ----------------------
+ * D1(c): no names. The fd is the only way to reach the object, and it reaches
+ * other processes only through fork (fd_clone takes a hold). */
+#define SHM_ANON      1L             /* FreeBSD's (const char *)1 */
+#define SHMO_ACCMODE  3
+#define SHMO_RDWR     2
+#define SHMO_CREAT    0x40
+#define SHMO_EXCL     0x80
+
+static long sys_shm_open_impl(long a_name, long a_oflag, long a_mode, long a4, long a5, long a6) {
+    (void)a_mode; (void)a4; (void)a5; (void)a6;
+    struct tcb *t = current_thread;
+    if (t->is_agent)
+        return -EPERM;               /* A2.2: memory the agent cap does not see */
+    if (a_name != SHM_ANON)
+        return -EACCES;              /* D1(c); the pointer is never read */
+    if ((a_oflag & SHMO_ACCMODE) != SHMO_RDWR ||
+        (a_oflag & ~(long)(SHMO_ACCMODE | SHMO_CREAT | SHMO_EXCL)))
+        return -EINVAL;
+    int fd = fd_alloc(t);
+    if (fd < 0)
+        return -EMFILE;
+    int obj = shm_obj_reserve();     /* held once: by this entry */
+    if (obj < 0)
+        return obj;
+    struct fd_entry *e = &t->fdt.e[fd];
+    e->kind  = FD_SHM;
+    e->mnt   = obj;
+    e->off   = 0;
+    e->file  = 0;
+    e->pipe  = 0;
+    e->epoll = 0;
+    e->cap   = 0;
+    e->flags = SHMO_RDWR;
+    return fd;
+}
+
+/* ---- DDR-1178 Amendment 4: SYS_MSYNC -------------------------------------
+ * Writes back the dirty pages of [addr, addr+len) of one mapping. MS_ASYNC and
+ * MS_SYNC both write before returning; MS_INVALIDATE is not supported (A4.6:
+ * no page cache to re-read from). Nothing to write is success. */
+#define MS_ASYNC       1
+#define MS_INVALIDATE  2
+#define MS_SYNC        4
+
+static long sys_msync_locked(long a_addr, long a_len, long a_flags, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    uint64_t addr = (uint64_t)a_addr;
+    if (a_flags & ~(long)(MS_ASYNC | MS_INVALIDATE | MS_SYNC))
+        return -EINVAL;
+    if (a_flags & MS_INVALIDATE)
+        return -EINVAL;
+    if (!(a_flags & MS_ASYNC) == !(a_flags & MS_SYNC))
+        return -EINVAL;                          /* POSIX: exactly one */
+    if (addr & (PAGE_SIZE - 1) || a_len < 0)
+        return -EINVAL;
+    uint64_t len = ((uint64_t)a_len + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    if (len == 0)
+        len = PAGE_SIZE;                         /* the page at addr must be mapped */
+    if (addr > VMM_MMAP_TOP || len > VMM_MMAP_TOP - addr)
+        return -ENOMEM;
+    struct tcb *t = current_thread;
+    for (int i = 0; i < VM_AREA_MAX; i++) {
+        struct vm_area *v = &t->mm->vma[i];
+        if (!v->npages)
+            continue;
+        uint64_t end = v->base + v->npages * PAGE_SIZE;
+        if (addr >= v->base && addr + len <= end)
+            return shm_vma_writeback(t->cr3, v, addr, addr + len, SHM_WB_MSYNC);
+    }
+    return -ENOMEM;                              /* POSIX: not one mapping */
+}
+
+/* DDR-1181 §3.3: every change to the address space holds the mm lock. The
+ * bodies above are unchanged; they run with it held. */
+static long sys_mmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_mmap_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_munmap(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_munmap_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_mprotect(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_mprotect_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_msync(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_msync_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_shmat(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_shmat_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
+}
+
+static long sys_shmdt(long a1, long a2, long a3, long a4, long a5, long a6) {
+    struct tcb *t = current_thread;
+    mm_lock(t);
+    long rc = sys_shmdt_locked(a1, a2, a3, a4, a5, a6);
+    mm_unlock(t);
+    return rc;
 }
 
 void sys_mmap_register(void) {
     syscall_register(SYS_MMAP,     sys_mmap);
     syscall_register(SYS_MUNMAP,   sys_munmap);
     syscall_register(SYS_MPROTECT, sys_mprotect);   /* DDR-1031 */
+    syscall_register(SYS_SHMGET,   sys_shmget_impl);    /* DDR-1178 A2 */
+    syscall_register(SYS_SHMAT,    sys_shmat);
+    syscall_register(SYS_SHMDT,    sys_shmdt);
+    syscall_register(SYS_SHMCTL,   sys_shmctl_impl);
+    syscall_register(SYS_SHM_OPEN, sys_shm_open_impl);  /* DDR-1178 A3 */
+    syscall_register(SYS_MSYNC,    sys_msync);          /* DDR-1178 A4 */
 }

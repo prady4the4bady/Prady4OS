@@ -12,6 +12,11 @@
 #include "vmm.h"
 #include "irq.h"
 #include "console.h"
+#include "spinlock.h"
+#include "percpu.h"
+#include "sched.h"
+#include "futex.h"
+#include "vdso_page.h"
 
 #define MSR_APIC_BASE      0x1Bu
 #define APIC_BASE_ENABLE   (1ull << 11)
@@ -203,4 +208,258 @@ void lapic_timer_ap_arm(void) {
     lapic_wr(LAPIC_TIMER_DCR, DCR_DIV16);
     lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LVT_PERIODIC);
     lapic_wr(LAPIC_TIMER_ICR, g_timer_count);
+}
+
+/* ---- DDR-1188 Amendment 3 (C1.5 P2): one-shot timers ------------------- */
+
+#define HR_SLOTS      8
+#define HR_PERIODIC   0     /* LVT periodic: today's tick, untouched            */
+#define HR_EARLY      1     /* LVT one-shot, counting to a sleeper's deadline   */
+#define HR_TAIL       2     /* LVT one-shot, counting to the tick boundary      */
+#define HR_NOHZ       3     /* DDR-1188 A7: an idle AP's bounded stop (T3, T4)  */
+#define HR_TICK_NS    10000000ull
+#define HR_SPACE_NS   50000ull          /* T5: 50 us after the last interrupt   */
+#define HR_SLACK_NS   200000ull         /* a tail interrupt this early is stale */
+#define HR_BUDGET     1000u             /* T4: one-shots per thread per window  */
+#define HR_WINDOW_NS  1000000000ull
+
+struct hr_cpu {
+    spinlock_t lk;
+    uint32_t   npend;       /* occupied slots; read without lk as a fast path */
+    uint32_t   phase;
+    uint64_t   tick_at;     /* one-shot phases: mono time of the tick boundary */
+    uint64_t   target;      /* one-shot phases: mono time the count runs to    */
+    uint64_t   last_irq;    /* mono time of the last timer interrupt here      */
+    uint64_t   nohz_t0;     /* HR_NOHZ: mono time the tick was stopped (A7 T4) */
+    struct { struct tcb *t; uint64_t dl; } slot[HR_SLOTS];
+};
+static struct hr_cpu g_hr[LAPIC_MAX_CPUS];
+
+static uint64_t hr_ns_to_counts(uint64_t ns) {
+    /* Rounded UP (DDR-1188 A4, the T5 correction): the count starts at the
+     * LAPIC write, after `now` was sampled, so a rounded-up count never
+     * expires before its target. ns <= one tick: no overflow. */
+    uint64_t c = (ns * g_timer_count + HR_TICK_NS - 1) / HR_TICK_NS;
+    if (c == 0) c = 1;                              /* T5: never a count of 0 */
+    if (c > 0xFFFFFFFFull) c = 0xFFFFFFFFull;
+    return c;
+}
+
+static uint64_t hr_earliest(const struct hr_cpu *h) {
+    uint64_t dl = ~0ull;
+    for (int i = 0; i < HR_SLOTS; i++)
+        if (h->slot[i].t && h->slot[i].dl < dl)
+            dl = h->slot[i].dl;
+    return dl;
+}
+
+static uint32_t hr_irr48(void) {
+    return (lapic_rd(LAPIC_IRR_BASE + 0x10u) >> (LAPIC_TIMER_VECTOR % 32)) & 1u;
+}
+
+/* Count to min(earliest deadline, tick boundary). Own CPU only, lk held,
+ * interrupts off, h->tick_at valid. Every LVT write is followed by a count. */
+static void hr_oneshot(struct hr_cpu *h, uint64_t now) {
+    uint64_t dl = hr_earliest(h);
+    uint64_t target = dl < h->tick_at ? dl : h->tick_at;
+    uint32_t phase  = dl < h->tick_at ? HR_EARLY : HR_TAIL;
+    if (target < h->last_irq + HR_SPACE_NS)
+        target = h->last_irq + HR_SPACE_NS;         /* T5 */
+    if (target >= h->tick_at)                       /* the floor reached the tick: */
+        phase = HR_TAIL;                            /* the tail waits for it (T5) */
+    uint64_t ns = target > now ? target - now : 0;
+    if (ns > HR_TICK_NS) ns = HR_TICK_NS;
+    h->target = target;
+    h->phase  = phase;
+    lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR);              /* one-shot */
+    lapic_wr(LAPIC_TIMER_ICR, (uint32_t)hr_ns_to_counts(ns));
+}
+
+static void hr_periodic(struct hr_cpu *h) {
+    h->phase = HR_PERIODIC;
+    lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LVT_PERIODIC);
+    lapic_wr(LAPIC_TIMER_ICR, g_timer_count);
+}
+
+/* Wake every slot whose deadline the clock has reached. lk held. */
+static void hr_expire(struct hr_cpu *h, uint64_t now) {
+    for (int i = 0; i < HR_SLOTS; i++) {
+        struct tcb *t = h->slot[i].t;
+        if (!t || h->slot[i].dl > now)
+            continue;
+        h->slot[i].t = 0;
+        __atomic_store_n(&h->npend, h->npend - 1, __ATOMIC_RELAXED);
+        futex_kick(t);          /* T3: present under lk, so still in its sleep */
+    }
+}
+
+int hrt_arm(struct tcb *t, uint64_t deadline_ns) {
+    struct percpu *pc = this_cpu();
+    if (!pc || !g_lapic || !g_timer_count || pc->cpu_idx >= LAPIC_MAX_CPUS)
+        return 0;
+    uint64_t now = ktime_mono_ns();
+    if (t->hr_n == 0 || now - t->hr_win >= HR_WINDOW_NS) {   /* T4: a new window */
+        t->hr_win = now;
+        t->hr_n   = 0;
+    }
+    if (t->hr_n >= HR_BUDGET)
+        return 0;                                   /* budget spent: tick only */
+    struct hr_cpu *h = &g_hr[pc->cpu_idx];
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    int i;
+    for (i = 0; i < HR_SLOTS; i++)
+        if (!h->slot[i].t)
+            break;
+    if (i == HR_SLOTS) {
+        spin_unlock_irqrestore(&h->lk, fl);
+        return 0;                                   /* table full: tick only */
+    }
+    h->slot[i].t  = t;
+    h->slot[i].dl = deadline_ns;
+    __atomic_store_n(&h->npend, h->npend + 1, __ATOMIC_RELAXED);
+    t->hr_cpu = pc->cpu_idx + 1;
+    t->hr_n++;
+    /* A timer interrupt that is already latched will run hrt_irq as soon as
+     * interrupts are back on, and it programs for the earliest slot itself.
+     * Re-programming under it would lose a tick (periodic) or mistake a stale
+     * interrupt for a new phase. */
+    if (!hr_irr48()) {
+        now = ktime_mono_ns();                      /* under lk, beside the count read */
+        if (h->phase == HR_PERIODIC) {
+            uint64_t rem = lapic_rd(LAPIC_TIMER_CCR);       /* before any LVT write */
+            uint64_t tick_at = now + rem * HR_TICK_NS / g_timer_count;
+            /* The periodic fast path does not record last_irq; in periodic
+             * mode the previous interrupt was one period before the next. */
+            if (tick_at > HR_TICK_NS && tick_at - HR_TICK_NS > h->last_irq)
+                h->last_irq = tick_at - HR_TICK_NS;
+            if (deadline_ns + HR_SPACE_NS < tick_at) {
+                h->tick_at = tick_at;
+                hr_oneshot(h, now);
+            }
+        } else if (deadline_ns < h->target) {
+            hr_oneshot(h, now);
+        }
+    }
+    spin_unlock_irqrestore(&h->lk, fl);
+    return 1;
+}
+
+void hrt_cancel(struct tcb *t) {
+    uint32_t c = t->hr_cpu;
+    if (!c)
+        return;
+    t->hr_cpu = 0;
+    struct hr_cpu *h = &g_hr[c - 1];
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    for (int i = 0; i < HR_SLOTS; i++)
+        if (h->slot[i].t == t) {
+            h->slot[i].t = 0;
+            __atomic_store_n(&h->npend, h->npend - 1, __ATOMIC_RELAXED);
+        }
+    /* The LAPIC is left alone (it may be another CPU's). A one-shot that now
+     * has nothing due finds that in hrt_irq and moves on to the tail. */
+    spin_unlock_irqrestore(&h->lk, fl);
+}
+
+int hrt_irq(void) {
+    struct percpu *pc = this_cpu();
+    if (!pc || pc->cpu_idx >= LAPIC_MAX_CPUS)
+        return 1;
+    struct hr_cpu *h = &g_hr[pc->cpu_idx];
+    /* The path every tick takes when nothing is pending: two loads, no lock,
+     * no LAPIC write. phase is written only by this CPU, interrupts off. */
+    if (h->phase == HR_PERIODIC && !__atomic_load_n(&h->npend, __ATOMIC_RELAXED))
+        return 1;
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    if (h->phase == HR_NOHZ) {
+        /* DDR-1188 A7 T4: the stop's own interrupt (the bound, or a sleeper's
+         * deadline), or one racing it. Wake what is due; not a tick, and no
+         * reprogramming: the idle loop's exit restores the periodic timer and
+         * catches the clock up. */
+        uint64_t now = ktime_mono_ns();
+        h->last_irq = now;
+        hr_expire(h, now);
+        spin_unlock_irqrestore(&h->lk, fl);
+        return 0;
+    }
+    uint64_t now = ktime_mono_ns();
+    h->last_irq = now;
+    hr_expire(h, now);
+    int tick;
+    if (h->phase == HR_EARLY || (h->phase == HR_TAIL && now + HR_SLACK_NS < h->tick_at)) {
+        tick = 0;                                   /* early, or a stale interrupt */
+        hr_oneshot(h, now);
+    } else {
+        tick = 1;                                   /* periodic tick, or the tail */
+        uint64_t dl = hr_earliest(h);
+        if (dl != ~0ull &&                          /* empty table: back to periodic */
+            dl + HR_SPACE_NS < now + HR_TICK_NS) {  /* the next one is before the next tick */
+            h->tick_at = now + HR_TICK_NS;
+            hr_oneshot(h, now);
+        } else if (h->phase != HR_PERIODIC) {
+            hr_periodic(h);
+        }
+    }
+    spin_unlock_irqrestore(&h->lk, fl);
+    return tick;
+}
+
+/* ---- DDR-1188 Amendment 7 (C1.5 P6): tickless idle on the APs ----------- */
+
+int hrt_nohz_enter(void) {
+    struct percpu *pc = this_cpu();
+    if (!pc || !g_lapic || !g_timer_count || pc->cpu_idx >= LAPIC_MAX_CPUS)
+        return 0;
+    struct hr_cpu *h = &g_hr[pc->cpu_idx];
+    int ok = 0;
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    /* T2 (b) as built: a one-shot phase means P2 owns the timer, and a latched
+     * tick is left to arrive as a tick. A pending sleeper does not stop the
+     * stop: the count runs to its deadline when that comes before the bound,
+     * and a deadline inside the next tick is left to the periodic tick. */
+    if (h->phase == HR_PERIODIC && !hr_irr48()) {
+        uint64_t now = ktime_mono_ns();
+        uint64_t ns  = (uint64_t)NOHZ_MAX_TICKS * HR_TICK_NS;
+        uint64_t dl  = hr_earliest(h);              /* A7: the sleeper's deadline */
+        if (dl != ~0ull && dl < now + ns)
+            ns = dl > now ? dl - now : 0;
+        if (ns > HR_TICK_NS) {
+            uint64_t c = (ns * g_timer_count + HR_TICK_NS - 1) / HR_TICK_NS;
+            if (c > 0xFFFFFFFFull)
+                c = 0xFFFFFFFFull;                  /* a shorter bound, never longer */
+            h->nohz_t0 = now;
+            h->phase   = HR_NOHZ;
+            lapic_wr(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR);          /* one-shot */
+            lapic_wr(LAPIC_TIMER_ICR, (uint32_t)c);
+            ok = 1;
+        }
+    }
+    spin_unlock_irqrestore(&h->lk, fl);
+    return ok;
+}
+
+uint64_t hrt_nohz_exit(void) {
+    struct percpu *pc = this_cpu();
+    if (!pc || pc->cpu_idx >= LAPIC_MAX_CPUS)
+        return 0;
+    struct hr_cpu *h = &g_hr[pc->cpu_idx];
+    uint64_t k = 0;
+    uint64_t fl = spin_lock_irqsave(&h->lk);
+    if (h->phase == HR_NOHZ) {
+        uint64_t now = ktime_mono_ns();
+        k = (now - h->nohz_t0) / HR_TICK_NS;
+        h->last_irq = now;
+        /* A sleeper due inside the next tick (the stop's interrupt can come a
+         * little before its deadline by the TSC) gets P2's one-shot, as
+         * hrt_irq's tick path does; otherwise back to the periodic tick. */
+        uint64_t dl = hr_earliest(h);
+        if (dl != ~0ull && dl + HR_SPACE_NS < now + HR_TICK_NS) {
+            h->tick_at = now + HR_TICK_NS;
+            hr_oneshot(h, now);
+        } else {
+            hr_periodic(h);
+        }
+    }
+    spin_unlock_irqrestore(&h->lk, fl);
+    return k;
 }

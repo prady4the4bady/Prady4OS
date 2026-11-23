@@ -188,6 +188,21 @@
 #define SYS_SPAWN_TASK     107 /* DDR-1170: (task, slot, const struct task_budget *) -> pid | -EPERM|-EFAULT|-ENOSYS; sovereign only */
 #define SYS_SIGPROCMASK    108 /* DDR-1174: (how, const u64 *set, u64 *old) -> 0 | -EINVAL|-EFAULT */
 #define SYS_SIGACTION2     109 /* DDR-1174: (sig, const k_sigaction *act, k_sigaction *old) -> 0 | -EINVAL|-EFAULT */
+#define SYS_THREAD_CREATE  110 /* DDR-1181: (entry, stack_top, arg, tls, clear_tid) -> tid | -EPERM|-EINVAL|-EAGAIN|-ENOMEM */
+#define SYS_THREAD_EXIT    111 /* DDR-1181: (status) -> never returns; ends the calling thread only */
+#define SYS_SHMGET         112 /* DDR-1178 A2: (key, size, flags) -> shmid | -EACCES|-EINVAL|-ENOSPC|-ENOMEM|-EPERM */
+#define SYS_SHMAT          113 /* DDR-1178 A2: (shmid, addr, flags) -> va | -EINVAL|-EIDRM|-ENOMEM|-EPERM */
+#define SYS_SHMDT          114 /* DDR-1178 A2: (addr) -> 0 | -EINVAL */
+#define SYS_SHMCTL         115 /* DDR-1178 A2: (shmid, cmd, buf) -> 0 | -EINVAL|-EPERM; IPC_RMID only */
+#define SYS_SHM_OPEN       116 /* DDR-1178 A3: (SHM_ANON, O_RDWR, mode) -> fd | -EACCES|-EINVAL|-EMFILE|-ENOSPC|-EPERM */
+#define SYS_FUTEX          117 /* DDR-1181 A1: (uaddr, op, val, timespec*, -, -) -> 0|n | -EAGAIN|-ETIMEDOUT|-EINTR|-EINVAL|-EFAULT|-ENOSYS */
+#define SYS_SCHED_CPU      118 /* DDR-1186: (op, cpu) op 0 GET -> cpu index; 1 PIN -> 0|-EINVAL; 2 UNPIN -> 0 */
+#define SYS_MSYNC          119 /* DDR-1178 A4: (addr, len, flags) -> 0 | -EINVAL|-ENOMEM|-EAGAIN|-EIO */
+#define SYS_CLOCK_GETTIME  120 /* DDR-1188 A1-4: (clockid, struct timespec *) -> 0 | -EINVAL|-EFAULT; 0 REALTIME, 1 MONOTONIC */
+#define SYS_NANOSLEEP      121 /* DDR-1188 A1-4: (const struct timespec *, struct timespec *rem) -> 0 | -EINVAL|-EFAULT|-EINTR */
+#define SYS_SCHED_SETSCHED 122 /* DDR-1188 A4 S3: (tid=0, policy, prio) -> 0 | -EINVAL|-EPERM; 0 OTHER, 1 FIFO, 2 RR */
+#define SYS_SCHED_GRANT    123 /* DDR-1188 A4 S3: (pid, CAP_SCHED_RT) -> 0 | -EPERM|-ESRCH|-EINVAL */
+#define SYS_PSI            124 /* DDR-1188 A6 P3: (res 0 cpu | 1 io, cpu) -> 0..100 | -EINVAL */
 #define SYS_LEDGER         106 /* DDR-1150: (op, buf, len) sovereign-only; audit-head signing */
 #define SYS_DNS_RESOLVE    103 /* (name, uint32_t *out, resolver) -> 0 | -EPERM|-EFAULT|-EINVAL|-ENAMETOOLONG|-ENODEV|-ENOENT|-ETIMEDOUT|-EAGAIN */
 #define SYS_RENAME         95  /* (oldpath, newpath) -> 0 | -ENOENT|-EPERM|-EIO */

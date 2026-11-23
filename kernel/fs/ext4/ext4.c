@@ -295,6 +295,12 @@ static void ext4_umount(void *ctx) {
     kfree(c);
 }
 
+/* DDR-1178 A4.2: the inode (cookie); dirent_clus is always 0 here. */
+static uint64_t ext4_ident(void *ctx, const struct vfs_file *f) {
+    (void)ctx;
+    return (uint64_t)f->cookie | ((uint64_t)f->dirent_clus << 32);
+}
+
 static const struct vfs_fs_ops ext4_ops = {
     .name    = "ext4",
     .mount   = ext4_mount,
@@ -303,6 +309,7 @@ static const struct vfs_fs_ops ext4_ops = {
     .readdir = ext4_readdir,
     .umount  = ext4_umount,
     /* create/write/unlink/txn = NULL: read-only */
+    .ident = ext4_ident,     /* DDR-1178 A4.2 */
 };
 
 void ext4_register(void) {

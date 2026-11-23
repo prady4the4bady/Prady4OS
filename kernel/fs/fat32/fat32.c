@@ -723,6 +723,14 @@ static void fat32_umount(void *ctx) {
     kfree(c);
 }
 
+/* DDR-1178 A4.2: a FAT32 file is its directory entry. The first cluster
+ * (cookie) is 0 for an empty file and changes on its first write, so it
+ * cannot name the file; the entry's cluster and byte offset can. */
+static uint64_t fat32_ident(void *ctx, const struct vfs_file *f) {
+    (void)ctx;
+    return ((uint64_t)f->dirent_clus << 16) | f->dirent_off;
+}
+
 static const struct vfs_fs_ops fat32_ops = {
     .name    = "fat32",
     .mount   = fat32_mount,
@@ -734,6 +742,8 @@ static const struct vfs_fs_ops fat32_ops = {
     .rename  = fat32_rename,                     /* DDR-958 */
     .readdir = fat32_readdir,
     .umount  = fat32_umount,
+    .ident = fat32_ident,     /* DDR-1178 A4.2 */
+    .shared_write = 1,         /* DDR-1178 A4.2: writes in place */
 };
 
 void fat32_register(void) {

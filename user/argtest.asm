@@ -92,6 +92,25 @@ _start:
     jmp     .envp_loop
 .envp_done:
 
+    ; ---- DDR-1205: execve resets the FS base ----
+    ; argvtest set FS to an address in ITS text before execve. P = s_ok, a
+    ; mapped address in THIS image. With FS 0, [fs:P] is [P]. With the old
+    ; FS kept, [fs:P] is in PML4 slot 2, unmapped: the load faults and the
+    ; sentinels below never print.
+    lea     rbx, [rel s_ok]
+    mov     rax, [rbx]
+    mov     rcx, [fs:rbx]
+    cmp     rax, rcx
+    jne     .fs_bad
+    lea     rsi, [rel s_fs_ok]
+    mov     rdx, s_fs_ok_len
+    jmp     .fs_emit
+.fs_bad:
+    lea     rsi, [rel s_fs_bad]
+    mov     rdx, s_fs_bad_len
+.fs_emit:
+    call    write_str
+
     lea     rsi, [rel s_ok]
     mov     rdx, s_ok_len
     call    write_str
@@ -159,6 +178,10 @@ s_envp:     db "PRADYOS_ENVP="
 s_envp_len: equ $ - s_envp
 s_ok:       db "PRADYOS_ARGV_OK", 10
 s_ok_len:   equ $ - s_ok
+s_fs_ok:     db "PRADYOS_EXEC_FS reset=1", 10
+s_fs_ok_len: equ $ - s_fs_ok
+s_fs_bad:     db "ARGVTEST FAIL: exec kept FS base", 10
+s_fs_bad_len: equ $ - s_fs_bad
 s_align_ok:      db "PRADYOS_ARGV_ALIGN=ok", 10
 s_align_ok_len:  equ $ - s_align_ok
 s_align_bad:     db "PRADYOS_ARGV_ALIGN=bad", 10
