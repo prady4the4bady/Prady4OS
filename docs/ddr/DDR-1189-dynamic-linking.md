@@ -809,7 +809,7 @@ must turn it red (A4.6).
 | Mutant | Change | Red on |
 |---|---|---|
 | D7f | `mprot_exec_ok` refuses when any page of the area carries the bit (the per-area record back) | F7 |
-| D7g | PASS 2 does not set the bit on a write grant | F5, F7, F8a, F8b, F8c (the `mprotect` set point that every write-then-X arm uses) |
+| D7g | PASS 2 does not set the bit on a write grant | F5, F7, F8a, F8b (the `mprotect` set point that these write-then-X arms use; F8c stays green because the COW fault sets the bit itself. Measured in CI run #2546; the first draft of this table also named F8c) |
 | D7h | fork's read-only branch drops the bit | F8a |
 | D7i | fork's writable branch drops the bit in the child | F8b |
 | D7j | `vmm_cow_fault` does not set the bit | F8c |
