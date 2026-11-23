@@ -176,6 +176,12 @@ USER_PIE_ELF   := build/dynpie.elf
 USER_PBAD_SRC  := user/dynpbad.c
 USER_PINT_ELF  := build/dynpint.elf
 USER_PTXT_ELF  := build/dynptxt.elf
+# DDR-1189 A3 P3a-3 (arm D0): a freestanding interpreter, the program it runs,
+# and an image whose interpreter has a PT_INTERP of its own.
+USER_LDT_SRC   := user/ldtest.c
+USER_LDT_ELF   := build/ldtest.elf
+USER_D0_ELF    := build/dynd0.elf
+USER_PII_ELF   := build/dynpii.elf
 USER_IPC_SRC   := user/ipctest.c         # DDR-1033: ring-3 IPC door (NSI 98/99)
 USER_IPC_ELF   := build/ipctest.elf
 USER_EXP_SRC   := user/exptest.c         # DDR-1034: bounded experiment executor
@@ -701,6 +707,13 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack --strip-all -o $(USER_PINT_ELF) build/dynpint.o
 	$(CC) $(USER_PIE_CFLAGS) -DDYN_TEXTREL -c $(USER_PBAD_SRC) -o build/dynptxt.o
 	$(LD) -pie --no-dynamic-linker -z notext -z noexecstack --strip-all -o $(USER_PTXT_ELF) build/dynptxt.o
+	# DDR-1189 A3 P3a-3: arm D0. ldtest has no dynamic relocations (the kernel
+	# relocates nothing when an interpreter is present).
+	$(CC) $(USER_PIE_CFLAGS) -c $(USER_LDT_SRC) -o build/ldtest.o
+	$(LD) -pie --no-dynamic-linker -z text -z noexecstack --strip-all -o $(USER_LDT_ELF) build/ldtest.o
+	$(CC) $(USER_PIE_CFLAGS) -DDYN_D0 -c $(USER_PIE_SRC) -o build/dynd0.o
+	$(LD) -pie --dynamic-linker=/LIB/LDTEST.SO -z text -z noexecstack --strip-all -o $(USER_D0_ELF) build/dynd0.o
+	$(LD) -pie --dynamic-linker=/DYNPINT.ELF -z text -z noexecstack --strip-all -o $(USER_PII_ELF) build/dynpint.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_IPC_SRC) -o build/ipctest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_IPC_ELF) build/ipctest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_EXP_SRC) -o build/exptest.o
@@ -731,7 +744,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_SFSROOT_ELF) build/sfsroottest.o
 	$(CC) $(USER_C_CFLAGS) -c $(USER_BIGWRITE_SRC) -o build/bigwritetest.o
 	$(LD) -nostdlib --strip-all -T $(USER_LD) -o $(USER_BIGWRITE_ELF) build/bigwritetest.o
-	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF) $(USER_DYN_ELF) $(USER_PIE_ELF) $(USER_PINT_ELF) $(USER_PTXT_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
+	@for e in $(USER_ELF) $(USER_WX_ELF) $(USER_SYS_ELF) $(USER_EXEC_ELF) $(USER_TLS_ELF) $(USER_FPU_ELF) $(USER_CMUSL_ELF) $(USER_INIT_ELF) $(USER_PRISM_ELF) $(USER_AETHERD_ELF) $(USER_AGENT_ELF) $(USER_INPUT_ELF) $(USER_COMP_ELF) $(USER_SURF_ELF) $(USER_SURFDESTROY_ELF) $(USER_AGENTMETRICS_ELF) $(USER_CAPNET_ELF) $(USER_ROOTMNT_ELF) $(USER_FSRM_ELF) $(USER_FAT32MC_ELF) $(USER_NETHAMMER_ELF) $(USER_MODKEYS_ELF) $(USER_FTRUNC_ELF) $(USER_RENAME_ELF) $(USER_STACKD_ELF) $(USER_BENCH_ELF) $(USER_SYSINFO_ELF) $(USER_TIME_ELF) $(USER_DMESG_ELF) $(USER_KILL_ELF) $(USER_SETNAME_ELF) $(USER_FUZZ_ELF) $(USER_SFSROOT_ELF) $(USER_BIGWRITE_ELF) $(USER_METRIC_ELF) $(USER_RTCMONO_ELF) $(USER_SOVEG_ELF) $(USER_EGAUD_ELF) $(USER_PRIVNET_ELF) $(USER_BUDGET_ELF) $(USER_RB_ELF) $(USER_DNS1_ELF) $(USER_DNS2_ELF) $(USER_DNS3_ELF) $(USER_SIGPIPE_ELF) $(USER_SHA256_ELF) $(USER_SHAKE_ELF) $(USER_LOCKBOX_ELF) $(USER_HKDF_ELF) $(USER_X25519_ELF) $(USER_SHA512_ELF) $(USER_AEAD_ELF) $(USER_ED25519_ELF) $(USER_ACC_ELF) $(USER_AREAD_ELF) $(USER_TERM_ELF) $(USER_MPROT_ELF) $(USER_KILLB_ELF) $(USER_SIGSEM_ELF) $(USER_SHM_ELF) $(USER_THR_ELF) $(USER_SCHED_ELF) $(USER_SCHEDAGT_ELF) $(USER_DISK_ELF) $(USER_DOMCAP_ELF) $(USER_LEDGER_ELF) $(USER_SLOW_ELF) $(USER_ARGT_ELF) $(USER_ARGV_ELF) $(USER_IPC_ELF) $(USER_DYN_ELF) $(USER_PIE_ELF) $(USER_PINT_ELF) $(USER_PTXT_ELF) $(USER_LDT_ELF) $(USER_D0_ELF) $(USER_PII_ELF); do test "$$(wc -c < $$e)" -le 262144 || { echo "$$e exceeds 256 KiB (EXEC_MAX user-ELF budget)"; exit 1; }; done
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/user_image.asm    -o build/user_image.o
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/install_blobs.asm -o build/install_blobs.o   # DDR-1143
 	$(NASM) $(NASM_WERROR) -f elf64 arch/x86_64/boot.asm          -o build/boot.o
@@ -977,6 +990,10 @@ fat-image: $(KERNEL_BIN)
 	mcopy -i $(FAT_IMG) $(USER_PIE_ELF) ::/DYNPIE.ELF
 	mcopy -i $(FAT_IMG) $(USER_PINT_ELF) ::/DYNPINT.ELF
 	mcopy -i $(FAT_IMG) $(USER_PTXT_ELF) ::/DYNPTXT.ELF
+	mmd   -i $(FAT_IMG) ::/LIB
+	mcopy -i $(FAT_IMG) $(USER_LDT_ELF) ::/LIB/LDTEST.SO
+	mcopy -i $(FAT_IMG) $(USER_D0_ELF) ::/DYND0.ELF
+	mcopy -i $(FAT_IMG) $(USER_PII_ELF) ::/DYNPII.ELF
 	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
@@ -4534,7 +4551,7 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-dynlink: $(IMG) fat-image sfs-image
 	@rm -f build/dynlink.log
 	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
-	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_PIE_DONE n=4')" \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_D0 base_ok=\nPRADYOS_DYN_D0M base=\nPRADYOS_DYN_R interp2 rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=')" \
 	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@L=build/dynlink.log ; rc=0 ; \
@@ -4567,7 +4584,35 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$np" = 4 ] && [ "$$nx" = 4 ] || { echo "[dynlink] FAIL: arm C3, auxv aux=$$nx of $$np PIE runs (want 4 of 4)"; rc=1; } ; \
 	  [ "$$ri" = 1 ] || { echo "[dynlink] FAIL: arm C4, the PT_INTERP image was not refused with -ENOEXEC"; rc=1; } ; \
 	  [ "$$rt" = 1 ] || { echo "[dynlink] FAIL: arm C5, the text-relocation image was not refused with -ENOEXEC"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B and C1-C5" ; exit $$rc
+	  F=$$(grep -a 'PRADYOS_DYN_F wx=' $$L | head -1) ; echo "$$F" ; \
+	  fv() { echo "$$F" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(fv filex)" = 1 ] && [ "$$(fv frx)" = 0 ] && [ "$$(fv frw)" = 0 ] || { echo "[dynlink] FAIL: arm F0, the legal executable path: filex=$$(fv filex) frx=$$(fv frx) frw=$$(fv frw) (want 1, 0, 0)"; rc=1; } ; \
+	  [ "$$(fv wx)" = -13 ] || { echo "[dynlink] FAIL: arm F1, write+execute from a read-only fd: $$(fv wx) (want -13)"; rc=1; } ; \
+	  [ "$$(fv anonx)" = -22 ] && [ "$$(fv sharedx)" = -22 ] || { echo "[dynlink] FAIL: arm F2, anonymous/shared executable: anonx=$$(fv anonx) sharedx=$$(fv sharedx) (want -22, -22)"; rc=1; } ; \
+	  [ "$$(fv rwfd)" = -13 ] || { echo "[dynlink] FAIL: arm F3, executable from a writable fd: $$(fv rwfd) (want -13)"; rc=1; } ; \
+	  [ "$$(fv mpanon)" = -13 ] || { echo "[dynlink] FAIL: arm F4, mprotect(PROT_EXEC) on anonymous memory: $$(fv mpanon) (want -13)"; rc=1; } ; \
+	  [ "$$(fv frwx)" = -13 ] || { echo "[dynlink] FAIL: arm F5, mprotect(PROT_EXEC) after the mapping was writable: $$(fv frwx) (want -13)"; rc=1; } ; \
+	  D0=$$(grep -a 'PRADYOS_DYN_D0 base_ok=' $$L | head -1) ; echo "$$D0" ; \
+	  D0M=$$(grep -a 'PRADYOS_DYN_D0M base=' $$L | head -1) ; echo "$$D0M" ; \
+	  d0n=$$(echo "$$D0" | sed -n 's/.* nrel=\(-*[0-9]*\).*/\1/p') ; \
+	  d0ib=$$(echo "$$D0M" | sed -n 's/.* ibase=0x\([0-9a-f]*\).*/\1/p') ; \
+	  d0mb=$$(echo "$$D0M" | sed -n 's/.* base=0x\([0-9a-f]*\).*/\1/p') ; \
+	  echo "$$D0" | grep -q ' base_ok=1 ' && [ -n "$$d0n" ] && [ "$$d0n" -ge 2 ] || { echo "[dynlink] FAIL: arm D0a, the interpreter ran with its own base as AT_BASE and relocated the program: $$D0 (want base_ok=1, nrel>=2)"; rc=1; } ; \
+	  echo "$$D0M" | grep -q ' rel=1 aux=1 ' || { echo "[dynlink] FAIL: arm D0b, the program, relocated only by its interpreter, with its own auxv: $$D0M (want rel=1 aux=1)"; rc=1; } ; \
+	  [ -n "$$d0ib" ] && [ -n "$$d0mb" ] && [ $$(( 0x$$d0ib & 0xfff )) = 0 ] && [ $$(( 0x$$d0ib >= 0x8400000000 && 0x$$d0ib < 0x8440000000 )) = 1 ] && [ $$(( 0x$$d0mb >= 0x8100000000 && 0x$$d0mb < 0x8140000000 )) = 1 ] || { echo "[dynlink] FAIL: arm D0c, the interpreter base in the first 1 GiB of its window and the program in the PIE window: ibase=0x$$d0ib base=0x$$d0mb"; rc=1; } ; \
+	  [ "$$(grep -ac 'PRADYOS_DYN_R interp2 rc=-8$$' $$L)" = 1 ] || { echo "[dynlink] FAIL: arm D0r, an interpreter with a PT_INTERP of its own was not refused with -ENOEXEC"; rc=1; } ; \
+	  M=$$(grep -a 'PRADYOS_DYN_M pre=' $$L | head -1) ; echo "$$M" ; \
+	  mv() { echo "$$M" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(mv pre)" = 127 ] && [ "$$(mv anon)" = 1 ] && [ "$$(mv anonz)" = 0 ] && [ "$$(mv back)" = 1 ] && [ "$$(mv backb)" = 127 ] || { echo "[dynlink] FAIL: arm M0, MAP_FIXED replaces the caller's own pages: pre=$$(mv pre) anon=$$(mv anon) anonz=$$(mv anonz) back=$$(mv back) backb=$$(mv backb) (want 127, 1, 0, 1, 127)"; rc=1; } ; \
+	  [ "$$(mv mixed)" = -22 ] || { echo "[dynlink] FAIL: arm M1, MAP_FIXED over a range partly unmapped: $$(mv mixed) (want -22)"; rc=1; } ; \
+	  [ "$$(mv shfix)" = -22 ] && [ "$$(mv fsh)" = 1 ] && [ "$$(mv fshfix)" = -22 ] || { echo "[dynlink] FAIL: arm M2, MAP_FIXED over a shared mapping: shfix=$$(mv shfix) fsh=$$(mv fsh) fshfix=$$(mv fshfix) (want -22, 1, -22)"; rc=1; } ; \
+	  [ "$$(mv stack)" = -22 ] && [ "$$(mv image)" = -22 ] || { echo "[dynlink] FAIL: arm M3, MAP_FIXED outside the arena: stack=$$(mv stack) image=$$(mv image) (want -22, -22)"; rc=1; } ; \
+	  [ "$$(mv m4)" = -13 ] || { echo "[dynlink] FAIL: arm M4, mprotect(PROT_EXEC) after a writable replacement: $$(mv m4) (want -13)"; rc=1; } ; \
+	  [ "$$(mv fresh)" = 1 ] || { echo "[dynlink] FAIL: arm M5, MAP_FIXED on wholly unmapped arena space: $$(mv fresh) (want 1)"; rc=1; } ; \
+	  lk=$$(mv leak) ; [ -n "$$lk" ] && [ "$$lk" -gt -64 ] && [ "$$lk" -lt 64 ] || { echo "[dynlink] FAIL: arm M6, 256 in-place replacements changed the free page count by $$lk (want |n| < 64; a leak of every replaced frame is 256)"; rc=1; } ; \
+	  [ "$$(fv noflagx)" = -22 ] && [ "$$(fv noflagmp)" = -13 ] || { echo "[dynlink] FAIL: arm F6, L1 requires MAP_PRIVATE: noflagx=$$(fv noflagx) noflagmp=$$(fv noflagmp) (want -22, -13)"; rc=1; } ; \
+	  [ "$$(mv fsh0)" = -22 ] || { echo "[dynlink] FAIL: arm M7, MAP_SHARED|MAP_FIXED at address 0: $$(mv fsh0) (want -22)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F6 and M0-M7" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log
