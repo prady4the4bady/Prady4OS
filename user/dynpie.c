@@ -19,6 +19,11 @@
  *         same base (C3; mutant D3c leaves AT_PHDR and AT_ENTRY unbiased).
  *         AT_PHDR is dereferenced only after it has matched.
  *
+ * DDR-1189 A3 P3a-3: built -DDYN_D0 and linked with
+ * --dynamic-linker=/LIB/LDTEST.SO, it is arm D0's main program (/DYND0.ELF).
+ * The kernel then relocates nothing, so rel=1 means the interpreter did; the
+ * line is PRADYOS_DYN_D0M and adds ibase, the AT_BASE it was given.
+ *
  * Raw NSI syscalls, no libc. No arrays are zero-filled, so no memset is
  * emitted. QEMU only, not verified on real hardware.
  */
@@ -31,6 +36,7 @@
 #define AT_PHDR    3
 #define AT_PHENT   4
 #define AT_PHNUM   5
+#define AT_BASE    7
 #define AT_ENTRY   9
 #define PT_DYNAMIC 2
 
@@ -103,8 +109,9 @@ __attribute__((noreturn, used)) void pie_main(const uint64_t *sp) {
     while (*p)
         p++;
     p++;
-    uint64_t a_phdr = 0, a_phent = 0, a_phnum = 0, a_entry = 0;
+    uint64_t a_phdr = 0, a_phent = 0, a_phnum = 0, a_entry = 0, a_base = 0;
     for (; p[0] != AT_NULL; p += 2) {
+        if (p[0] == AT_BASE)  a_base = p[1];
         if (p[0] == AT_PHDR)  a_phdr = p[1];
         if (p[0] == AT_PHENT) a_phent = p[1];
         if (p[0] == AT_PHNUM) a_phnum = p[1];
@@ -129,10 +136,23 @@ __attribute__((noreturn, used)) void pie_main(const uint64_t *sp) {
 
     char hb[19];
     hex64(hb, base);
+#ifdef DYN_D0
+    wr("PRADYOS_DYN_D0M base=");
+#else
+    (void)a_base;
     wr("PRADYOS_DYN_P base=");
+#endif
     wr(hb);
     wr(rel ? " rel=1" : " rel=0");
+#ifdef DYN_D0
+    wr(aux ? " aux=1" : " aux=0");
+    hex64(hb, a_base);
+    wr(" ibase=");
+    wr(hb);
+    wr("\n");
+#else
     wr(aux ? " aux=1\n" : " aux=0\n");
+#endif
     for (;;)
         nsi(SYS_EXIT, 0, 0, 0);
 }

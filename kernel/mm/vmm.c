@@ -277,7 +277,7 @@ static int map_core(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t f
 
     uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;   /* drop NX if unsupported */
     table_at(pt)[idx(virt, 1)] =
-        (phys & PTE_ADDR) | (flags & (0xFFF | PTE_SW_SHMEM)) | nx | PTE_PRESENT;
+        (phys & PTE_ADDR) | (flags & (0xFFF | PTE_SW_SHMEM | PTE_SW_EVERW)) | nx | PTE_PRESENT;
     invlpg(virt);
     return 0;
 }
@@ -372,13 +372,16 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
      * carried over verbatim; only the permission bits are replaced. Rebuilding
      * the PTE as `frame | flags` would clear PTE_SW_SHARED (breaking DDR-1003's
      * invariant) and PTE_SW_COW (making vmm_cow_fault return early at
-     * vmm_cow.c:115, so the page is never copied). */
+     * vmm_cow.c:115, so the page is never copied). DDR-1189 A4: PTE_SW_EVERW is
+     * carried too, and set on every page this call makes writable. */
     uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;
+    uint64_t everw = (flags & VMM_RW) ? PTE_SW_EVERW : 0;
     for (uint64_t p = start; p < end; p += 0x1000ull) {
         uint64_t *pte = leaf_pte(pml4_phys, p);
         uint64_t e = *pte;
         *pte = (e & PTE_ADDR)
-             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | VMM_PWT | VMM_PCD))
+             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | PTE_SW_EVERW | VMM_PWT | VMM_PCD))
+             | everw
              | PTE_PRESENT | VMM_USER
              | (flags & VMM_RW)
              | nx;
