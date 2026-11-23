@@ -40,7 +40,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 - **#72 (DDR-1182, fd access mode), operator 7062649586 item 2:** merge `dev/phase1` into it, resolve the conflicts, re-run `smoke-accmode` and mutants M1–M8 on the new head, post the evidence on #72. Do not merge it: the operator does.
 - **Follow-up to #158 (operator 7086434729):** from `dev/phase1`, per-page `ever_w` (arm F7, mutant D7f) and `x_ok` set by a replacement that covers a whole area under L1 (arm M8, mutant D9g); setup calls die on failure.
 - **#160 (DDR-1210, the user-trap report as one `kwrite`):** CI green (20/20), CodeRabbit clean. Waits for the operator on Codex's "DDR before code" thread: the split needs a force-push, which this session may not do.
-- Then C1.6 P3b (musl `ld.so`/`libc.so`, the syscall shim, arms D, E, G; arm C4's image names `/lib/ld-musl-x86_64.so.1` and must be re-pointed when that file is installed), then P4 (needs C2.1), then C1.7 (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3).
+- Then C1.6 P3b (musl `ld.so`/`libc.so`, the syscall shim, arms D, E, G; arm C4's image names `/lib/ld-musl-x86_64.so.1` and must be re-pointed when that file is installed), then C1.7 (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3). C1.6 P4 (shared text) needs C2.1, which is in Phase 2, so it comes after C2.1, not before C1.7.
 - **Watch the binding-build headroom (7,790 B):** two more page crossings breach the gate. Plan a chunk raise (DDR-1183) before the next large kernel addition.
 - DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
 
