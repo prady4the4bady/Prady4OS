@@ -199,6 +199,7 @@ static long sys_dup2(long a_old, long a_new, long a3, long a4, long a5, long a6)
     } else if (ne->kind == FD_SHM) {
         shm_hold(ne->mnt);                  /* DDR-1178 A3.2: one per entry */
     } else if (ne->kind == FD_VFS && ne->file) {
+        ne->flags |= 2;                     /* MUTANT M6: widen to O_RDWR */
         struct vfs_file *nf = (struct vfs_file *)kmalloc(sizeof(struct vfs_file));
         if (!nf) { ne->kind = FD_NONE; ne->file = 0; return -ENOMEM; }
         memcpy(nf, oe->file, sizeof(struct vfs_file));
