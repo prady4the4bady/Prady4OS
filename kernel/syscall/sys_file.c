@@ -155,10 +155,7 @@ static long sys_fstat(long fd, long ustat, long a3, long a4, long a5, long a6) {
          * Both 0 (as before) made every library match ld.so's own entry. Never
          * 0 here; a mount with no ident op keeps 0/0 (none exists today). */
         uint64_t id;
-        if (vfs_ident(e->file, &id) == 0) {
-            st.st_dev = (uint64_t)e->file->mnt + 1;
-            st.st_ino = id + 1;
-        }
+        (void)vfs_ident(e->file, &id);
         st.st_mode    = S_IFREG | 0644;
         st.st_nlink   = 1;
         st.st_blksize = 4096;
