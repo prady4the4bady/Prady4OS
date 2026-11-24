@@ -18,7 +18,12 @@ static uint64_t image_len(void) {
 /* BIOS: exactly KIMG_PHYS (stage2's fixed choice). UEFI: firmware-chosen, so
  * the RANGE is checked -- page-aligned, above 1 MiB, wholly below the 16 MiB
  * PMM floor (the PMM would otherwise hand it out; the loader reports its pages
- * usable), and clear of the page tables + kernel window 0x300000..0x600000. */
+ * usable), and clear of the kernel window 0x400000..0x800000 (4 MiB since
+ * DDR-1183 A2). Stage 2's page tables at 0x300000 exist on the BIOS path only;
+ * the UEFI loader allocates its tables from the firmware. Since A2 the loader
+ * claims the whole window and OVMF owns 0x800000 up, so OVMF places the copy
+ * just below 0x400000 (measured: base 0x25C000, size 0x1A3192), which the old
+ * 0x300000 bound refused. */
 static int kimg_base_ok(uint32_t src, uint64_t base, uint64_t size) {
     if (src == KIMG_SRC_BIOS)
         return base == KIMG_PHYS;
@@ -26,7 +31,7 @@ static int kimg_base_ok(uint32_t src, uint64_t base, uint64_t size) {
         return 0;
     if (base < 0x100000ull || size > KIMG_FLOOR || base > KIMG_FLOOR - size)
         return 0;
-    return base + size <= 0x300000ull || base >= 0x600000ull;
+    return base + size <= 0x400000ull || base >= 0x800000ull;
 }
 
 void kimg_capture(void) {

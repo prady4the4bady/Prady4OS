@@ -65,6 +65,9 @@ void vmm_enable_nxe_ap(void);
  * rodata R+NX, data/BSS RW+NX) + NX the identity alias. Call once after
  * vmm_init, before any user process. Prints the audit sentinel. */
 void vmm_protect_kernel(void);
+#if PTSPAN_PROBE
+void vmm_ptspan_probe(void);   /* DDR-1183 A2, smoke-ptspan only */
+#endif
 
 /* Map/unmap a single 4 KiB page in the ACTIVE address space. Returns 0 on
  * success, -1 on failure (huge page in the way, or out of frames). */
