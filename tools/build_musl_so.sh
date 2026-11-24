@@ -80,8 +80,12 @@ cp lib/libc.so lib/Scrt1.o lib/crti.o lib/crtn.o "$OUT/lib/"
 cp -r obj/include "$OUT/obj/"
 
 # --- checks: the shim reached the binary --------------------------------------
+# A failed check removes the copied libc.so, so a retry cannot find it up to
+# date and link the probes against a rejected library (CodeRabbit on #166).
 grep -q '^#define SYS_open 7$' "$OUT/obj/include/bits/syscall.h" || {
+    rm -f "$OUT/lib/libc.so"
     echo "build_musl_so: SYS_open is not NSI 7 in the generated header" >&2; exit 1; }
 grep -q '^#define SYS_pread64 4113$' "$OUT/obj/include/bits/syscall.h" || {
+    rm -f "$OUT/lib/libc.so"
     echo "build_musl_so: SYS_pread64 is not Linux+4096 (P3b-5)" >&2; exit 1; }
 echo "build_musl_so: $(stat -c %s "$OUT/lib/libc.so") bytes build/musl-so/lib/libc.so"
