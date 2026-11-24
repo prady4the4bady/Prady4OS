@@ -888,7 +888,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
 	 case "$$end" in ffffffff8*) ;; *) echo "kernel: __bss_end ($$end) is not in the -2 GiB kernel window (DDR-1183 A2.5)"; exit 1;; esac; \
 	 phys=$$(( 0x$${end#ffffffff} - 0x80000000 + 0x400000 )); \
-	 test $$phys -le $$(( 0x800000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x800000 — the 4 MiB PT_HI+PT_HI2 higher-half span (DDR-733, DDR-1183 A2), where KIMG_PHYS begins. Extend the span in boot/stage2/stage2.asm, boot/uefi/loader.c, kernel/mm/vmm.c (vmm_protect_kernel) and kernel/kimg.c together."; exit 1; }
+	 test $$phys -le $$(( 0x600000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x800000 — the 4 MiB PT_HI+PT_HI2 higher-half span (DDR-733, DDR-1183 A2), where KIMG_PHYS begins. Extend the span in boot/stage2/stage2.asm, boot/uefi/loader.c, kernel/mm/vmm.c (vmm_protect_kernel) and kernel/kimg.c together."; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
