@@ -126,7 +126,6 @@ static uint64_t build_page_tables(EFI_BOOT_SERVICES *bs) {
     ((uint64_t *)pml4)[pml4i]      = pdpt_hi | PTE_P | PTE_RW;
     ((uint64_t *)pdpt_hi)[pdpti]   = pd_hi   | PTE_P | PTE_RW;
     ((uint64_t *)pd_hi)[pdi]       = pt_hi   | PTE_P | PTE_RW;
-    ((uint64_t *)pd_hi)[pdi + 1]   = pt_hi2  | PTE_P | PTE_RW;   /* DDR-1183 A2 */
     for (uint64_t i = 0; i < 512; i++) {
         ((uint64_t *)pt_hi)[i]  = (KERNEL_LMA + i * PAGE_SIZE) | PTE_P | PTE_RW;
         ((uint64_t *)pt_hi2)[i] = (KERNEL_LMA + KERNEL_SPAN / 2 + i * PAGE_SIZE) | PTE_P | PTE_RW;
