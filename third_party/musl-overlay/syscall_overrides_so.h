@@ -7,7 +7,6 @@
  * every program linked with it are unchanged. Keep in sync with
  * kernel/syscall/syscall.h. Everything not listed in either file stays
  * native+4096 and returns -ENOSYS (pread, readlink, set_tid_address, ...). */
-#define __NR_open      7    /* SYS_OPEN;  O_CLOEXEC accepted, no effect yet */
 #define __NR_close     8    /* SYS_CLOSE */
 #define __NR_fstat     9    /* SYS_FSTAT; Linux struct stat layout (stat.h) */
 #define __NR_lseek     10   /* SYS_LSEEK */
