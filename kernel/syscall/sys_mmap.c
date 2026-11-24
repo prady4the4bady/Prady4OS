@@ -609,7 +609,7 @@ static long sys_mprotect_locked(long a1, long a2, long a3, long a4, long a5, lon
     if (prot == 0)                             /* PROT_NONE -- see the note above */
         return -EINVAL;
     if ((prot & PROT_WRITE) && (prot & PROT_EXEC))
-        return -EACCES;                        /* W^X */
+        return -ENOSYS;                        /* W^X */
 
     /* Overflow-safe bound, then the same user-VA window mmap uses. */
     if (addr < VMM_USER_MIN || len > (VMM_USER_MAX - addr))
