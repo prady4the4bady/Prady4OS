@@ -7436,3 +7436,30 @@ the 2026-11-22 entry are lifted.
   added later, in a docs-only commit, as for DDR-1189 A3 on #158. History is
   not rewritten.
 - QEMU only, not verified on real hardware.
+
+## 2026-11-23 — DDR-1183 A2: 54 stage-2 chunks and a 4 MiB kernel window (operator 7111929379 item 2)
+
+- **The read window** is 54 chunks: `mov cx, 54`, `KIMG_SIZE`, `KIMG_WINDOW`
+  0x1B0000, and the size gate 1,769,472 B.
+- **The kernel window** is 0x400000..0x800000, in two PT pages: stage 2's
+  PT_HI2 at 0x306000, and the UEFI loader's `pt_hi2`. The Makefile ceiling is
+  `__bss_end <= 0x800000`.
+- **The UEFI loader** claims the whole 4 MiB window. Before, it claimed only the
+  file, so the BSS above it stayed free in the firmware's map.
+- **`vmm_protect_kernel`** re-stamps and audits both PT pages, and makes both
+  identity-alias PD entries (`PD[2]`, `PD[3]`) NX and read-only.
+- **`kimg.c`** keeps the UEFI copy clear of the kernel window 0x400000..0x800000.
+  - The old bound also refused 0x300000..0x400000, where stage 2's page tables
+    sit on the BIOS path only.
+  - With the window claimed, OVMF puts the copy just below 0x400000 (measured:
+    base 0x25C000). The old bound refused it, and `smoke-uefi` failed with
+    `[kimg] refused reason=base` until the bound was fixed.
+- **New flag gate `smoke-ptspan`** (`PTSPAN_PROBE=1`): a 1 MiB BSS pad puts
+  `__bss_end` at phys 0x6EEB00. The flagged kernel boots on BIOS and on UEFI.
+  Both boots must print `PRADYOS_PTSPAN hi=1 rw=1 nx=1 ok=1` and pass the W^X
+  audit.
+- **Sizes are unchanged:** 1,716,626 B default, and 1,733,010 B for the
+  `RCU_TORTURE=1` and `LOCKDEP=1` builds. Headroom is now 52,846 B and
+  36,462 B.
+- Mutants W1-W5 and S1' are in the PR. QEMU (SeaBIOS, OVMF) only, not
+  verified on real hardware.
