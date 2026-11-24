@@ -7392,3 +7392,74 @@ rule mechanically.
   - `ever_w` is per area, not per page.
   - A `MAP_FIXED` replacement never sets `x_ok`.
 - QEMU only, not verified on real hardware.
+
+## 2026-11-23 — DDR-1189 A4, the C1.6 P3a follow-up (PR from `c16-p3a-fu`)
+
+Operator decision on #158 (comment 7086434729). Both conservative limits of
+the 2026-11-22 entry are lifted.
+
+- **The write history is per page.** A software PTE bit, `PTE_SW_EVERW`
+  (bit 53), replaces `vm_area.ever_w`.
+  - It is set when write is granted: `vmm_protect_range` and `vmm_cow_fault`.
+  - It is carried by every other rebuild of a user leaf: `map_core`,
+    `vmm_protect_range`, and both private branches of the fork walk.
+  - `mprotect` adds X to a page in an `x_ok` area only if that page lacks it.
+  - A bitmap per area and splitting areas were both rejected: an area has no
+    size bound, and `munmap` frees one area found by its exact base (DDR-1189
+    A4.2).
+- **A replacement sets `x_ok`** on each area it covers whole, when it meets L1
+  (`MAP_PRIVATE`, a read-only fd, no `PROT_WRITE`), after every page is refilled.
+- **Gate `smoke-dynlink`:** new arms F7 (per page), F8a–F8c (the record survives
+  fork and the COW fault), M8 (whole-area replacement), and M8p, M8r, M8w, M8n
+  (a part cover, a read-write fd, `PROT_WRITE`, no `MAP_PRIVATE`: none sets
+  `x_ok`).
+- **Mutants:** U (the kernel of `8442c87`) and D7f–D7l, D9g–D9k, run in CI; the
+  run links are in the PR.
+- QEMU only, not verified on real hardware.
+
+## 2026-11-23 — DDR-1210: the user-trap report as one `kwrite` (PR #160)
+
+- **The fix.** `kernel/idt.c` writes the `[trap] user ...` report from a
+  512-byte local buffer with one locked `kwrite`.
+  - Its `bytes@rip=` and `page+0=` dumps used bare `kputc`, which takes no lock.
+  - So the report could splice into another CPU's line. It did, in
+    `smoke-nethammer` on #158's CI run 45011208867.
+- **The bytes printed are unchanged.** The `smoke-user` sentinel and
+  `probe_rodata_check.sh` read the same text.
+- **Recorded, not changed.** Two other bare `kputc` callers,
+  `sys_io_uring.c:107` and `syscall.c:184`. No failing artefact implicates
+  either.
+- **Not gated.** The race has no deterministic arm (DDR-1210).
+- **Process.** The DDR and the code share commit `c86485a`, and this file
+  was not updated in that commit. The operator accepted the single commit and
+  waived the DDR-first split (#45 comment 7111929379, item 4). This entry was
+  added later, in a docs-only commit, as for DDR-1189 A3 on #158. History is
+  not rewritten.
+- QEMU only, not verified on real hardware.
+
+## 2026-11-23 — DDR-1183 A2: 54 stage-2 chunks and a 4 MiB kernel window (operator 7111929379 item 2)
+
+- **The read window** is 54 chunks: `mov cx, 54`, `KIMG_SIZE`, `KIMG_WINDOW`
+  0x1B0000, and the size gate 1,769,472 B.
+- **The kernel window** is 0x400000..0x800000, in two PT pages: stage 2's
+  PT_HI2 at 0x306000, and the UEFI loader's `pt_hi2`. The Makefile ceiling is
+  `__bss_end <= 0x800000`.
+- **The UEFI loader** claims the whole 4 MiB window. Before, it claimed only the
+  file, so the BSS above it stayed free in the firmware's map.
+- **`vmm_protect_kernel`** re-stamps and audits both PT pages, and makes both
+  identity-alias PD entries (`PD[2]`, `PD[3]`) NX and read-only.
+- **`kimg.c`** keeps the UEFI copy clear of the kernel window 0x400000..0x800000.
+  - The old bound also refused 0x300000..0x400000, where stage 2's page tables
+    sit on the BIOS path only.
+  - With the window claimed, OVMF puts the copy just below 0x400000 (measured:
+    base 0x25C000). The old bound refused it, and `smoke-uefi` failed with
+    `[kimg] refused reason=base` until the bound was fixed.
+- **New flag gate `smoke-ptspan`** (`PTSPAN_PROBE=1`): a 1 MiB BSS pad puts
+  `__bss_end` at phys 0x6EEB00. The flagged kernel boots on BIOS and on UEFI.
+  Both boots must print `PRADYOS_PTSPAN hi=1 rw=1 nx=1 ok=1` and pass the W^X
+  audit.
+- **Sizes are unchanged:** 1,716,626 B default, and 1,733,010 B for the
+  `RCU_TORTURE=1` and `LOCKDEP=1` builds. Headroom is now 52,846 B and
+  36,462 B.
+- Mutants W1-W5 and S1' are in the PR. QEMU (SeaBIOS, OVMF) only, not
+  verified on real hardware.

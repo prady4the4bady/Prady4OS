@@ -30,6 +30,12 @@
  * frames are not refcounted and are never freed. Every PTE rebuild that masks
  * flags with 0xFFF must carry it (map_core, vmm_protect_range, the fork walk). */
 #define PTE_SW_SHMEM  (1ull << 52)
+/* DDR-1189 A4: bit 53 marks a user leaf that has been granted write since its
+ * bytes were last read from a file (L1, W^X across time, per page). Set by
+ * vmm_protect_range and vmm_cow_fault, which grant write; carried by every other
+ * rebuild of a user leaf (map_core, vmm_protect_range, the fork walk). mprotect never
+ * adds X to a page that carries it. */
+#define PTE_SW_EVERW  (1ull << 53)
 
 /* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader
  * mirrors these as its own USER_MIN/USER_MAX; any user pointer the kernel copies
@@ -59,6 +65,9 @@ void vmm_enable_nxe_ap(void);
  * rodata R+NX, data/BSS RW+NX) + NX the identity alias. Call once after
  * vmm_init, before any user process. Prints the audit sentinel. */
 void vmm_protect_kernel(void);
+#if PTSPAN_PROBE
+void vmm_ptspan_probe(void);   /* DDR-1183 A2, smoke-ptspan only */
+#endif
 
 /* Map/unmap a single 4 KiB page in the ACTIVE address space. Returns 0 on
  * success, -1 on failure (huge page in the way, or out of frames). */

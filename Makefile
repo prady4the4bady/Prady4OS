@@ -347,6 +347,11 @@ KCFLAGS += -DRCU_TORTURE=$(RCU_TORTURE) -DRCU_T_SWAPS=$(RCU_T_SWAPS)
 # `make smoke-lockdep` sets it.
 LOCKDEP ?= 0
 KCFLAGS += -DLOCKDEP=$(LOCKDEP)
+# DDR-1183 A2: a 1 MiB BSS pad that puts __bss_end past 0x600000, so the second
+# PT page of the kernel window is used. Off in every shipped kernel and in every
+# shard; only `make smoke-ptspan` sets it. BSS only: kernel.bin is unchanged.
+PTSPAN_PROBE ?= 0
+KCFLAGS += -DPTSPAN_PROBE=$(PTSPAN_PROBE)
 # DDR-1097 sec.5 / DDR-1096 sec.5.1: KCFLAGS is NOT a prerequisite of
 # $(KERNEL_BIN), so a flag-only change silently relinks a stale object and
 # produces an IDENTICAL hash -- measured, twice, in two environments. Touch a
@@ -355,7 +360,7 @@ KCFLAGS += -DLOCKDEP=$(LOCKDEP)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check smoke-accmode
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-ptspan smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check smoke-accmode
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -879,14 +884,15 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -nostdlibinc -I$(LWIP_PORT) -isystem $(LWIP_DIR)/src/include -c third_party/lwip-port/lwip_port.c -o build/lwip_port.o
 	$(LD) -nostdlib -T $(KERNEL_LD) -o $(KERNEL_ELF) $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
-	@test "$$(wc -c < $(KERNEL_BIN))" -le 1736704 || { echo "kernel.bin exceeds 1,736,704 B — the stage-2 read window (53x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, then DDR-1183 A1). Raise the chunk count in boot/stage2/stage2.asm. The 2 MiB disk image does NOT need to grow until 63 chunks, but the 2 MiB PT_HI runtime ceiling checked next DOES bound this: at 53 chunks a full window plus the BSS measured by DDR-1183 A1 (324,928 B) still fits with 35,520 B to spare, and a larger window or BSS does not. Beyond that, extend PT_HI in BOTH boot/stage2/stage2.asm and boot/uefi/loader.c."; exit 1; }
+	@test "$$(wc -c < $(KERNEL_BIN))" -le 1769472 || { echo "kernel.bin exceeds 1,769,472 B — the stage-2 read window (54x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, its A1 and its A2). Raise the chunk count in boot/stage2/stage2.asm (with KIMG_SIZE and this gate: the assertion below checks they agree). The 2 MiB disk image does NOT need to grow until 63 chunks. The kernel window is 4 MiB since DDR-1183 A2 (PT_HI and PT_HI2, ceiling 0x800000, checked next)."; exit 1; }
 	@c=$$(sed -n 's/^ *mov cx, \([0-9]*\) *; DDR-1183.*/\1/p' $(STAGE2_SRC)); \
 	 k=$$(sed -n 's/^KIMG_SIZE *equ \([0-9]*\) \* 0x8000.*/\1/p' $(STAGE2_SRC)); \
 	 g=$$(sed -n 's/.*wc -c < $$(KERNEL_BIN))" -le \([0-9]*\) .*/\1/p' Makefile); \
 	 test -n "$$c" && test -n "$$g" && test "$$c" = "$$k" && test $$(( c * 32768 )) -eq "$$g" || { echo "DDR-1183: the stage-2 chunk count ($$c), its KIMG_SIZE ($$k) and the size gate ($$g B, the -le above) disagree. They are ONE number: chunks x 64 sectors x 512 B. Change all three together."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
-	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
-	 test $$phys -le $$(( 0x600000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x600000 — the 2 MiB PT_HI higher-half span (DDR-733). Extend PT_HI in boot/stage2/stage2.asm (second PT) before growing further."; exit 1; }
+	 case "$$end" in ffffffff8*) ;; *) echo "kernel: __bss_end ($$end) is not in the -2 GiB kernel window (DDR-1183 A2.5)"; exit 1;; esac; \
+	 phys=$$(( 0x$${end#ffffffff} - 0x80000000 + 0x400000 )); \
+	 test $$phys -le $$(( 0x800000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x800000 — the 4 MiB PT_HI+PT_HI2 higher-half span (DDR-733, DDR-1183 A2), where KIMG_PHYS begins. Extend the span in boot/stage2/stage2.asm, boot/uefi/loader.c, kernel/mm/vmm.c (vmm_protect_kernel) and kernel/kimg.c together."; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
 # Lay the three artifacts onto a 1 MiB raw disk at fixed LBAs:
@@ -3769,6 +3775,47 @@ smoke-rcu: $(IMG) fat-image sfs-image
 # it). On a failed boot boot_test.sh keeps the log as lockdep.log.fail-<pid>,
 # and arm LA is read from that capture. A failed LOCKDEP=1 build restores the
 # default kernel before failing.
+# DDR-1183 A2: the kernel window is 4 MiB (PT_HI + PT_HI2). No shipped kernel
+# reaches the second PT page yet, so this gate builds one that does
+# (PTSPAN_PROBE=1: a 1 MiB BSS pad, __bss_end past 0x600000; BSS only, so
+# kernel.bin is unchanged) and boots it on BOTH paths: BIOS from the disk image
+# (stage2.asm PT_HI2) and UEFI from the ESP under OVMF (loader.c pt_hi2). Each
+# boot must print PRADYOS_PTSPAN hi=1 rw=1 nx=1 ok=1 and pass the W^X audit,
+# which since A2 walks both PT pages and both identity-alias PD entries. It
+# rebuilds the kernel, so it runs in ci.yml's flag-gates job, not a shard.
+smoke-ptspan: $(IMG) esp-image
+	@echo "[ptspan] rebuilding the kernel with PTSPAN_PROBE=1 (DDR-1183 A2)"
+	@mkdir -p build/gatelogs
+	@sha256sum $(KERNEL_BIN) | cut -d' ' -f1 > build/gatelogs/ptspan.default.sha
+	touch kernel/mm/vmm.c
+	$(MAKE) image esp-image PTSPAN_PROBE=1 || { echo "[ptspan] FAIL: the PTSPAN_PROBE=1 build failed; restoring the default kernel"; \
+	  touch kernel/mm/vmm.c ; $(MAKE) image esp-image ; exit 1; }
+	rc=0 ; \
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/ptspan_bios.log KEEP_SERIAL=1 TIMEOUT_S=90 \
+	EXTRA_SENTINEL="$$(printf 'PRADYOS_PTSPAN end=\n[wx] kernel W^X OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'kernel W^X FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) || rc=1 ; \
+	SERIAL_LOG=$(CURDIR)/build/gatelogs/ptspan_uefi.log KEEP_SERIAL=1 TIMEOUT_S=90 QEMU_UEFI=1 \
+	EXTRA_SENTINEL="$$(printf '[uefi] handoff\nPRADYOS_PTSPAN end=\n[wx] kernel W^X OK')" \
+	FORBIDDEN_SENTINEL="$$(printf 'kernel W^X FAIL\n[uefi] FATAL')" \
+	    bash tools/qemu_runner/boot_test.sh $(ESP_IMG) || rc=1 ; \
+	for arm in bios uefi; do \
+	  L=build/gatelogs/ptspan_$$arm.log ; \
+	  [ -f $$L ] || L=$$(ls -t build/gatelogs/ptspan_$$arm.log.fail-* 2>/dev/null | head -1) ; \
+	  L=$${L:-/dev/null} ; \
+	  p=$$(grep -a 'PRADYOS_PTSPAN end=' $$L | head -1 | tr -d '\r') ; echo "[ptspan] $$arm: $$p" ; \
+	  case "$$p" in *" hi=1 rw=1 nx=1 ok=1"*) ;; \
+	    *) echo "[ptspan] FAIL: arm $$arm, the second PT page of the kernel window is not mapped RW+NX and usable (want hi=1 rw=1 nx=1 ok=1)"; rc=1 ;; esac ; \
+	done ; \
+	echo "[ptspan] restoring the default kernel" ; \
+	touch kernel/mm/vmm.c ; \
+	$(MAKE) image esp-image || rc=1 ; \
+	h=$$(sha256sum $(KERNEL_BIN) | cut -d' ' -f1) ; \
+	[ "$$h" = "$$(cat build/gatelogs/ptspan.default.sha)" ] || \
+	  { echo "[ptspan] FAIL: the default kernel did not come back with its hash"; rc=1; } ; \
+	[ $$rc = 0 ] && echo "[ptspan] PASS — BIOS and UEFI arms, the 4 MiB kernel window's second PT page mapped RW+NX and used" ; \
+	exit $$rc
+
 smoke-lockdep: $(IMG) fat-image sfs-image
 	@echo "[lockdep] rebuilding the kernel with LOCKDEP=1 (DDR-1209)"
 	@mkdir -p build/gatelogs
@@ -4564,7 +4611,7 @@ smoke-execve-argv: $(IMG) fat-image sfs-image
 smoke-dynlink: $(IMG) fat-image sfs-image
 	@rm -f build/dynlink.log
 	@SERIAL_LOG=build/dynlink.log KEEP_SERIAL=1 TIMEOUT_S=120 QEMU_PROBES=dynlink QEMU_RNG=1 \
-	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_D0 base_ok=\nPRADYOS_DYN_D0M base=\nPRADYOS_DYN_R interp2 rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=')" \
+	EXTRA_SENTINEL="$$(printf '[aslr] source=rng\nPRADYOS_DYN_DONE n=4\nPRADYOS_DYN_R interp rc=-8\nPRADYOS_DYN_R textrel rc=-8\nPRADYOS_DYN_D0 base_ok=\nPRADYOS_DYN_D0M base=\nPRADYOS_DYN_R interp2 rc=-8\nPRADYOS_DYN_PIE_DONE n=4\nPRADYOS_DYN_F wx=\nPRADYOS_DYN_M pre=\nPRADYOS_DYN_W f7x1=')" \
 	FORBIDDEN_SENTINEL="$$(printf 'DYNTEST FAIL\nPRADYOS_DYN_X')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 	@L=build/dynlink.log ; rc=0 ; \
@@ -4625,7 +4672,21 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  lk=$$(mv leak) ; [ -n "$$lk" ] && [ "$$lk" -gt -64 ] && [ "$$lk" -lt 64 ] || { echo "[dynlink] FAIL: arm M6, 256 in-place replacements changed the free page count by $$lk (want |n| < 64; a leak of every replaced frame is 256)"; rc=1; } ; \
 	  [ "$$(fv noflagx)" = -22 ] && [ "$$(fv noflagmp)" = -13 ] || { echo "[dynlink] FAIL: arm F6, L1 requires MAP_PRIVATE: noflagx=$$(fv noflagx) noflagmp=$$(fv noflagmp) (want -22, -13)"; rc=1; } ; \
 	  [ "$$(mv fsh0)" = -22 ] || { echo "[dynlink] FAIL: arm M7, MAP_SHARED|MAP_FIXED at address 0: $$(mv fsh0) (want -22)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F6 and M0-M7" ; exit $$rc
+	  W=$$(grep -a 'PRADYOS_DYN_W f7x1=' $$L | head -1) ; echo "$$W" ; \
+	  wv() { echo "$$W" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
+	  [ "$$(wv f7x1)" = 0 ] && [ "$$(wv f7x0)" = -13 ] || { echo "[dynlink] FAIL: arm F7, write history per page: page 1 X=$$(wv f7x1), written page 0 X=$$(wv f7x0) (want 0, -13)"; rc=1; } ; \
+	  f8=$$(wv f8) ; \
+	  if [ -n "$$f8" ] && [ "$$f8" -ge 0 ] && [ "$$f8" -le 7 ]; then \
+	    [ $$(( f8 & 1 )) = 0 ] || { echo "[dynlink] FAIL: arm F8a, the fork child made a page written, then read-only, executable"; rc=1; } ; \
+	    [ $$(( f8 & 2 )) = 0 ] || { echo "[dynlink] FAIL: arm F8b, the fork child made a COW page written in the parent executable"; rc=1; } ; \
+	    [ $$(( f8 & 4 )) = 0 ] || { echo "[dynlink] FAIL: arm F8c, the fork child made a page executable after its COW fault"; rc=1; } ; \
+	  else echo "[dynlink] FAIL: arm F8, the fork child's status was '$$f8' (want 0 to 7)"; rc=1; fi ; \
+	  [ "$$(wv m8)" = 0 ] && [ "$$(wv m8b)" = 127 ] || { echo "[dynlink] FAIL: arm M8, X after a whole-area read-only replacement: m8=$$(wv m8) m8b=$$(wv m8b) (want 0, 127)"; rc=1; } ; \
+	  [ "$$(wv m8p)" = -13 ] || { echo "[dynlink] FAIL: arm M8p, X after a replacement of part of an area: $$(wv m8p) (want -13)"; rc=1; } ; \
+	  [ "$$(wv m8r)" = -13 ] || { echo "[dynlink] FAIL: arm M8r, X after a whole-area replacement from a read-write fd: $$(wv m8r) (want -13)"; rc=1; } ; \
+	  [ "$$(wv m8w)" = -13 ] || { echo "[dynlink] FAIL: arm M8w, X after a whole-area writable replacement: $$(wv m8w) (want -13)"; rc=1; } ; \
+	  [ "$$(wv m8n)" = -13 ] || { echo "[dynlink] FAIL: arm M8n, X after a whole-area replacement without MAP_PRIVATE: $$(wv m8n) (want -13)"; rc=1; } ; \
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F7, F8a-F8c, M0-M8, M8p, M8r, M8w and M8n" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

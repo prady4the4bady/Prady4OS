@@ -45,8 +45,8 @@ struct vm_area {
     int32_t  shm_ro;   /* 1 if attached SHM_RDONLY (mprotect may not add write) */
     uint32_t pgoff;    /* DDR-1178 A4.3: first object page this area maps    */
     uint16_t x_ok;     /* DDR-1189 A3 P3a-1 (L1): mapped from a read-only fd,
-                        * MAP_PRIVATE, so it may be executable               */
-    uint16_t ever_w;   /* L1: writable at some time; never executable again  */
+                        * MAP_PRIVATE, so it may be executable. The write
+                        * history is per page, PTE_SW_EVERW (A4).            */
     uint64_t wcap;     /* DDR-1178 A4.3 (D4): the fd's cap_t, captured at mmap,
                         * for write-back of a FILE object; 0 = read-only area */
 };

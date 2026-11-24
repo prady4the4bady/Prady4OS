@@ -76,7 +76,7 @@ uint64_t vmm_kernel_cr3(void) {
 
 /* ---- DDR-757: kernel-self W^X ---------------------------------------------
  * Stage2 maps the kernel image (KERNEL_VBASE -> 0x400000, 4 KiB PT_HI pages,
- * 2 MiB span) present+RW with no NX. Re-stamp each PTE by section: text RX,
+ * 4 MiB span in two PTs since DDR-1183 A2) present+RW with no NX. Re-stamp each PTE by section: text RX,
  * rodata R+NX, data/BSS/spare RW+NX; and NX the 2 MiB identity-map alias PDE at
  * 0x400000 (execute-via-alias). Per-process ASes share the kernel top-level
  * entries, so this single pass hardens every AS. NX bits gate on g_nx_ok
@@ -86,7 +86,8 @@ extern char __text_end[], __rodata_end[];      /* page-aligned (kernel.ld) */
 static uint64_t *table_at(uint64_t phys);      /* defined below */
 
 void vmm_protect_kernel(void) {
-    /* Master walk: PML4[511] -> PDPT[510] -> PD[0] -> PT (the PT_HI page). */
+    /* Master walk: PML4[511] -> PDPT[510] -> PD[0] and PD[1] -> the two PT
+     * pages of the 4 MiB kernel window (DDR-1183 A2). */
     uint64_t *pml4 = table_at(g_kernel_pml4);
     uint64_t pdpt = pml4[511] & PTE_ADDR;
     if (!pdpt) { kputs("[wx] kernel W^X FAIL: no PML4[511]\r\n"); return; }
@@ -94,13 +95,16 @@ void vmm_protect_kernel(void) {
     if (!pd)   { kputs("[wx] kernel W^X FAIL: no PDPT[510]\r\n"); return; }
     uint64_t pt = table_at(pd)[0] & PTE_ADDR;
     if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[0]\r\n"); return; }
+    uint64_t pt2 = table_at(pd)[1] & PTE_ADDR;
+    if (!pt2)  { kputs("[wx] kernel W^X FAIL: no PD[1]\r\n"); return; }
 
     uint64_t alias_pte  = 0;   /* DDR-1046: the identity-alias PD entry, read back */
-    uint64_t *ptes      = table_at(pt);
+    uint64_t *ptp[2]    = { table_at(pt), table_at(pt2) };
     uint64_t text_end   = (uint64_t)(uintptr_t)__text_end;
     uint64_t rodata_end = (uint64_t)(uintptr_t)__rodata_end;
-    for (unsigned i = 0; i < 512; i++) {
-        uint64_t e = ptes[i];
+    for (unsigned i = 0; i < 1024; i++) {
+        uint64_t *ptes = ptp[i >> 9];
+        uint64_t e = ptes[i & 511];
         if (!(e & PTE_PRESENT))
             continue;
         uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
@@ -112,7 +116,7 @@ void vmm_protect_kernel(void) {
         } else {
             if (g_nx_ok) e |= VMM_NX;           /* data/BSS/spare: RW, no-exec */
         }
-        ptes[i] = e;
+        ptes[i & 511] = e;
     }
 
     /* DDR-1046 — THE IDENTITY ALIAS, and the residue DDR-757 documented.
@@ -139,14 +143,20 @@ void vmm_protect_kernel(void) {
      * clear" are different claims, and a measurement showing only that nothing
      * crashed cannot tell them apart. */
     {
+        /* DDR-1183 A2: the window is 4 MiB, so the alias is two 2 MiB PD
+         * entries, PD[2] (0x400000) and PD[3] (0x600000). The verdict folds
+         * them: present only if both are, RW if either is, NX only if both. */
         uint64_t lo_pdpt = pml4[0] & PTE_ADDR;
         if (lo_pdpt) {
             uint64_t lo_pd = table_at(lo_pdpt)[0] & PTE_ADDR;
-            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT)) {
-                if (g_nx_ok)
-                    table_at(lo_pd)[2] |= VMM_NX;      /* no execute-via-alias */
-                table_at(lo_pd)[2] &= ~VMM_RW;         /* no write-via-alias   */
-                alias_pte = table_at(lo_pd)[2];        /* read BACK, audited below */
+            if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT) && (table_at(lo_pd)[3] & PTE_PRESENT)) {
+                for (unsigned k = 2; k <= 3; k++) {
+                    if (g_nx_ok)
+                        table_at(lo_pd)[k] |= VMM_NX;  /* no execute-via-alias */
+                    table_at(lo_pd)[k] &= ~VMM_RW;     /* no write-via-alias   */
+                }
+                uint64_t a2 = table_at(lo_pd)[2], a3 = table_at(lo_pd)[3];   /* read BACK */
+                alias_pte = (a2 & a3 & (PTE_PRESENT | VMM_NX)) | ((a2 | a3) & VMM_RW);
             }
         }
     }
@@ -170,8 +180,8 @@ void vmm_protect_kernel(void) {
     if (!(alias_pte & PTE_PRESENT))      ok = 0;   /* the alias must still exist */
     if (alias_pte & VMM_RW)              ok = 0;   /* writable kernel image      */
     if (g_nx_ok && !(alias_pte & VMM_NX)) ok = 0;  /* executable kernel image    */
-    for (unsigned i = 0; i < 512; i++) {
-        uint64_t e = ptes[i];
+    for (unsigned i = 0; i < 1024; i++) {
+        uint64_t e = ptp[i >> 9][i & 511];
         if (!(e & PTE_PRESENT))
             continue;
         uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
@@ -184,6 +194,42 @@ void vmm_protect_kernel(void) {
     }
     kputs(ok ? "[wx] kernel W^X OK\r\n" : "[wx] kernel W^X FAIL\r\n");
 }
+
+#if PTSPAN_PROBE
+/* DDR-1183 A2, gate smoke-ptspan: a 1 MiB BSS pad that puts __bss_end past
+ * 0x600000, so the kernel window's second PT page is in use. Written and read
+ * back at both ends after vmm_protect_kernel; the last page's PTE must be
+ * present, RW and NX. Never built into a shipped kernel. */
+extern char __bss_end[];
+static uint8_t g_ptspan_pad[1u << 20];       /* no page alignment: kernel.ld places .bss unaligned */
+
+void vmm_ptspan_probe(void) {
+    volatile uint8_t *p = g_ptspan_pad;
+    uint32_t n = (uint32_t)sizeof g_ptspan_pad;
+    p[0] = 0xA5;
+    p[n - 1] = 0x5A;
+    int rw_ok = p[0] == 0xA5 && p[n - 1] == 0x5A;
+    uint64_t last = (uint64_t)(uintptr_t)&g_ptspan_pad[n - 1];
+    uint64_t pte = vmm_resolve_pte(g_kernel_pml4, last);
+    uint64_t end = (uint64_t)(uintptr_t)__bss_end - KERNEL_VBASE_WX + 0x400000ull;
+    int hi = end > 0x600000ull && last - KERNEL_VBASE_WX + 0x400000ull >= 0x600000ull;
+    int rw = (pte & VMM_RW) ? 1 : 0;
+    int nx = (!g_nx_ok || (pte & VMM_NX)) ? 1 : 0;
+    kline k; kline_init(&k);
+    kline_s(&k, "PRADYOS_PTSPAN end=");
+    kline_x(&k, end);
+    kline_s(&k, " hi=");
+    kline_d(&k, (unsigned)hi);
+    kline_s(&k, " rw=");
+    kline_d(&k, (unsigned)rw);
+    kline_s(&k, " nx=");
+    kline_d(&k, (unsigned)nx);
+    kline_s(&k, " ok=");
+    kline_d(&k, (unsigned)(rw_ok && hi && rw && nx && (pte & PTE_PRESENT)));
+    kline_s(&k, "\r\n");
+    kline_emit(&k);
+}
+#endif
 
 /* A table's physical address is directly usable through the identity map. */
 static uint64_t *table_at(uint64_t phys) {
@@ -277,7 +323,7 @@ static int map_core(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t f
 
     uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;   /* drop NX if unsupported */
     table_at(pt)[idx(virt, 1)] =
-        (phys & PTE_ADDR) | (flags & (0xFFF | PTE_SW_SHMEM)) | nx | PTE_PRESENT;
+        (phys & PTE_ADDR) | (flags & (0xFFF | PTE_SW_SHMEM | PTE_SW_EVERW)) | nx | PTE_PRESENT;
     invlpg(virt);
     return 0;
 }
@@ -372,13 +418,16 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
      * carried over verbatim; only the permission bits are replaced. Rebuilding
      * the PTE as `frame | flags` would clear PTE_SW_SHARED (breaking DDR-1003's
      * invariant) and PTE_SW_COW (making vmm_cow_fault return early at
-     * vmm_cow.c:115, so the page is never copied). */
+     * vmm_cow.c:115, so the page is never copied). DDR-1189 A4: PTE_SW_EVERW is
+     * carried too, and set on every page this call makes writable. */
     uint64_t nx = g_nx_ok ? (flags & VMM_NX) : 0;
+    uint64_t everw = (flags & VMM_RW) ? PTE_SW_EVERW : 0;
     for (uint64_t p = start; p < end; p += 0x1000ull) {
         uint64_t *pte = leaf_pte(pml4_phys, p);
         uint64_t e = *pte;
         *pte = (e & PTE_ADDR)
-             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | VMM_PWT | VMM_PCD))
+             | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | PTE_SW_EVERW | VMM_PWT | VMM_PCD))
+             | everw
              | PTE_PRESENT | VMM_USER
              | (flags & VMM_RW)
              | nx;

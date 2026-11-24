@@ -5050,6 +5050,9 @@ void kmain(struct boot_info *bi) {
     vmm_init();                          /* record kernel master CR3 + enable EFER.NXE (W^X) */
     vmm_protect_kernel();                /* DDR-757: kernel-self W^X (text RX, data NX) —
                                           * before SMP bring-up so APs arm NXE pre-paging */
+#if PTSPAN_PROBE
+    vmm_ptspan_probe();                  /* DDR-1183 A2: the window's second PT page */
+#endif
     kputs("NEXUS: TSS loaded, SYSCALL/SYSRET armed, NX enabled\r\n");
 
     kvga_line("NEXUS KERNEL OK", 1);

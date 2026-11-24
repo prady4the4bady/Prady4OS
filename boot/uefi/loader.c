@@ -86,6 +86,7 @@ static void die(CHAR16 *msg) {
  * UEFI's own identity map cannot be reused: the kernel runs at
  * 0xFFFFFFFF80000000, which the firmware does not map (DDR-886 §3.3).
  */
+#define KERNEL_SPAN 0x400000ull   /* DDR-1183 A2: the 4 MiB kernel window, 0x400000..0x800000 */
 #define PTE_P  (1ull << 0)
 #define PTE_RW (1ull << 1)
 #define PTE_PS (1ull << 7)
@@ -111,20 +112,25 @@ static uint64_t build_page_tables(EFI_BOOT_SERVICES *bs) {
     for (uint64_t i = 0; i < 512; i++)
         ((uint64_t *)pd_lo)[i] = (i * 0x200000ull) | PTE_P | PTE_RW | PTE_PS;
 
-    /* Higher half: 0xFFFFFFFF80000000 -> 0x400000, a 2 MiB span in 4 KiB pages,
-     * matching stage2's PT_HI exactly. 4 KiB (not 2 MiB) because the kernel's
-     * own VMM later re-maps sub-ranges with different permissions (W^X). */
+    /* Higher half: 0xFFFFFFFF80000000 -> 0x400000, a 4 MiB span in 4 KiB pages
+     * (two PTs, DDR-1183 A2), matching stage2's PT_HI and PT_HI2 exactly. 4 KiB
+     * (not 2 MiB) because the kernel's own VMM later re-maps sub-ranges with
+     * different permissions (W^X). */
     uint64_t pml4i = (KERNEL_VBASE >> 39) & 0x1FF;
     uint64_t pdpti = (KERNEL_VBASE >> 30) & 0x1FF;
     uint64_t pdi   = (KERNEL_VBASE >> 21) & 0x1FF;
     uint64_t pdpt_hi = alloc_page_zeroed(bs);
     uint64_t pd_hi   = alloc_page_zeroed(bs);
     uint64_t pt_hi   = alloc_page_zeroed(bs);
+    uint64_t pt_hi2  = alloc_page_zeroed(bs);
     ((uint64_t *)pml4)[pml4i]      = pdpt_hi | PTE_P | PTE_RW;
     ((uint64_t *)pdpt_hi)[pdpti]   = pd_hi   | PTE_P | PTE_RW;
     ((uint64_t *)pd_hi)[pdi]       = pt_hi   | PTE_P | PTE_RW;
-    for (uint64_t i = 0; i < 512; i++)
-        ((uint64_t *)pt_hi)[i] = (KERNEL_LMA + i * PAGE_SIZE) | PTE_P | PTE_RW;
+    ((uint64_t *)pd_hi)[pdi + 1]   = pt_hi2  | PTE_P | PTE_RW;   /* DDR-1183 A2 */
+    for (uint64_t i = 0; i < 512; i++) {
+        ((uint64_t *)pt_hi)[i]  = (KERNEL_LMA + i * PAGE_SIZE) | PTE_P | PTE_RW;
+        ((uint64_t *)pt_hi2)[i] = (KERNEL_LMA + KERNEL_SPAN / 2 + i * PAGE_SIZE) | PTE_P | PTE_RW;
+    }
 
     return pml4;
 }
@@ -154,16 +160,20 @@ static void load_kernel(EFI_BOOT_SERVICES *bs, EFI_HANDLE image) {
     if (f->get_info(f, &fi_guid, &info_size, info_buf) != EFI_SUCCESS)
         die(u"file info");
     uint64_t size = ((EFI_FILE_INFO *)info_buf)->file_size;
-    if (size == 0 || size > 8ull * 1024 * 1024)
+    if (size == 0 || size > KERNEL_SPAN)
         die(u"implausible kernel size");
 
     /* AllocateAddress at exactly 0x400000: the flat image is linked for that
      * LMA, so a "convenient" address chosen by the firmware would relocate the
      * kernel without relocating the higher-half mapping that points at it. */
+    /* DDR-1183 A2: claim the WHOLE kernel window, not just the file. The BSS
+     * lies above the file and the kernel zeroes it on entry; claiming only the
+     * file left that range free in the firmware's map, so a table or the KIMG
+     * copy could land in it. */
     uint64_t at = KERNEL_LMA;
     uint64_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (bs->allocate_pages(AllocateAddress, EfiLoaderData, pages, &at) != EFI_SUCCESS)
-        die(u"cannot claim 0x400000");
+    if (bs->allocate_pages(AllocateAddress, EfiLoaderData, KERNEL_SPAN / PAGE_SIZE, &at) != EFI_SUCCESS)
+        die(u"cannot claim 0x400000..0x800000");
 
     uint64_t got = size;
     if (f->read(f, &got, (void *)KERNEL_LMA) != EFI_SUCCESS || got != size)

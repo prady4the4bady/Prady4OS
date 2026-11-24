@@ -17,8 +17,8 @@
 ; Memory map this stage establishes (all in identity-mapped low RAM):
 ;   0x00010000  INT13 bounce buffer (32 KiB per chunk)       [DDR-733]
 ;   0x00200000  transient stage2 stack top (boot.asm switches to the BSS stack)
-;   0x00300000  PML4/PDPT/PD + PDPT_HI/PD_HI/PT_HI (6 x 4 KiB)
-;   0x00400000  kernel image + BSS (flat binary, <= 2 MiB — the PT_HI span)
+;   0x00300000  PML4/PDPT/PD + PDPT_HI/PD_HI/PT_HI/PT_HI2 (7 x 4 KiB)
+;   0x00400000  kernel image + BSS (flat binary, <= 4 MiB — the PT_HI span, DDR-1183 A2)
 ;
 ; Honest scope notes (see ADR-005): early identity map only; flat binary, no
 ; kernel ELF parsing (the load is dumb sectors -> memory; those are later
@@ -54,7 +54,7 @@ KSTACK_TOP  equ 0x00200000
 ; Page tables live at 3 MiB — BELOW the relocated kernel at 4 MiB (DDR-733) and
 ; below the 16 MiB PMM floor (PMM_MIN_PHYS), within the 1 GiB low identity map,
 ; so they are reserved-by-construction and directly addressable. The kernel's
-; window is 0x400000..0x600000 (the 2 MiB PT_HI span); a kernel growing past it
+; window is 0x400000..0x800000 (the 4 MiB PT_HI+PT_HI2 span, DDR-1183 A2); a kernel growing past it
 ; is caught by the Makefile __bss_end check, and the tables can never be
 ; overrun (they sit outside the window entirely).
 PML4        equ 0x00300000
@@ -63,6 +63,7 @@ PD          equ 0x00302000           ; low identity: PD (1 GiB, 2 MiB pages)
 PDPT_HI     equ 0x00303000           ; higher-half: PDPT (PML4[511])
 PD_HI       equ 0x00304000           ; higher-half: PD   (PDPT_HI[510])
 PT_HI       equ 0x00305000           ; higher-half: PT   (4 KiB pages -> kernel)
+PT_HI2      equ 0x00306000           ; higher-half: PT for the second 2 MiB (DDR-1183 A2)
 
 ; Boot -> kernel handoff struct (see kernel/boot_info.h). Lives at a fixed low
 ; address (usable conventional RAM 0x500..0x7C00) so the kernel can find it.
@@ -76,7 +77,7 @@ BOOT_MAGIC  equ 0x59445250     ; 'PRDY'
 KIMG_PHYS   equ 0x00800000     ; 8 MiB, below the 16 MiB PMM floor
 KIMG_MAGIC  equ 0x474D494B     ; 'KIMG'
 KIMG_SRC    equ 1              ; KIMG_SRC_BIOS
-KIMG_SIZE   equ 53 * 0x8000    ; the read window; stage2 never learns the file size (DDR-1183)
+KIMG_SIZE   equ 54 * 0x8000    ; the read window; stage2 never learns the file size (DDR-1183)
 KIMG_CHECK  equ KIMG_MAGIC ^ KIMG_SRC ^ KIMG_PHYS ^ KIMG_SIZE   ; hi words and reserved are 0
 
 stage2_start:
@@ -238,7 +239,7 @@ load_kernel:
     call puts16
     mov dword [kdst], KERNEL_PHYS
     mov dword [kpdst], KIMG_PHYS
-    mov cx, 53                      ; DDR-1183: 52->53 chunks = 1,736,704 B read window (A1)
+    mov cx, 54                      ; DDR-1183: 53->54 chunks = 1,769,472 B read window (A2)
 .chunk:
     push cx
     mov si, kernel_dap              ; read 64 sectors -> bounce @0x10000
@@ -573,13 +574,14 @@ puts32:                         ; ESI -> NUL string
 ; Build two windows:
 ;   - low identity: PML4[0]->PDPT[0]->PD (1 GiB, 2 MiB pages). Kept so the PMM
 ;     and heap can dereference physical frames directly, and for the transition.
-;   - kernel higher-half: PML4[511]->PDPT_HI[510]->PD_HI[0]->PT_HI, mapping
-;     KERNEL_VIRT.. (4 KiB pages, 2 MiB span) -> physical KERNEL_PHYS..
+;   - kernel higher-half: PML4[511]->PDPT_HI[510]->PD_HI[0]->PT_HI and
+;     PD_HI[1]->PT_HI2, mapping KERNEL_VIRT.. (4 KiB pages, 4 MiB span, DDR-1183
+;     A2) -> physical KERNEL_PHYS..0x800000, where KIMG_PHYS begins.
 build_page_tables:
     cld
     mov edi, PML4
     xor eax, eax
-    mov ecx, 0x6000 / 4         ; zero 6 tables: PML4,PDPT,PD,PDPT_HI,PD_HI,PT_HI
+    mov ecx, 0x7000 / 4         ; zero 7 tables: PML4,PDPT,PD,PDPT_HI,PD_HI,PT_HI,PT_HI2
     rep stosd
 
     ; low identity
@@ -595,13 +597,15 @@ build_page_tables:
     add edi, 8
     loop .fill_low
 
-    ; kernel higher-half (4 KiB pages: KERNEL_VIRT -> KERNEL_PHYS, 2 MiB span)
+    ; kernel higher-half (4 KiB pages: KERNEL_VIRT -> KERNEL_PHYS, 4 MiB span).
+    ; PT_HI2 follows PT_HI in memory, so one 1024-entry loop fills both.
     mov dword [PML4 + 511*8], PDPT_HI | 0x3
     mov dword [PDPT_HI + 510*8], PD_HI | 0x3
     mov dword [PD_HI], PT_HI | 0x3
+    mov dword [PD_HI + 8], PT_HI2 | 0x3     ; DDR-1183 A2: the second 2 MiB
     mov edi, PT_HI
     mov eax, KERNEL_PHYS | 0x3  ; present + rw
-    mov ecx, 512
+    mov ecx, 1024
 .fill_hi:
     mov [edi], eax
     mov dword [edi + 4], 0
