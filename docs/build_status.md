@@ -7417,6 +7417,26 @@ the 2026-11-22 entry are lifted.
   run links are in the PR.
 - QEMU only, not verified on real hardware.
 
+## 2026-11-23 — DDR-1210: the user-trap report as one `kwrite` (PR #160)
+
+- **The fix.** `kernel/idt.c` writes the `[trap] user ...` report from a
+  512-byte local buffer with one locked `kwrite`.
+  - Its `bytes@rip=` and `page+0=` dumps used bare `kputc`, which takes no lock.
+  - So the report could splice into another CPU's line. It did, in
+    `smoke-nethammer` on #158's CI run 45011208867.
+- **The bytes printed are unchanged.** The `smoke-user` sentinel and
+  `probe_rodata_check.sh` read the same text.
+- **Recorded, not changed.** Two other bare `kputc` callers,
+  `sys_io_uring.c:107` and `syscall.c:184`. No failing artefact implicates
+  either.
+- **Not gated.** The race has no deterministic arm (DDR-1210).
+- **Process.** The DDR and the code share commit `c86485a`, and this file
+  was not updated in that commit. The operator accepted the single commit and
+  waived the DDR-first split (#45 comment 7111929379, item 4). This entry was
+  added later, in a docs-only commit, as for DDR-1189 A3 on #158. History is
+  not rewritten.
+- QEMU only, not verified on real hardware.
+
 ## 2026-11-23 — DDR-1183 A2: 54 stage-2 chunks and a 4 MiB kernel window (operator 7111929379 item 2)
 
 - **The read window** is 54 chunks: `mov cx, 54`, `KIMG_SIZE`, `KIMG_WINDOW`

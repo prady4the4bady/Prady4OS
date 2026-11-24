@@ -696,6 +696,60 @@ static int fault_expect_consume(struct regs *r) {
     return 1;
 }
 
+
+/* DDR-1210: the user-trap report's buffer and appenders. The formats match
+ * kputs, kputdec and kputhex ("0x" + 16 upper-case hex digits) byte for byte;
+ * the report is then written by one kwrite. */
+struct trap_line {
+    char     b[512];
+    unsigned n;
+};
+
+static void tl_c(struct trap_line *t, char c) {
+    if (t->n < sizeof t->b)
+        t->b[t->n++] = c;
+}
+
+static void tl_s(struct trap_line *t, const char *s) {
+    if (!s)
+        s = "(null)";
+    while (*s)
+        tl_c(t, *s++);
+}
+
+static void tl_d(struct trap_line *t, uint64_t v) {
+    char d[20];
+    int i = 0;
+    if (v == 0) {
+        tl_c(t, '0');
+        return;
+    }
+    while (v) {
+        d[i++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (i)
+        tl_c(t, d[--i]);
+}
+
+static void tl_x(struct trap_line *t, uint64_t v) {
+    static const char digits[] = "0123456789ABCDEF";
+    tl_c(t, '0');
+    tl_c(t, 'x');
+    for (int shift = 60; shift >= 0; shift -= 4)
+        tl_c(t, digits[(v >> shift) & 0xF]);
+}
+
+/* "HH " per byte, as the old per-byte kputc loop printed. */
+static void tl_bytes(struct trap_line *t, const unsigned char *p, unsigned n) {
+    static const char hexd[] = "0123456789ABCDEF";
+    for (unsigned i = 0; i < n; i++) {
+        tl_c(t, hexd[(p[i] >> 4) & 0xF]);
+        tl_c(t, hexd[p[i] & 0xF]);
+        tl_c(t, ' ');
+    }
+}
+
 void isr_dispatch(struct regs *r) {
     /* DDR-981: NMI (vector 2) as the AP-freeze probe. Only a CPU the BSP armed
      * consumes it; an unsolicited NMI still falls through to the panic path
@@ -892,23 +946,33 @@ void isr_dispatch(struct regs *r) {
          * acquire we print anyway and accept the spliced line. */
         uint64_t trfl = 0;
         int trheld = console_line_trylock(&trfl);
-        kputs("[trap] user ");
-        kputs(name);
-        kputs(" pid=");
-        kputdec(current_thread ? current_thread->pid : 0);
+        /* DDR-1210: the whole report is assembled here and written by ONE
+         * kwrite, which holds g_console_lock for the buffer. It used to be
+         * written in pieces, the hex dumps with bare kputc (which takes no
+         * lock), so a fault reported on one CPU spliced its bytes into another
+         * CPU's locked kline: `[user] EL 0F l0 8oaded0 0 (embedded);0 0 n0 et
+         * hammer spawned=2/2` failed smoke-nethammer (CI run 45011208867).
+         * The bytes are unchanged. Every field is bounded, so 512 cannot
+         * overflow (the report is about 300 bytes). */
+        struct trap_line tl;
+        tl.n = 0;
+        tl_s(&tl, "[trap] user ");
+        tl_s(&tl, name);
+        tl_s(&tl, " pid=");
+        tl_d(&tl, current_thread ? current_thread->pid : 0);
         /* Every probe ELF is linked at the same base, so a faulting rip alone does
          * NOT identify which binary faulted — four probes share entry 0x...b0.
          * Print the thread name elf_load already assigned, or three sessions get
          * spent disassembling the wrong ELF. */
-        kputs(" name=");
-        kputs(current_thread ? current_thread->name : "?");
-        kputs(" rip=");
-        kputhex(r->rip);
-        kputs(" err=");                  /* #GP's selector is as diagnostic as #PF's flags */
-        kputhex(r->err_code);
+        tl_s(&tl, " name=");
+        tl_s(&tl, current_thread ? current_thread->name : "?");
+        tl_s(&tl, " rip=");
+        tl_x(&tl, r->rip);
+        tl_s(&tl, " err=");              /* #GP's selector is as diagnostic as #PF's flags */
+        tl_x(&tl, r->err_code);
         if (r->vector == 14) {
-            kputs(" cr2=");
-            kputhex(read_cr2());
+            tl_s(&tl, " cr2=");
+            tl_x(&tl, read_cr2());
         }
         /* The bytes actually executing. A fault on an instruction that provably
          * cannot fault (e.g. #GP on `and $-16,%rsp`) means the loaded text is not
@@ -918,15 +982,10 @@ void isr_dispatch(struct regs *r) {
             unsigned char ib[16];
             if (copyin(ib, (const void __user *)(uintptr_t)r->rip, sizeof ib) ==
                 (ssize_t)sizeof ib) {
-                static const char hexd[] = "0123456789ABCDEF";
-                kputs(" bytes@rip=");
-                for (unsigned i = 0; i < sizeof ib; i++) {
-                    kputc(hexd[(ib[i] >> 4) & 0xF]);
-                    kputc(hexd[ib[i] & 0xF]);
-                    kputc(' ');
-                }
+                tl_s(&tl, " bytes@rip=");
+                tl_bytes(&tl, ib, sizeof ib);
             } else {
-                kputs(" bytes@rip=<unreadable>");
+                tl_s(&tl, " bytes@rip=<unreadable>");
             }
             /* Also dump the start of the containing page. If the text has been
              * overwritten by a data pattern, where index 0 of that pattern lands
@@ -936,16 +995,12 @@ void isr_dispatch(struct regs *r) {
             uint64_t base = r->rip & ~0xFFFull;
             if (copyin(pb, (const void __user *)(uintptr_t)base, sizeof pb) ==
                 (ssize_t)sizeof pb) {
-                static const char hexd2[] = "0123456789ABCDEF";
-                kputs(" page+0=");
-                for (unsigned i = 0; i < sizeof pb; i++) {
-                    kputc(hexd2[(pb[i] >> 4) & 0xF]);
-                    kputc(hexd2[pb[i] & 0xF]);
-                    kputc(' ');
-                }
+                tl_s(&tl, " page+0=");
+                tl_bytes(&tl, pb, sizeof pb);
             }
         }
-        kputs(" — killing process\r\n");
+        tl_s(&tl, " — killing process\r\n");
+        kwrite(tl.b, tl.n);
         /* Release BEFORE sched_exit: it never returns, so an unlock placed
          * after it would strand the lock held forever and hang every later
          * printer on every CPU. */
