@@ -4,7 +4,8 @@ Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged. P1 is
 built under Amendment 1 (#154), and P2 under Amendment 2 (#156). P3 is designed
 under Amendment 3, as P3a and P3b; P3a is built (#158). Amendment 4 designs
 the P3a follow-up (per-page write history, `x_ok` from a whole-area
-replacement). P3b and P4 are not built.
+replacement). Amendment 5 checks P3b's design against the code it will run
+(musl `ld.so`/`libc.so`). P3b and P4 are not built.
 
 ## 1. Where the tree is (read from `dev/phase1` = `7981cd4`)
 
@@ -834,4 +835,210 @@ D9h to D9k change only the set condition; the clear step keeps `xok`.
   growth.
 - `x_ok` stays per area. A partial read-only replacement of an area with
   `x_ok` = 0 still leaves it 0; only a whole-area cover sets it.
+- QEMU (TCG) only, not verified on real hardware.
+
+## Amendment 5 (2026-11-24): Part P3b designed, musl `ld.so` and `libc.so`
+
+Ordered by #45 7111929379 item 6 (C1.6 P3b after the size-gate PR). Design
+only: no code is built under this amendment yet. A3.4 decided P3b's outline;
+this amendment checks that outline against the code it will run. The code PR
+does not merge before #164 (DDR-1183 A2), because P3b grows the kernel.
+
+### A5.1 Measured, and read from the code (`dev/phase1` = `8843b8a`)
+
+- **A full `libc.so` is 848,080 B** (text 712,236 B, data 2,498 B, bss
+  10,936 B). Measured by building musl 1.2.5 (the pinned submodule, `0784374`)
+  out of tree with its own `configure` and clang 18, Linux syscall numbers.
+  The NSI build may differ by a few hundred bytes.
+  - That is more than `EXEC_MAX` (256 KiB). It does not matter: since P3a the
+    kernel maps the interpreter page by page from the file, never through the
+    exec buffer.
+  - The FAT image is 64 MiB, so space is not a limit.
+  - The interpreter window `[USER_PIE_TOP, USER_IMAGE_TOP)` is 8 GiB.
+- **musl's `ld.so` can take one library for another.**
+  - `load_library` (`ldso/dynlink.c:1173`) treats a library as already
+    loaded when its `st_dev` and `st_ino` match an entry in the list.
+  - The kernel's `fstat` (`kernel/syscall/sys_file.c:142`) leaves both 0.
+  - `ldso` (the libc entry) never sets its own `dev`/`ino`, so they are 0 too.
+    It joins the list only when a `DT_NEEDED` names `libc.so` (line 1100).
+  - So any library looked up after a 0/0 entry is in the list resolves to that
+    entry:
+    - after `libc.so`, it resolves to libc;
+    - after another library, it resolves to that library.
+  - **Measured** (mutant D10, which leaves both fields 0, locally under QEMU):
+    - with `libc.so` needed first, `dynmain` exits 127 with
+      `lib_answer: symbol not found`;
+    - with `libtest.so` needed first, it passed, because the list held only
+      the program when `libtest.so` was looked up.
+    - An earlier draft of this amendment said the first order also fails. It
+      does not.
+  - P3b must fill both fields. This is P3b's only kernel change. The gate's
+    programs need `libc.so` first, and the build checks that order (P3b-4).
+- **`pread` is not reached by any library this gate builds.**
+  - `map_library` reads the first 896 bytes with `read`. It calls `pread`
+    (lines 713 and 718) only if the program headers do not fit in that.
+  - lld puts them at offset 64, and nine headers are 504 B, so they fit.
+  - A new NSI `pread` would be code that no gate reaches. A3.5 left the
+    choice open; this amendment takes neither option (P3b-5).
+- **The other calls `ld.so` makes:** `open` (4), `read` (3), `close` (5),
+  `fstat` (2), `mmap` (4), `munmap` (2), `mprotect` (1, `DT_TEXTREL`; plus
+  one raw `__syscall` for RELRO, line 1426) and `readlink` (`$ORIGIN` only).
+  - **NSI already has each one** with Linux's numbers for flags and errno:
+    `PROT_*` 1/2/4, `MAP_PRIVATE` 2, `MAP_FIXED` 0x10, `MAP_ANONYMOUS` 0x20,
+    `EACCES` 13, `ENOSYS` 38.
+  - **The calling convention matches** (fourth argument in `r10`), and `mmap`
+    takes six arguments (DDR-877).
+  - **`struct stat` already has Linux's layout** (`kernel/include/stat.h`,
+    `st_size` at offset 48).
+  - **`mprotect` is per page**, so RELRO over part of a segment works.
+    `PROT_NONE` is `-EINVAL`, and `ld.so` never asks for it.
+  - **The mapping pattern P3a was built for** is the one `map_library` uses
+    (lines 830–870): one private read-only span from the file, then
+    `MAP_FIXED` per segment, then `MAP_FIXED|MAP_ANONYMOUS` for `.bss`.
+  - **A `DT_TEXTREL` library makes `ld.so` call `mprotect(RWX)`.** The load
+    fails on any error but `ENOSYS` (line 853). The kernel answers
+    `-EACCES` (`sys_mprotect_locked`, the W^X check), so the library is
+    refused.
+  - **RELRO's failure test also passes `-ENOSYS`** (line 1428).
+- **`munmap` here unmaps a whole area** (`sys_munmap_locked`). `ld.so` calls
+  it only on a failed load and for `dlclose`, both on a whole mapping. That is
+  recorded, not changed.
+- **Secure mode.** `libc.secure` is set (line 1819) because the kernel passes
+  no `AT_UID`/`AT_EUID`/`AT_GID`/`AT_EGID`. That only makes `ld.so` ignore
+  `LD_LIBRARY_PATH` and `LD_PRELOAD`, which the gate does not use. Recorded.
+- **There is no `AT_RANDOM`.** The program's stack canary then comes from
+  musl's address-derived fallback (`__init_ssp`). Recorded; it is not a
+  security claim.
+- **The library search path.**
+  - With no `/etc/ld-musl-x86_64.path`, the path is `/lib:/usr/local/lib:/usr/lib`.
+  - FAT32 matches long names case-insensitively (`fat32.c`, `ci_eq`), so
+    `/lib/libtest.so` finds `/LIB/LIBTEST.SO`.
+  - `DT_NEEDED` `libc.so` is matched by name to `ld.so` itself (line 1195),
+    with no file lookup.
+- **`VM_AREA_MAX` is 64.** Three objects at about four areas each, plus the
+  stack, TLS and the malloc areas, stay well under it. The count is not
+  measured.
+
+### A5.2 Decisions
+
+- **P3b-1. Build (`tools/build_musl_so.sh`).**
+  - It uses the same generated headers as `tools/build_musl.sh`:
+    - `bits/syscall.h` with every Linux number offset by 4096, so it returns
+      `-ENOSYS`;
+    - then `syscall_overrides.h`.
+  - It runs musl's own `configure` (`--target=x86_64 --disable-static`, clang)
+    and `make lib/libc.so lib/Scrt1.o`, out of tree in `build/musl-so/`.
+    That is musl's own source selection, flags and link line (`-shared`,
+    `-Wl,-e,_dlstart`, `--dynamic-list`), so no hand-written list can drift.
+  - It installs the file as `/LIB/LD-MUSL-X86_64.SO.1` (the long name
+    `ld-musl-x86_64.so.1`) on the FAT image. It is not embedded in `kernel.bin`.
+  - musl is third-party code, built with musl's own warning posture (ADR-023,
+    as `build_musl.sh` is). Our probes stay at `-Werror`.
+- **P3b-2. The shim (`syscall_overrides.h`)** gains:
+
+  | Linux call | NSI | Note |
+  |---|---|---|
+  | `open` (2) | 7 `SYS_OPEN` | `O_CLOEXEC` is accepted and has no effect yet (recorded) |
+  | `close` (3) | 8 `SYS_CLOSE` | |
+  | `fstat` (5) | 9 `SYS_FSTAT` | layout already Linux's; P3b-3 fills `st_dev`/`st_ino` |
+  | `lseek` (8) | 10 `SYS_LSEEK` | |
+  | `mprotect` (10) | 97 `SYS_MPROTECT` | |
+
+  - It already has `read`, `write`, `writev`, `mmap`, `munmap`, `exit` and
+    `exit_group`. `arch_prctl` stays the overlay's direct `SYS_SET_TLS`.
+  - Everything else stays `-ENOSYS`: `pread`, `readlink`, `set_tid_address`,
+    `rt_sigprocmask` and the rest.
+  - The five lines go in a new overlay file, `syscall_overrides_so.h`, read
+    only by the `libc.so` build. The static `libc.a`, and every program
+    linked with it, is byte-for-byte unchanged.
+  - **How the numbers reach musl's own build:**
+    - `build_musl_so.sh` builds from a symlink copy of the submodule (`cp -rs`).
+      In that copy it replaces `arch/x86_64/bits/syscall.h.in` with one
+      generated file:
+      - each `__NR_` takes its NSI number from the two override files, or else
+        its Linux number plus 4096;
+      - there are no `#undef` lines, because musl's `Makefile` derives the
+        `SYS_` names from the `__NR_` lines with `sed`.
+    - The copy's `src/thread/x86_64/__set_thread_area.s` is the overlay's.
+    - The submodule itself is never written.
+- **P3b-3. The kernel: `fstat` reports the identity the kernel already has.**
+  - `vfs_ident` (DDR-1178 A4.2) gives a per-volume file identity on all four
+    filesystems, and `MAP_SHARED` already relies on it.
+    - On FAT32 it is the directory-entry location,
+      `((uint64_t)dirent_clus << 16) | dirent_off`. That is unique even for an
+      empty file, which has no first cluster.
+    - ext4 and SFS use the inode number; pdrive uses its slot.
+  - For an `FD_VFS` fd, `fstat` sets `st_dev` = the mount id plus 1, and
+    `st_ino` = `vfs_ident` plus 1.
+    - Both are never 0, so they never match `ld.so`'s zeroed entry.
+    - A mount with no `ident` op keeps 0/0 (none exists today; recorded).
+  - This is the only kernel change. It is a few lines in
+    `kernel/syscall/sys_file.c`, so `kernel.bin` grows slightly. The size is
+    measured in the code PR.
+- **P3b-4. Probes, all on the FAT image** (none embedded; only `dyntest.c`
+  grows by a few calls):
+  - `user/libtest.c` → `/LIB/LIBTEST.SO`. It contains:
+    - `int lib_answer(void)` returning 42;
+    - a global `int lib_var = 7`, read from the main program through the GOT
+      (`R_X86_64_GLOB_DAT`);
+    - a function pointer `lib_fp = lib_answer` in its data
+      (`R_X86_64_64` against a symbol).
+  - `user/dynmain.c` → `/DYNMAIN.ELF`:
+    - built with musl's headers and `Scrt1.o`, `--dynamic-linker=/lib/ld-musl-x86_64.so.1`;
+    - `DT_NEEDED` on `libc.so` first, then `libtest.so`. The build fails if
+      `libc.so` is not first, because the other order cannot catch a zero
+      `st_ino` (A5.1);
+    - it prints with `printf` from `libc.so`.
+  - `user/libtrel.c` → `/LIB/LIBTREL.SO`, linked `-z notext` so it carries
+    `DT_TEXTREL`. `user/dyntrel.c` → `/DYNTREL.ELF` needs it.
+- **P3b-5. `pread` stays `-ENOSYS`.**
+  - A library whose program headers do not fit in its first 896 bytes fails
+    to load. `ld.so` prints its own error, so it does not fail silently.
+  - When a real library needs `pread`, it gets NSI 124 and its own arm.
+- **P3b-6. Arm C4 is re-pointed.**
+  - Its image names `/lib/ld-musl-x86_64.so.1`, which P3b installs.
+  - It is re-linked to name `/LIB/ABSENT.SO`, so it keeps its meaning: an
+    interpreter that cannot be opened gives `-ENOEXEC`.
+
+### A5.3 Arms (`smoke-dynlink`, shard 8)
+
+| Arm | Assertion | Vacuity on today's tree |
+|---|---|---|
+| D | `dynmain` exits 0 (`PRADYOS_DYN_DR rc=0`) and prints `PRADYOS_DYN_D answer=42 libc=1` | the interpreter file does not exist: exec fails `-ENOEXEC`; with everything but P3b-3 it exits 127 (D10, measured) |
+| E | the same run prints `PRADYOS_DYN_E var=7 fp=42`: the GOT entry and the symbolic `R_X86_64_64` both resolve | the same |
+| G | `dyntrel` exits 127, does not print its success line, and `ld.so` prints `Error loading shared library libtrel.so` | there is no `ld.so` to refuse the library: exec fails |
+| C4 | unchanged result, `-ENOEXEC` | — |
+
+The driver (`dyntest.c`) runs each probe with `execve` plus `wait4` and reads
+its exit status. The child's output goes to the serial console, and the gate
+greps it.
+
+### A5.4 Mutants (each red in CI on its named arm)
+
+| Mutant | Change | Red on |
+|---|---|---|
+| D10 | `fstat` leaves `st_dev`/`st_ino` 0 (P3b-3 reverted) | D, E, G (measured locally: `libtrel.so` resolves to libc too, so there is no `Permission denied`) |
+| D5 | musl's `ld.so` skips `R_X86_64_GLOB_DAT` (in `do_relocs`) | E |
+| D5b | musl's `ld.so` skips the symbolic `R_X86_64_64` | E |
+| D8 | the kernel's `mprotect` allows W+X (the W^X test removed) | G (the library loads); F too, which asks for W+X directly |
+| D8b | the kernel's `mprotect` returns `-ENOSYS` instead of `-EACCES` for W+X | G (`ld.so` ignores `ENOSYS` and loads it); F too |
+| D11 | the shim maps `open` to `-ENOSYS` | D, E, G |
+
+D5 and D5b change third-party code in the mutant branch only. They show that
+arm E reads the relocated values; they test nothing in our code.
+
+Not a mutant: taking FAT32's `st_ino` from the first cluster. It is the
+obvious shortcut, and no arm here can catch it, because both library files are
+non-empty and have different first clusters. An empty file has no first
+cluster, so two empty files would collide. That is why P3b-3 uses the
+directory-entry location instead.
+
+### A5.5 Limits (stated)
+
+- There is still no shared text (P4, which needs C2.1). Each process reads the
+  whole `libc.so` eagerly (DDR-1112).
+- `dlopen` after start-up, `pread`, `$ORIGIN`, `LD_LIBRARY_PATH` and TLS in a
+  library loaded later are not gated.
+- `O_CLOEXEC` is ignored, so a later `execve` inherits `ld.so`'s closed fds
+  (none are left open).
 - QEMU (TCG) only, not verified on real hardware.
