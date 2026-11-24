@@ -177,4 +177,21 @@ No current gate touches the kernel window above 0x600000, because no build reach
 - **The `kimg.c` bound's top (0x800000).** The copy cannot land in the window once it is claimed. Its bottom moving to 0x400000 is gated: `smoke-uefi` requires `[kimg] src=uefi len=… sha=…` and forbids `[kimg] refused`. On this change it failed with the old bottom (mutant W6 below).
 - **The 54th chunk's bytes.** They are first kernel bytes once `kernel.bin` passes 1,736,704 B. Stage 2 reads and copies all 54 chunks on every BIOS boot, as §3 explains. The first PR that crosses that size is the first evidence for the tail, and it must say so.
 
+### A2.5 Found by mutant W5: the ceiling check never fired (measured)
+
+**W5 stayed green in CI** (run 45333092972): the `PTSPAN_PROBE=1` build, whose `__bss_end` is phys 0x6EEB00, passed a ceiling of 0x600000.
+
+- **Mechanism.** `make` runs recipes with `/bin/sh`, which is dash on Ubuntu.
+  - dash parses a hex literal above `INT64_MAX` as `INT64_MAX`.
+  - `0x$$end` (`0xffffffff802eeb00`) and `0xFFFFFFFF80000000` therefore both read as `INT64_MAX`.
+  - Their difference is 0, so `phys` is always 0x400000, whatever the kernel's size.
+  - bash computes the correct 0x6EEB00 from the same text. Measured locally: dash gives `4194304`, bash `7269120`.
+- **So the `__bss_end` check DDR-733 added has never fired, in any build.**
+  - The shipped kernels were nonetheless within their windows. The default build ends at phys 0x5EEB00, and A2.1's `RCU_TORTURE=1` numbers were computed with bash.
+- **The fix:**
+  - the recipe first requires the symbol to start with `ffffffff8` (the -2 GiB window), and fails otherwise;
+  - it then strips the top 32 bits before doing arithmetic: `0x$${end#ffffffff} - 0x80000000 + 0x400000`, which dash evaluates correctly.
+  - It is the only shell arithmetic on a higher-half address in the Makefile, `tools/` and the workflows. That was checked with grep; the other matches are fixture strings, not arithmetic.
+- **W5 is re-run on the fixed head.** It must now fail the `PTSPAN_PROBE=1` build.
+
 QEMU (SeaBIOS and OVMF) only, not verified on real hardware.

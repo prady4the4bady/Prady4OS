@@ -886,7 +886,8 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	 g=$$(sed -n 's/.*wc -c < $$(KERNEL_BIN))" -le \([0-9]*\) .*/\1/p' Makefile); \
 	 test -n "$$c" && test -n "$$g" && test "$$c" = "$$k" && test $$(( c * 32768 )) -eq "$$g" || { echo "DDR-1183: the stage-2 chunk count ($$c), its KIMG_SIZE ($$k) and the size gate ($$g B, the -le above) disagree. They are ONE number: chunks x 64 sectors x 512 B. Change all three together."; exit 1; }
 	@end=$$($(NM) $(KERNEL_ELF) | awk '$$3 == "__bss_end" { print $$1 }'); \
-	 phys=$$(( 0x$$end - 0xFFFFFFFF80000000 + 0x400000 )); \
+	 case "$$end" in ffffffff8*) ;; *) echo "kernel: __bss_end ($$end) is not in the -2 GiB kernel window (DDR-1183 A2.5)"; exit 1;; esac; \
+	 phys=$$(( 0x$${end#ffffffff} - 0x80000000 + 0x400000 )); \
 	 test $$phys -le $$(( 0x800000 )) || { echo "kernel image+BSS ends at phys $$phys, past 0x800000 — the 4 MiB PT_HI+PT_HI2 higher-half span (DDR-733, DDR-1183 A2), where KIMG_PHYS begins. Extend the span in boot/stage2/stage2.asm, boot/uefi/loader.c, kernel/mm/vmm.c (vmm_protect_kernel) and kernel/kimg.c together."; exit 1; }
 	@echo "kernel: $(KERNEL_BIN) ($$(wc -c < $(KERNEL_BIN)) bytes)"
 
