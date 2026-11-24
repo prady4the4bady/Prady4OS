@@ -239,7 +239,7 @@ load_kernel:
     call puts16
     mov dword [kdst], KERNEL_PHYS
     mov dword [kpdst], KIMG_PHYS
-    mov cx, 54                      ; DDR-1183: 53->54 chunks = 1,769,472 B read window (A2)
+    mov cx, 53                      ; DDR-1183: 53->54 chunks = 1,769,472 B read window (A2)
 .chunk:
     push cx
     mov si, kernel_dap              ; read 64 sectors -> bounce @0x10000
