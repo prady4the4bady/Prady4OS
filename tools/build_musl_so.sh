@@ -65,6 +65,17 @@ PY
 STA="$TREE/src/thread/x86_64/__set_thread_area.s"
 rm -f "$STA"
 cp "$OVL/__set_thread_area.s" "$STA"
+# MUTANT D5b: rewrite the copy of ldso/dynlink.c
+DL="$TREE/ldso/dynlink.c"
+python3 - "$MUSL/ldso/dynlink.c" "$DL" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = '\t\tcase REL_GOT:\n'
+assert s.count(old) == 1, old
+import os
+os.remove(sys.argv[2])
+open(sys.argv[2], "w").write(s.replace(old, '\t\tcase REL_GOT:\n\t\t\tif (type == REL_SYMBOLIC && dso != &ldso) break;\n'))
+PY
 
 # --- musl's own build -----------------------------------------------------------
 mkdir -p "$OUT/b"
