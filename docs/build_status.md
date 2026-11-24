@@ -2194,7 +2194,7 @@ without them; each has a concrete "build before" trigger so it is not forgotten.
 | **Kernel-self W^X** (kernel text RX, kernel data NX) | bootloader maps the kernel image RWX; user W^X is fully enforced | kernel-hardening pass (remap kernel sections after boot) |
 | **COW fork** | none yet (fork lands in 5b as copy-all-pages; COW after) | memory-heavy fork workloads |
 | **Process reaping / AS teardown on exit** | `vmm_destroy_address_space` exists + used on load-failure paths; an exited user process leaks its AS + kernel stack until a reaper | PID-1 orphan reaper (5d) |
-| **Dynamic linking** (`ld-pradyos.so`) | static ELF only | shared libraries |
+| **Dynamic linking** | musl's `ld.so`/`libc.so` loads a dynamically linked program with `DT_NEEDED` libraries (C1.6 P3b, DDR-1189 A5, #166; `smoke-dynlink` arms D, E, G); before it, static PIE and `PT_INTERP` loading (A2, A3) | shared text pages (P4, needs C2.1); `dlopen` after start-up, `pread`, `$ORIGIN` |
 | **UEFI / OVMF boot path** | legacy BIOS/MBR path complete | ARM64 / RISC-V variants (Layer 1) |
 | **AVX-512 asm + IPC zero-copy (VMOVDQU)** | scalar paths | performance-hardening pass |
 | **Larger/relocating kernel loader** | Stage 2 loads 256 KiB (8×64 sectors) to 0x10000 | kernel exceeds ~256 KiB, or moving the kernel off low memory |
@@ -7435,4 +7435,24 @@ the 2026-11-22 entry are lifted.
   waived the DDR-first split (#45 comment 7111929379, item 4). This entry was
   added later, in a docs-only commit, as for DDR-1189 A3 on #158. History is
   not rewritten.
+- QEMU only, not verified on real hardware.
+
+## 2026-11-24 — DDR-1189 A5, C1.6 P3b (musl's `ld.so` and `libc.so`, PR #166)
+
+- **`tools/build_musl_so.sh`** builds musl's shared `libc.so`, which is also
+  its `ld.so`, with musl's own `configure` and `make`, against the NSI.
+  - It is 848,080 B and installed on the FAT image as
+    `/LIB/ld-musl-x86_64.so.1`; it is not embedded in `kernel.bin`.
+  - The static `libc.a` is unchanged: the new syscall overrides are read only
+    by the `.so` build.
+- **One kernel change:** `fstat` reports `st_dev` (mount + 1) and `st_ino`
+  (`vfs_ident` + 1), where both were 0. musl's `ld.so` took a later library for
+  an already-loaded one when they matched (mutant D10).
+- **`smoke-dynlink` arms D, E and G:**
+  - D: a musl program calls `libtest.so` and `libc.so`;
+  - E: GOT and symbolic relocations resolve;
+  - G: a `DT_TEXTREL` library is refused by the kernel's `-EACCES`.
+  - C4 now names an absent interpreter.
+- **Sizes are unchanged:** `kernel.bin` 1,716,626 B, and 1,733,010 B for
+  `RCU_TORTURE=1`.
 - QEMU only, not verified on real hardware.

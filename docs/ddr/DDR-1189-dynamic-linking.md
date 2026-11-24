@@ -4,8 +4,8 @@ Status: designed ahead (#45 comment 6436706603, item 2). C1.3 has merged. P1 is
 built under Amendment 1 (#154), and P2 under Amendment 2 (#156). P3 is designed
 under Amendment 3, as P3a and P3b; P3a is built (#158). Amendment 4 designs
 the P3a follow-up (per-page write history, `x_ok` from a whole-area
-replacement). Amendment 5 checks P3b's design against the code it will run
-(musl `ld.so`/`libc.so`). P3b and P4 are not built.
+replacement). Amendment 5 designs P3b (musl `ld.so`/`libc.so`), which is built
+on #166 (open; it merges only after #164). P4 is not built.
 
 ## 1. Where the tree is (read from `dev/phase1` = `7981cd4`)
 
@@ -839,10 +839,11 @@ D9h to D9k change only the set condition; the clear step keeps `xok`.
 
 ## Amendment 5 (2026-11-24): Part P3b designed, musl `ld.so` and `libc.so`
 
-Ordered by #45 7111929379 item 6 (C1.6 P3b after the size-gate PR). Design
-only: no code is built under this amendment yet. A3.4 decided P3b's outline;
-this amendment checks that outline against the code it will run. The code PR
-does not merge before #164 (DDR-1183 A2), because P3b grows the kernel.
+Ordered by #45 7111929379 item 6 (C1.6 P3b after the size-gate PR). A3.4
+decided P3b's outline; this amendment checks that outline against the code it
+runs, and records what was measured while building it. The design and the
+code are separate commits on #166. #166 does not merge before #164
+(DDR-1183 A2), which comes before any kernel growth.
 
 ### A5.1 Measured, and read from the code (`dev/phase1` = `8843b8a`)
 
