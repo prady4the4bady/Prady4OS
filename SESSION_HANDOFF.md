@@ -2,14 +2,14 @@
 
 Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
-## State (2026-11-23)
+## State (2026-11-24)
 
-- **dev/phase1 tip:** `8843b8a` (#160, DDR-1210: the user-trap report written as one locked `kwrite`, so it no longer splices into another CPU's line; head `63bbe5d`, 20/20; the DDR and code share commit `c86485a`, waived by the operator, #45 7111929379 item 4). Before it: `1958874` (#163, bookkeeping), `037a9e4` (#162, the C1.6 P3a follow-up, DDR-1189 Amendment 4).
-- **Kernel:** default `kernel.bin` 1,716,626 B (20,078 B headroom); the binding `RCU_TORTURE=1` and `LOCKDEP=1` builds 1,733,010 B (**3,694 B headroom, less than one 4 KiB page**), all printed by CI on `a3acf52` (run 45212716257), against the 1,736,704 B gate. The PT_HI ceiling (image plus BSS at or below phys 0x600000) is build-enforced (DDR-1183 A1). NSI: max 124 (`SYS_PSI`); next free 125. PTE software bits: 9 COW, 10 SHARED, 11 DYING, 52 SHMEM, 53 EVERW (DDR-1189 A4). DDR numbers: 1210 is taken by #160 (open); next free is 1211. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
+- **dev/phase1 tip:** `bb9939d` (#166, C1.6 P3b, DDR-1189 Amendment 5: musl's own `ld.so`/`libc.so` loads dynamically linked programs; head `72ccc54`, 21/21, run 45450942178). Before it: `2a858ce` (#164, DDR-1183 A2: 54 stage-2 chunks and a 4 MiB kernel window; merged by the operator), `3a6a4aa` (#165, bookkeeping), `8843b8a` (#160, DDR-1210, merged).
+- **Kernel:** default `kernel.bin` 1,716,626 B (**52,846 B headroom**); the binding `RCU_TORTURE=1` and `LOCKDEP=1` builds 1,733,010 B (**36,462 B headroom**), both printed by CI on `72ccc54` (run 45450942178), against the 1,769,472 B gate (DDR-1183 A2). The kernel window is 0x400000..0x800000 in two PT pages; the `__bss_end` ceiling is 0x800000 and, since A2.5, actually enforced (under dash it had never fired). NSI: max 124 (`SYS_PSI`); next free 125. PTE software bits: 9 COW, 10 SHARED, 11 DYING, 52 SHMEM, 53 EVERW (DDR-1189 A4). DDR numbers: 1210 is taken by #160 (merged); next free is 1211. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
 - **Standing instruction: #45 6993979920 (Nov 19).** Build every remaining chunk in checklist order, one feature per PR: DDR, code, CI gate, mutants red, merge. Merge each PR yourself under the five conditions of 6594914166 (green on the exact head, `mergeable_state` clean, mutants red or recorded not gated, CodeRabbit answered, previous PR merged). Update the checklist and this file after each merge; post a short status on #45 after each chunk. At most 3 CI runs at a time.
   - **Still wait for the operator on:** drafts #68 and #85 (the operator merges them); any key, secret, credential or trust-root step (C3.3: write the DDR, open the PR, stop); C6.2 branding.
   - **Blocker rule:** a red or inconclusive gate you cannot explain, a recurrence of an unnamed failure, or a CodeRabbit finding that shows the design is wrong: one blocker comment, mark the chunk BLOCKED, take the next unblocked chunk.
-- **Order now (the operator's, 6993979920 and 7062649586):** C1.5 P5 and P6 and deadlock detection (C1.4) are done; C1.6 is in progress (P1, P2, P3a and its A4 follow-up done); then C1.7, then Phase 2 onward by `Needs`. C11.1 stays last. C1.5 stays IN PROGRESS only for memory PSI, which waits for C2.1.
+- **Order now (the operator's, 6993979920 and 7062649586):** C1.5 P5 and P6 and deadlock detection (C1.4) are done; C1.6 is done but for P4 (P1, P2, P3a and its A4 follow-up, P3b; P4 needs C2.1); then C1.7, then Phase 2 onward by `Needs`. C11.1 stays last. C1.5 stays IN PROGRESS only for memory PSI, which waits for C2.1.
 - **#135 (open):** the `-ENOMEM` mechanism is named and fixed (#142). Arm R was green in 5 CI runs on trees with P4 and the fix; it failed 2 of 6 with P4 before it. What P4 changes to raise the rate is not explained. Close it only after repeated green runs; a recurrence is a blocker.
 - **Issues open:** #135, #143 (arm C2 `net_leak_ok=0`, 1 in 202 runs, no mechanism), #116, #117, #119.
 - **Review threads left open for the operator:** the Codex `docs/build_status.md` notes on #136, #138, #140, #142, #148, #150, #154 and #156 (question in #45 6948599917).
@@ -36,14 +36,15 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## Next
 
-- Merge this bookkeeping PR (docs-only rule).
-- **Operator decisions, #45 7111929379 (Nov 23):**
-  - Merge authority for kernel PRs is restored under the five conditions of 6594914166 (item 1). Still the operator's to merge: #72, any boot-loader PR, keys and trust roots, and the #85 replacement.
-  - **#164 (DDR-1183 A2, the size gate: 54 chunks and a 4 MiB kernel window)** is open for the operator to merge (item 2). Its mutants W1-W6 and S1' are dispatched. It comes before P3b and any other kernel growth.
-  - **#72 (DDR-1182, fd access mode):** only after #164 merges, merge `dev/phase1` into it, resolve the conflicts, re-run `smoke-accmode` and mutants M1-M8 on the new head, and post the evidence on #72. The operator merges it (item 3; this replaces 7062649586 item 2's order).
-  - The operator closes the parked drafts (item 5).
-- Then C1.6 P3b (musl `ld.so`/`libc.so`, the syscall shim, arms D, E, G; arm C4's image names `/lib/ld-musl-x86_64.so.1` and must be re-pointed when that file is installed), then C1.7 (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3). C1.6 P4 (shared text) needs C2.1, which is in Phase 2, so it comes after C2.1, not before C1.7.
-- **Size gate first (3,694 B left in the binding builds):** the next 4 KiB page crossing fails CI. The operator chose the window raise (7111929379 item 2); it is #164, and it must merge before P3b or any other kernel growth.
+- Merge this bookkeeping PR. It also carries CodeRabbit's Minor from #166: a failed check in `build_musl_so.sh` now removes the copied `libc.so`.
+- **#72 (DDR-1182, fd access mode), operator 7111929379 item 3:**
+  - `dev/phase1` was merged in as `c801c32`, green 20/20 (run 45449147938, `smoke-accmode` PASS on shard 8).
+  - M1-M8 are re-running as `mut/accmode-M*-v3`. M4 and M6 were re-applied by text because their context moved.
+  - Post the evidence on #72. The operator merges it, as with any boot-loader, key or trust-root PR and the #85 replacement (item 1).
+- **Then C1.7** (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3).
+  - C1.6 P4 (shared text) needs C2.1 and comes after it.
+  - C1.5 stays IN PROGRESS only for memory PSI.
+- The operator closes the parked drafts (7111929379 item 5); #88 is one.
 - DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
 
 ## Open blockers
