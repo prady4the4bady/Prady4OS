@@ -353,7 +353,7 @@ KCFLAGS += -DLOCKDEP=$(LOCKDEP)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl musl-so lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -459,6 +459,44 @@ $(MUSL_LIB): tools/build_musl.sh $(MUSL_OVL)/syscall_overrides.h $(MUSL_OVL)/__s
 	bash tools/build_musl.sh
 $(MUSL_CRT): $(MUSL_LIB) ;
 musl: $(MUSL_LIB)
+
+# DDR-1189 A5 (C1.6 P3b): musl's shared libc.so, which is also its ld.so, built
+# by musl's own configure + Makefile against the NSI (tools/build_musl_so.sh),
+# and the four probes linked against it. FAT image only: none is embedded in
+# kernel.bin, so the kernel does not depend on them.
+MUSL_SO       := build/musl-so/lib/libc.so
+MUSL_SO_CF    := --target=x86_64-elf -ffreestanding -fPIC -fno-asynchronous-unwind-tables \
+  -nostdinc -Wall -Wextra -Werror -Ibuild/musl-so/obj/include \
+  -Ibuild/musl-so/tree/arch/x86_64 -Ibuild/musl-so/tree/arch/generic -Ibuild/musl-so/tree/include
+MUSL_SO_CRT1  := build/musl-so/lib/Scrt1.o build/musl-so/lib/crti.o
+MUSL_SO_CRTN  := build/musl-so/lib/crtn.o
+P3B_ELFS      := build/p3b/libtest.so build/p3b/libtrel.so build/p3b/dynmain.elf build/p3b/dyntrel.elf
+$(MUSL_SO): tools/build_musl_so.sh $(MUSL_OVL)/syscall_overrides.h $(MUSL_OVL)/syscall_overrides_so.h $(MUSL_OVL)/__set_thread_area.s $(MUSL_DIR)/Makefile
+	bash tools/build_musl_so.sh
+musl-so: $(MUSL_SO)
+$(P3B_ELFS) &: $(MUSL_SO) user/libtest.c user/libtrel.c user/dynmain.c user/dyntrel.c
+	@mkdir -p build/p3b
+	clang $(MUSL_SO_CF) -c user/libtest.c -o build/p3b/libtest.o
+	clang $(MUSL_SO_CF) -c user/libtrel.c -o build/p3b/libtrel.o
+	clang $(MUSL_SO_CF) -c user/dynmain.c -o build/p3b/dynmain.o
+	clang $(MUSL_SO_CF) -c user/dyntrel.c -o build/p3b/dyntrel.o
+	$(LD) -shared -soname libtest.so -z text -z noexecstack -o build/p3b/libtest.so build/p3b/libtest.o
+	$(LD) -shared -soname libtrel.so -z notext -z noexecstack -o build/p3b/libtrel.so build/p3b/libtrel.o
+	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack -o build/p3b/dynmain.elf \
+	  $(MUSL_SO_CRT1) build/p3b/dynmain.o -Lbuild/musl-so/lib -lc build/p3b/libtest.so $(MUSL_SO_CRTN)
+	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack -o build/p3b/dyntrel.elf \
+	  $(MUSL_SO_CRT1) build/p3b/dyntrel.o -Lbuild/musl-so/lib -lc build/p3b/libtrel.so $(MUSL_SO_CRTN)
+	@readelf -dW build/p3b/libtrel.so | grep -q TEXTREL || { echo "p3b: libtrel.so has no DT_TEXTREL (arm G would be vacuous)"; exit 1; }
+	@readelf -dW build/p3b/libtest.so | grep -q TEXTREL && { echo "p3b: libtest.so has DT_TEXTREL"; exit 1; } || true
+	@readelf -rW build/p3b/dynmain.elf | grep -q 'R_X86_64_GLOB_DAT.* lib_var' || { echo "p3b: dynmain reads lib_var without a GLOB_DAT (arm E would be vacuous)"; exit 1; }
+	@# libc.so must be the FIRST DT_NEEDED: musl's ld.so joins its own entry to the
+	@# loaded list only when libc.so is asked for, and a library whose st_dev/st_ino
+	@# equal a listed entry's is taken as already loaded. Needed first, libc.so is
+	@# in the list when libtest.so (libtrel.so) is looked up, so a zero st_ino
+	@# (mutant D10) makes it resolve to libc and arm D (G) go red.
+	@for e in dynmain dyntrel; do \
+	  n=$$(readelf -dW build/p3b/$$e.elf | grep -m1 NEEDED | sed 's/.*\[\(.*\)\]/\1/') ; \
+	  [ "$$n" = libc.so ] || { echo "p3b: $$e's first DT_NEEDED is '$$n', not libc.so (arm D/G would not catch a zero st_ino)"; exit 1; } ; done
 
 # NET-B: build the lwIP 2.2.1 core (third-party, -w) into build/lwip/liblwip.a
 # from the pinned submodule + the PRADYOS port headers (third_party/lwip-port/).
@@ -704,7 +742,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(USER_PIE_CFLAGS) -c $(USER_PIE_SRC) -o build/dynpie.o
 	$(LD) -pie --no-dynamic-linker -z text -z noexecstack --strip-all -o $(USER_PIE_ELF) build/dynpie.o
 	$(CC) $(USER_PIE_CFLAGS) -c $(USER_PBAD_SRC) -o build/dynpint.o
-	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack --strip-all -o $(USER_PINT_ELF) build/dynpint.o
+	$(LD) -pie --dynamic-linker=/LIB/ABSENT.SO -z text -z noexecstack --strip-all -o $(USER_PINT_ELF) build/dynpint.o
 	$(CC) $(USER_PIE_CFLAGS) -DDYN_TEXTREL -c $(USER_PBAD_SRC) -o build/dynptxt.o
 	$(LD) -pie --no-dynamic-linker -z notext -z noexecstack --strip-all -o $(USER_PTXT_ELF) build/dynptxt.o
 	# DDR-1189 A3 P3a-3: arm D0. ldtest has no dynamic relocations (the kernel
@@ -939,7 +977,7 @@ FAT_IMG := build/fat.img
 # DDR-973: depends on the kernel build because that is what produces
 # $(USER_CMUSL_ELF), which the recipe now mcopy's onto the volume. Without
 # this a parallel `make -j smoke-...` could run the recipe before the ELF exists.
-fat-image: $(KERNEL_BIN)
+fat-image: $(KERNEL_BIN) $(P3B_ELFS)
 	@mkdir -p build
 	dd if=/dev/zero of=$(FAT_IMG) bs=1M count=64 status=none
 	mkfs.fat -F 32 -n PRADYOS $(FAT_IMG) >/dev/null
@@ -994,6 +1032,14 @@ fat-image: $(KERNEL_BIN)
 	mcopy -i $(FAT_IMG) $(USER_LDT_ELF) ::/LIB/LDTEST.SO
 	mcopy -i $(FAT_IMG) $(USER_D0_ELF) ::/DYND0.ELF
 	mcopy -i $(FAT_IMG) $(USER_PII_ELF) ::/DYNPII.ELF
+	# DDR-1189 A5 (C1.6 P3b): musl's ld.so/libc.so at the path PT_INTERP names
+	# (long name; FAT32 matches it case-insensitively), the two libraries on its
+	# default search path, and the two programs (arms D, E, G).
+	mcopy -i $(FAT_IMG) $(MUSL_SO) ::/LIB/ld-musl-x86_64.so.1
+	mcopy -i $(FAT_IMG) build/p3b/libtest.so ::/LIB/libtest.so
+	mcopy -i $(FAT_IMG) build/p3b/libtrel.so ::/LIB/libtrel.so
+	mcopy -i $(FAT_IMG) build/p3b/dynmain.elf ::/DYNMAIN.ELF
+	mcopy -i $(FAT_IMG) build/p3b/dyntrel.elf ::/DYNTREL.ELF
 	mcopy -i $(FAT_IMG) $(USER_SLOW_ELF) ::/SLOWTEST.ELF
 	# DDR-761: the AETHER boot policy moved OFF the FAT boot volume — the daemon now
 	# reads /etc/aether/config on the SFS root (kernel-provisioned; DDR-760). The old
@@ -4601,6 +4647,10 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  echo "$$D0M" | grep -q ' rel=1 aux=1 ' || { echo "[dynlink] FAIL: arm D0b, the program, relocated only by its interpreter, with its own auxv: $$D0M (want rel=1 aux=1)"; rc=1; } ; \
 	  [ -n "$$d0ib" ] && [ -n "$$d0mb" ] && [ $$(( 0x$$d0ib & 0xfff )) = 0 ] && [ $$(( 0x$$d0ib >= 0x8400000000 && 0x$$d0ib < 0x8440000000 )) = 1 ] && [ $$(( 0x$$d0mb >= 0x8100000000 && 0x$$d0mb < 0x8140000000 )) = 1 ] || { echo "[dynlink] FAIL: arm D0c, the interpreter base in the first 1 GiB of its window and the program in the PIE window: ibase=0x$$d0ib base=0x$$d0mb"; rc=1; } ; \
 	  [ "$$(grep -ac 'PRADYOS_DYN_R interp2 rc=-8$$' $$L)" = 1 ] || { echo "[dynlink] FAIL: arm D0r, an interpreter with a PT_INTERP of its own was not refused with -ENOEXEC"; rc=1; } ; \
+	  grep -a 'PRADYOS_DYN_D \|PRADYOS_DYN_E \|PRADYOS_DYN_DR \|PRADYOS_DYN_G \|Error loading shared library\|Error relocating' $$L ; \
+	  [ "$$(grep -ac '^PRADYOS_DYN_DR rc=0$$' $$L)" = 1 ] && [ "$$(grep -ac '^PRADYOS_DYN_D answer=42 libc=1$$' $$L)" = 1 ] || { echo "[dynlink] FAIL: arm D (DDR-1189 A5), /DYNMAIN.ELF under musl's ld.so did not call lib_answer from libtest.so and printf from libc.so, then exit 0"; rc=1; } ; \
+	  [ "$$(grep -ac '^PRADYOS_DYN_E var=7 fp=42$$' $$L)" = 1 ] || { echo "[dynlink] FAIL: arm E, the GOT read of lib_var (GLOB_DAT) and libtest.so's symbolic R_X86_64_64 did not both resolve (want var=7 fp=42)"; rc=1; } ; \
+	  [ "$$(grep -ac '^PRADYOS_DYN_G rc=127$$' $$L)" = 1 ] && grep -aq 'Error loading shared library libtrel.so: Permission denied' $$L || { echo "[dynlink] FAIL: arm G, the DT_TEXTREL library was not refused by the kernel's -EACCES on ld.so's W+X mprotect (want rc=127 and Permission denied)"; rc=1; } ; \
 	  M=$$(grep -a 'PRADYOS_DYN_M pre=' $$L | head -1) ; echo "$$M" ; \
 	  mv() { echo "$$M" | sed -n "s/.* $$1=\(-*[0-9]*\).*/\1/p" ; } ; \
 	  [ "$$(mv pre)" = 127 ] && [ "$$(mv anon)" = 1 ] && [ "$$(mv anonz)" = 0 ] && [ "$$(mv back)" = 1 ] && [ "$$(mv backb)" = 127 ] || { echo "[dynlink] FAIL: arm M0, MAP_FIXED replaces the caller's own pages: pre=$$(mv pre) anon=$$(mv anon) anonz=$$(mv anonz) back=$$(mv back) backb=$$(mv backb) (want 127, 1, 0, 1, 127)"; rc=1; } ; \
@@ -4626,7 +4676,7 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$(wv m8r)" = -13 ] || { echo "[dynlink] FAIL: arm M8r, X after a whole-area replacement from a read-write fd: $$(wv m8r) (want -13)"; rc=1; } ; \
 	  [ "$$(wv m8w)" = -13 ] || { echo "[dynlink] FAIL: arm M8w, X after a whole-area writable replacement: $$(wv m8w) (want -13)"; rc=1; } ; \
 	  [ "$$(wv m8n)" = -13 ] || { echo "[dynlink] FAIL: arm M8n, X after a whole-area replacement without MAP_PRIVATE: $$(wv m8n) (want -13)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, F0-F7, F8a-F8c, M0-M8, M8p, M8r, M8w and M8n" ; exit $$rc
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, D, E, G, F0-F7, F8a-F8c, M0-M8, M8p, M8r, M8w and M8n" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log

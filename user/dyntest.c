@@ -20,6 +20,14 @@
  * two prints `PRADYOS_DYN_R <what> rc=<execve's return>` when execve returns.
  * Last, PRADYOS_DYN_PIE_DONE n=4.
  *
+ * DDR-1189 Amendment 5 (C1.6 P3b), arms D, E and G: before that line it runs
+ * two musl programs and prints each one's exit code:
+ *   PRADYOS_DYN_DR rc=<n>  /DYNMAIN.ELF, bound by musl's ld.so to libtest.so
+ *                          and libc.so (the program prints PRADYOS_DYN_D and
+ *                          PRADYOS_DYN_E itself); the gate wants 0.
+ *   PRADYOS_DYN_G rc=<n>   /DYNTREL.ELF, whose library carries DT_TEXTREL; the
+ *                          gate wants 127 (ld.so refused the library).
+ *
  * argc is read from the stack before any prologue runs: _start is an assembly
  * stub that hands %rsp to dyn_main (DDR-823: a C _start's prologue has
  * already moved it).
@@ -158,6 +166,29 @@ static void run_one(const char *path, const char *a0, const char *what) {
         die("wait4");
     if (st != 0)
         die("a child exited non-zero");
+}
+
+/* DDR-1189 A5: run one image to completion and return its exit code. An
+ * execve that returns makes the child exit 200 + (-rc), so a failed exec can
+ * never read as 0 or as ld.so's 127. */
+static long run_code(const char *path, const char *a0) {
+    long pid = nsi(SYS_FORK, 0, 0, 0);
+    if (pid < 0)
+        die("fork");
+    if (pid == 0) {
+        const char *argv[2];
+        const char *envp[1];
+        argv[0] = a0;
+        argv[1] = 0;
+        envp[0] = 0;
+        long rc = nsi(SYS_EXECVE, (long)path, (long)argv, (long)envp);
+        for (;;)
+            nsi(SYS_EXIT, 200 - rc, 0, 0);
+    }
+    int st = -1;
+    if (nsi(SYS_WAIT4, pid, (long)&st, 0) != pid)
+        die("wait4");
+    return st;
 }
 
 /* " key=<v>" */
@@ -420,6 +451,15 @@ __attribute__((noreturn)) static void pie_phase(void) {
     run_one(ptxt, "dynptxt", "textrel");
     run_one(d0, "dynd0", 0);                    /* via /LIB/LDTEST.SO */
     run_one(pii, "dynpii", "interp2");          /* its interpreter has one */
+    static const char dmain[] = "/DYNMAIN.ELF";  /* DDR-1189 A5: arms D, E */
+    static const char dtrel[] = "/DYNTREL.ELF";  /* DDR-1189 A5: arm G */
+    long drc = run_code(dmain, "dynmain");       /* its output comes first, */
+    long grc = run_code(dtrel, "dyntrel");       /* never inside these lines */
+    wr("PRADYOS_DYN_DR");
+    kv("rc", drc);
+    wr("\nPRADYOS_DYN_G");
+    kv("rc", grc);
+    wr("\n");
     wr("PRADYOS_DYN_PIE_DONE n=4\n");
     wx_phase();                            /* DDR-1189 A3: arm F */
     fixed_phase();                         /* DDR-1189 A3: arm M */
