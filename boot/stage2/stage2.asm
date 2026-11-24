@@ -602,7 +602,6 @@ build_page_tables:
     mov dword [PML4 + 511*8], PDPT_HI | 0x3
     mov dword [PDPT_HI + 510*8], PD_HI | 0x3
     mov dword [PD_HI], PT_HI | 0x3
-    mov dword [PD_HI + 8], PT_HI2 | 0x3     ; DDR-1183 A2: the second 2 MiB
     mov edi, PT_HI
     mov eax, KERNEL_PHYS | 0x3  ; present + rw
     mov ecx, 1024
