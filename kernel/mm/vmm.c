@@ -150,7 +150,7 @@ void vmm_protect_kernel(void) {
         if (lo_pdpt) {
             uint64_t lo_pd = table_at(lo_pdpt)[0] & PTE_ADDR;
             if (lo_pd && (table_at(lo_pd)[2] & PTE_PRESENT) && (table_at(lo_pd)[3] & PTE_PRESENT)) {
-                for (unsigned k = 2; k <= 3; k++) {
+                for (unsigned k = 2; k <= 2; k++) {
                     if (g_nx_ok)
                         table_at(lo_pd)[k] |= VMM_NX;  /* no execute-via-alias */
                     table_at(lo_pd)[k] &= ~VMM_RW;     /* no write-via-alias   */
