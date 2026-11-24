@@ -4,7 +4,7 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## State (2026-11-23)
 
-- **dev/phase1 tip:** `037a9e4` (#162, the C1.6 P3a follow-up, DDR-1189 Amendment 4: per-page write history `PTE_SW_EVERW`, `x_ok` from a whole-area replacement; head `a3acf52`, run 45212716257; 12 mutants red on runs #2544–#2555). Merged by the operator. Before it: `b233acb` (#161, bookkeeping), `8442c87` (#158, C1.6 P3a).
+- **dev/phase1 tip:** `8843b8a` (#160, DDR-1210: the user-trap report written as one locked `kwrite`, so it no longer splices into another CPU's line; head `63bbe5d`, 20/20; the DDR and code share commit `c86485a`, waived by the operator, #45 7111929379 item 4). Before it: `1958874` (#163, bookkeeping), `037a9e4` (#162, the C1.6 P3a follow-up, DDR-1189 Amendment 4).
 - **Kernel:** default `kernel.bin` 1,716,626 B (20,078 B headroom); the binding `RCU_TORTURE=1` and `LOCKDEP=1` builds 1,733,010 B (**3,694 B headroom, less than one 4 KiB page**), all printed by CI on `a3acf52` (run 45212716257), against the 1,736,704 B gate. The PT_HI ceiling (image plus BSS at or below phys 0x600000) is build-enforced (DDR-1183 A1). NSI: max 124 (`SYS_PSI`); next free 125. PTE software bits: 9 COW, 10 SHARED, 11 DYING, 52 SHMEM, 53 EVERW (DDR-1189 A4). DDR numbers: 1210 is taken by #160 (open); next free is 1211. Before allocating a DDR for a checklist item, search `docs/ddr` and `docs/decisions` for that item's ID first.
 - **Standing instruction: #45 6993979920 (Nov 19).** Build every remaining chunk in checklist order, one feature per PR: DDR, code, CI gate, mutants red, merge. Merge each PR yourself under the five conditions of 6594914166 (green on the exact head, `mergeable_state` clean, mutants red or recorded not gated, CodeRabbit answered, previous PR merged). Update the checklist and this file after each merge; post a short status on #45 after each chunk. At most 3 CI runs at a time.
   - **Still wait for the operator on:** drafts #68 and #85 (the operator merges them); any key, secret, credential or trust-root step (C3.3: write the DDR, open the PR, stop); C6.2 branding.
@@ -38,7 +38,11 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 - Merge this bookkeeping PR (docs-only rule).
 - **#72 (DDR-1182, fd access mode), operator 7062649586 item 2:** merge `dev/phase1` into it, resolve the conflicts, re-run `smoke-accmode` and mutants M1–M8 on the new head, post the evidence on #72. Do not merge it: the operator does.
-- **#160 (DDR-1210, the user-trap report as one `kwrite`):** CI green (20/20), CodeRabbit clean. Waits for the operator on Codex's "DDR before code" thread: the split needs a force-push, which this session may not do.
+- **Operator decisions, #45 7111929379 (Nov 23):**
+  - Merge authority for kernel PRs is restored under the five conditions of 6594914166 (item 1). Still the operator's to merge: #72, any boot-loader PR, keys and trust roots, and the #85 replacement.
+  - **#164 (DDR-1183 A2, the size gate: 54 chunks and a 4 MiB kernel window)** is open for the operator to merge (item 2). Its mutants W1-W6 and S1' are dispatched. It comes before P3b and any other kernel growth.
+  - **#72:** after #164 merges, merge `dev/phase1` into it, re-run `smoke-accmode` and M1-M8, and post the evidence; the operator merges it (item 3).
+  - The operator closes the parked drafts (item 5).
 - Then C1.6 P3b (musl `ld.so`/`libc.so`, the syscall shim, arms D, E, G; arm C4's image names `/lib/ld-musl-x86_64.so.1` and must be re-pointed when that file is installed), then C1.7 (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3). C1.6 P4 (shared text) needs C2.1, which is in Phase 2, so it comes after C2.1, not before C1.7.
 - **Size gate first (3,694 B left in the binding builds):** the next 4 KiB page crossing fails CI. A DDR-1183 window raise (54 chunks, PT_HI in both `boot/stage2/stage2.asm` and `boot/uefi/loader.c`, proposed on #45 7091904894) must land before P3b or any other kernel growth; #72 is already blocked on it. Waits for the operator's choice.
 - DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
