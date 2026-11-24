@@ -102,7 +102,7 @@ void vmm_protect_kernel(void) {
     uint64_t *ptp[2]    = { table_at(pt), table_at(pt2) };
     uint64_t text_end   = (uint64_t)(uintptr_t)__text_end;
     uint64_t rodata_end = (uint64_t)(uintptr_t)__rodata_end;
-    for (unsigned i = 0; i < 1024; i++) {
+    for (unsigned i = 0; i < 512; i++) {
         uint64_t *ptes = ptp[i >> 9];
         uint64_t e = ptes[i & 511];
         if (!(e & PTE_PRESENT))
