@@ -31,7 +31,7 @@ static int kimg_base_ok(uint32_t src, uint64_t base, uint64_t size) {
         return 0;
     if (base < 0x100000ull || size > KIMG_FLOOR || base > KIMG_FLOOR - size)
         return 0;
-    return base + size <= 0x400000ull || base >= 0x800000ull;
+    return base + size <= 0x300000ull || base >= 0x800000ull;
 }
 
 void kimg_capture(void) {
