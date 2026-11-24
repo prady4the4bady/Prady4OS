@@ -1021,9 +1021,19 @@ greps it.
 | D10 | `fstat` leaves `st_dev`/`st_ino` 0 (P3b-3 reverted) | D, E, G (measured locally: `libtrel.so` resolves to libc too, so there is no `Permission denied`) |
 | D5 | musl's `ld.so` skips `R_X86_64_GLOB_DAT` (in `do_relocs`) | E |
 | D5b | musl's `ld.so` skips the symbolic `R_X86_64_64` | E |
-| D8 | the kernel's `mprotect` allows W+X (the W^X test removed) | G (the library loads); F too, which asks for W+X directly |
+| D8 | the kernel's `mprotect` allows W+X (the W^X test removed) | **F9** (measured: G stays green, see below) |
 | D8b | the kernel's `mprotect` returns `-ENOSYS` instead of `-EACCES` for W+X | G (`ld.so` ignores `ENOSYS` and loads it); F too |
-| D11 | the shim maps `open` to `-ENOSYS` | D, E, G |
+| D11 | the shim maps `open` to `-ENOSYS` | the build (measured: `build_musl_so.sh`'s own check that `SYS_open` is NSI 7 fails first, so D, E and G never run) |
+
+**D8 was green on arm G (run 45364502395), and that is right, not vacuous.**
+- musl's `mprotect(RWX)` covers the library's whole span, including its writable data segment.
+- L1's per-page test (`mprot_exec_ok`) refuses execute on those pages, so the kernel still answers `-EACCES` without the explicit W+X test.
+- `smoke-mprotect`'s W+X arm is refused the same way.
+
+So no arm asked `mprotect` for W+X on a page L1 would allow. **Arm F9 does:**
+- `dyntest` maps a fresh private page from a read-only fd. That page was never writable and has `x_ok` set.
+- It then calls `mprotect(PROT_READ|PROT_WRITE|PROT_EXEC)` and requires `-EACCES`.
+- Only the explicit test can refuse that, so D8 is re-run against F9.
 
 D5 and D5b change third-party code in the mutant branch only. They show that
 arm E reads the relocated values; they test nothing in our code.

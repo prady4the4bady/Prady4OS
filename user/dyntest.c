@@ -238,6 +238,13 @@ static void wx_phase(void) {
     long frx = fr > 0 ? nsi(SYS_MPROTECT, fr, 4096, PROT_READ | PROT_EXEC) : fr;
     long frw = fr > 0 ? nsi(SYS_MPROTECT, fr, 4096, PROT_READ | PROT_WRITE) : fr;
     long frwx = fr > 0 ? nsi(SYS_MPROTECT, fr, 4096, PROT_READ | PROT_EXEC) : fr;
+    /* F9 (DDR-1189 A5): mprotect asks for W and X together on a fresh private
+     * read-only file page. L1's per-page test would let that page become
+     * executable (never writable, x_ok set), so only mprotect's own W^X test
+     * refuses it. Mutant D8 removes that test: arm G and smoke-mprotect stay
+     * green under it, because their pages fail L1 too (measured). */
+    long f9 = nsi6(SYS_MMAP, 0, 4096, PROT_READ, MAP_PRIVATE, ro, 0);
+    long mpwx = f9 > 0 ? nsi(SYS_MPROTECT, f9, 4096, PROT_READ | PROT_WRITE | PROT_EXEC) : f9;
     nsi(SYS_CLOSE, ro, 0, 0);
     nsi(SYS_CLOSE, rw, 0, 0);
     wr("PRADYOS_DYN_F");
@@ -250,6 +257,7 @@ static void wx_phase(void) {
     kv("frx", frx);
     kv("frw", frw);
     kv("frwx", frwx);
+    kv("mpwx", mpwx);
     kv("noflagx", noflagx > 0 ? 1 : noflagx);
     kv("noflagmp", noflagmp);
     wr("\n");

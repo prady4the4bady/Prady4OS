@@ -474,7 +474,7 @@ P3B_ELFS      := build/p3b/libtest.so build/p3b/libtrel.so build/p3b/dynmain.elf
 $(MUSL_SO): tools/build_musl_so.sh $(MUSL_OVL)/syscall_overrides.h $(MUSL_OVL)/syscall_overrides_so.h $(MUSL_OVL)/__set_thread_area.s $(MUSL_DIR)/Makefile
 	bash tools/build_musl_so.sh
 musl-so: $(MUSL_SO)
-$(P3B_ELFS) &: $(MUSL_SO) user/libtest.c user/libtrel.c user/dynmain.c user/dyntrel.c
+$(P3B_ELFS) &: $(MUSL_SO) user/libtest.c user/libtrel.c user/dynmain.c user/dyntrel.c Makefile
 	@mkdir -p build/p3b
 	clang $(MUSL_SO_CF) -c user/libtest.c -o build/p3b/libtest.o
 	clang $(MUSL_SO_CF) -c user/libtrel.c -o build/p3b/libtrel.o
@@ -486,9 +486,9 @@ $(P3B_ELFS) &: $(MUSL_SO) user/libtest.c user/libtrel.c user/dynmain.c user/dynt
 	  $(MUSL_SO_CRT1) build/p3b/dynmain.o -Lbuild/musl-so/lib -lc build/p3b/libtest.so $(MUSL_SO_CRTN)
 	$(LD) -pie --dynamic-linker=/lib/ld-musl-x86_64.so.1 -z text -z noexecstack -o build/p3b/dyntrel.elf \
 	  $(MUSL_SO_CRT1) build/p3b/dyntrel.o -Lbuild/musl-so/lib -lc build/p3b/libtrel.so $(MUSL_SO_CRTN)
-	@readelf -dW build/p3b/libtrel.so | grep -q TEXTREL || { echo "p3b: libtrel.so has no DT_TEXTREL (arm G would be vacuous)"; exit 1; }
-	@readelf -dW build/p3b/libtest.so | grep -q TEXTREL && { echo "p3b: libtest.so has DT_TEXTREL"; exit 1; } || true
-	@readelf -rW build/p3b/dynmain.elf | grep -q 'R_X86_64_GLOB_DAT.* lib_var' || { echo "p3b: dynmain reads lib_var without a GLOB_DAT (arm E would be vacuous)"; exit 1; }
+	@readelf -dW build/p3b/libtrel.so | grep -q TEXTREL || { echo "p3b: libtrel.so has no DT_TEXTREL (arm G would be vacuous)"; rm -f $(P3B_ELFS); exit 1; }
+	@readelf -dW build/p3b/libtest.so | grep -q TEXTREL && { echo "p3b: libtest.so has DT_TEXTREL"; rm -f $(P3B_ELFS); exit 1; } || true
+	@readelf -rW build/p3b/dynmain.elf | grep -q 'R_X86_64_GLOB_DAT.* lib_var' || { echo "p3b: dynmain reads lib_var without a GLOB_DAT (arm E would be vacuous)"; rm -f $(P3B_ELFS); exit 1; }
 	@# libc.so must be the FIRST DT_NEEDED: musl's ld.so joins its own entry to the
 	@# loaded list only when libc.so is asked for, and a library whose st_dev/st_ino
 	@# equal a listed entry's is taken as already loaded. Needed first, libc.so is
@@ -496,7 +496,7 @@ $(P3B_ELFS) &: $(MUSL_SO) user/libtest.c user/libtrel.c user/dynmain.c user/dynt
 	@# (mutant D10) makes it resolve to libc and arm D (G) go red.
 	@for e in dynmain dyntrel; do \
 	  n=$$(readelf -dW build/p3b/$$e.elf | grep -m1 NEEDED | sed 's/.*\[\(.*\)\]/\1/') ; \
-	  [ "$$n" = libc.so ] || { echo "p3b: $$e's first DT_NEEDED is '$$n', not libc.so (arm D/G would not catch a zero st_ino)"; exit 1; } ; done
+	  [ "$$n" = libc.so ] || { echo "p3b: $$e's first DT_NEEDED is '$$n', not libc.so (arm D/G would not catch a zero st_ino)"; rm -f $(P3B_ELFS); exit 1; } ; done
 
 # NET-B: build the lwIP 2.2.1 core (third-party, -w) into build/lwip/liblwip.a
 # from the pinned submodule + the PRADYOS port headers (third_party/lwip-port/).
@@ -4638,6 +4638,7 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$(fv rwfd)" = -13 ] || { echo "[dynlink] FAIL: arm F3, executable from a writable fd: $$(fv rwfd) (want -13)"; rc=1; } ; \
 	  [ "$$(fv mpanon)" = -13 ] || { echo "[dynlink] FAIL: arm F4, mprotect(PROT_EXEC) on anonymous memory: $$(fv mpanon) (want -13)"; rc=1; } ; \
 	  [ "$$(fv frwx)" = -13 ] || { echo "[dynlink] FAIL: arm F5, mprotect(PROT_EXEC) after the mapping was writable: $$(fv frwx) (want -13)"; rc=1; } ; \
+	  [ "$$(fv mpwx)" = -13 ] || { echo "[dynlink] FAIL: arm F9 (DDR-1189 A5), mprotect(PROT_WRITE|PROT_EXEC) on a page L1 would let become executable: $$(fv mpwx) (want -13)"; rc=1; } ; \
 	  D0=$$(grep -a 'PRADYOS_DYN_D0 base_ok=' $$L | head -1) ; echo "$$D0" ; \
 	  D0M=$$(grep -a 'PRADYOS_DYN_D0M base=' $$L | head -1) ; echo "$$D0M" ; \
 	  d0n=$$(echo "$$D0" | sed -n 's/.* nrel=\(-*[0-9]*\).*/\1/p') ; \
@@ -4676,7 +4677,7 @@ smoke-dynlink: $(IMG) fat-image sfs-image
 	  [ "$$(wv m8r)" = -13 ] || { echo "[dynlink] FAIL: arm M8r, X after a whole-area replacement from a read-write fd: $$(wv m8r) (want -13)"; rc=1; } ; \
 	  [ "$$(wv m8w)" = -13 ] || { echo "[dynlink] FAIL: arm M8w, X after a whole-area writable replacement: $$(wv m8w) (want -13)"; rc=1; } ; \
 	  [ "$$(wv m8n)" = -13 ] || { echo "[dynlink] FAIL: arm M8n, X after a whole-area replacement without MAP_PRIVATE: $$(wv m8n) (want -13)"; rc=1; } ; \
-	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, D, E, G, F0-F7, F8a-F8c, M0-M8, M8p, M8r, M8w and M8n" ; exit $$rc
+	  [ $$rc = 0 ] && echo "[dynlink] PASS — arms A, B, C1-C5, D0a-D0c, D0r, D, E, G, F0-F7, F8a-F8c, F9, M0-M8, M8p, M8r, M8w and M8n" ; exit $$rc
 
 smoke-mprotect: $(IMG) fat-image sfs-image
 	@rm -f build/mprotect.log
