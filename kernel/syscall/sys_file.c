@@ -200,8 +200,6 @@ static long sys_ftruncate(long fd, long len, long a3, long a4, long a5, long a6)
     }
     if (e->kind != FD_VFS || !e->file)
         return -EINVAL;            /* console/pipe: no length to set */
-    if (!fd_can_write(e))
-        return -EINVAL;            /* DDR-1182: opened O_RDONLY (Linux's errno) */
     if (file_busy(e->file))
         return -EBUSY;             /* DDR-1178 A4.2: a mapped file keeps its size */
 
