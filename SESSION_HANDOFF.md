@@ -37,14 +37,13 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 ## Next
 
 - Merge this bookkeeping PR (docs-only rule).
-- **#72 (DDR-1182, fd access mode), operator 7062649586 item 2:** merge `dev/phase1` into it, resolve the conflicts, re-run `smoke-accmode` and mutants M1–M8 on the new head, post the evidence on #72. Do not merge it: the operator does.
 - **Operator decisions, #45 7111929379 (Nov 23):**
   - Merge authority for kernel PRs is restored under the five conditions of 6594914166 (item 1). Still the operator's to merge: #72, any boot-loader PR, keys and trust roots, and the #85 replacement.
   - **#164 (DDR-1183 A2, the size gate: 54 chunks and a 4 MiB kernel window)** is open for the operator to merge (item 2). Its mutants W1-W6 and S1' are dispatched. It comes before P3b and any other kernel growth.
-  - **#72:** after #164 merges, merge `dev/phase1` into it, re-run `smoke-accmode` and M1-M8, and post the evidence; the operator merges it (item 3).
+  - **#72 (DDR-1182, fd access mode):** only after #164 merges, merge `dev/phase1` into it, resolve the conflicts, re-run `smoke-accmode` and mutants M1-M8 on the new head, and post the evidence on #72. The operator merges it (item 3; this replaces 7062649586 item 2's order).
   - The operator closes the parked drafts (item 5).
 - Then C1.6 P3b (musl `ld.so`/`libc.so`, the syscall shim, arms D, E, G; arm C4's image names `/lib/ld-musl-x86_64.so.1` and must be re-pointed when that file is installed), then C1.7 (KASLR rebuilt as fresh PRs in DDR-1179's order, operator 7062649586 item 3). C1.6 P4 (shared text) needs C2.1, which is in Phase 2, so it comes after C2.1, not before C1.7.
-- **Size gate first (3,694 B left in the binding builds):** the next 4 KiB page crossing fails CI. A DDR-1183 window raise (54 chunks, PT_HI in both `boot/stage2/stage2.asm` and `boot/uefi/loader.c`, proposed on #45 7091904894) must land before P3b or any other kernel growth; #72 is already blocked on it. Waits for the operator's choice.
+- **Size gate first (3,694 B left in the binding builds):** the next 4 KiB page crossing fails CI. The operator chose the window raise (7111929379 item 2); it is #164, and it must merge before P3b or any other kernel growth.
 - DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
 
 ## Open blockers
