@@ -122,7 +122,11 @@ So 52 is the largest raise that keeps the invariant with room to spare. The next
    - It re-stamps and audits both PT pages (1,024 entries), not one. Without this, the second 2 MiB would stay RW and executable, including any BSS there.
    - The identity alias is two 2 MiB PD entries now, `PD[2]` and `PD[3]`. Both are made NX and read-only, and both are read back and audited.
    - The `PRADYOS_WX_ALIAS` line reports both. It reads present=1 only if both are present, rw=1 if either is writable, and nx=1 only if both are NX.
-5. **`kimg.c`:** the UEFI copy must lie clear of 0x300000..**0x800000** (the tables plus the new window).
+5. **`kimg.c`:** the UEFI copy must lie clear of the kernel window, 0x400000..**0x800000**.
+   - The old bound also excluded 0x300000..0x400000, which holds stage 2's page tables. Those tables exist only on the BIOS path; the UEFI loader allocates its own from the firmware.
+   - With the whole window claimed, and OVMF owning 0x800000 up, OVMF places the copy just below 0x400000. Measured locally: base 0x25C000, size 0x1A3192.
+   - The old bound refused that copy (`[kimg] refused reason=base`), and `smoke-uefi` failed. That run is what found this item.
+   - The BIOS copy is still required at exactly `KIMG_PHYS`.
 6. **The Makefile ceiling** after the size gate becomes `__bss_end <= phys 0x800000`.
 7. `KIMG_WINDOW` becomes 0x1B0000. 8 MiB + 0x1B0000 = 0x9B0000 is still inside its own 2 MiB page and below the 16 MiB PMM floor.
 
@@ -144,7 +148,7 @@ So 52 is the largest raise that keeps the invariant with room to spare. The next
 
 No current gate touches the kernel window above 0x600000, because no build reaches it. A mutant that dropped PT_HI2 would therefore pass every existing gate, so a gate of its own is needed.
 
-- **`PTSPAN_PROBE=1`** (default 0) adds a 1 MiB page-aligned BSS array to the kernel. It is BSS, so `kernel.bin` does not change; `__bss_end` moves past 0x600000.
+- **`PTSPAN_PROBE=1`** (default 0) adds a 1 MiB BSS array to the kernel. It is not page-aligned: `kernel.ld` places `.bss` at an unaligned address, and a 4 KiB alignment makes `ld.lld` warn. It is BSS, so `kernel.bin` does not change; `__bss_end` moves past 0x600000.
 - After `vmm_protect_kernel`, the probe:
   - writes a pattern to the array's first and last page and reads it back;
   - resolves the last page's PTE in the kernel address space;
@@ -160,16 +164,17 @@ No current gate touches the kernel window above 0x600000, because no build reach
 
 | Mutant | Change | Expected red |
 |---|---|---|
-| W1 | stage 2 leaves `PD_HI[1]` empty | `smoke-ptspan` BIOS boot (the BSS zeroing faults) |
-| W2 | the UEFI loader leaves its second PT unmapped | `smoke-ptspan` UEFI boot |
+| W1 | stage 2 leaves `PD_HI[1]` empty | every BIOS boot: the W^X pass prints `[wx] kernel W^X FAIL: no PD[1]` (a forbidden pattern); `smoke-ptspan` BIOS also cannot zero its BSS |
+| W2 | the UEFI loader leaves its second PT unmapped | every UEFI boot (`smoke-uefi`, `smoke-iso-x86`'s UEFI arm, `smoke-ptspan` UEFI): `no PD[1]` |
 | W3 | `vmm_protect_kernel` re-stamps only the first PT | `[wx] kernel W^X FAIL` in every boot: the second PT's entries stay executable |
 | W4 | the alias hardening leaves `PD[3]` RW and executable | `[wx] kernel W^X FAIL` in every boot |
 | W5 | the Makefile ceiling back at 0x600000 | the `PTSPAN_PROBE=1` build fails |
 | S1' | `mov cx, 53` with `KIMG_SIZE` and the gate at 54 | the build fails (the coupling assertion, §3's S1) |
+| W6 | `kimg_base_ok` keeps the old 0x300000 bottom for UEFI | `smoke-uefi`, and the UEFI arm of `smoke-iso-x86`: `[kimg] refused reason=base` |
 
 **Not gated, stated:**
 - **The UEFI whole-window claim.** A revert passes unless the firmware places something in the BSS range, which OVMF does not do today.
-- **The `kimg.c` bound.** The copy cannot land in the window once it is claimed.
+- **The `kimg.c` bound's top (0x800000).** The copy cannot land in the window once it is claimed. Its bottom moving to 0x400000 is gated: `smoke-uefi` requires `[kimg] src=uefi len=… sha=…` and forbids `[kimg] refused`. On this change it failed with the old bottom (mutant W6 below).
 - **The 54th chunk's bytes.** They are first kernel bytes once `kernel.bin` passes 1,736,704 B. Stage 2 reads and copies all 54 chunks on every BIOS boot, as §3 explains. The first PR that crosses that size is the first evidence for the tail, and it must say so.
 
 QEMU (SeaBIOS and OVMF) only, not verified on real hardware.

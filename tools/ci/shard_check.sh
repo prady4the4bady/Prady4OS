@@ -50,11 +50,13 @@ MAKEFILE="$ROOT/Makefile"
 # RCU_TORTURE=1, so it runs in `flag-gates` too.
 # smoke-lockdep: DDR-1209 (C1.4). Same reason: it REBUILDS the kernel with
 # LOCKDEP=1, so it runs in `flag-gates` too.
+# smoke-ptspan: DDR-1183 A2. Same reason: it REBUILDS the kernel with
+# PTSPAN_PROBE=1 (and the ESP), so it runs in `flag-gates` too.
 # smoke-fast (directive §6.3) is NOT a gate — it is a RUNNER that invokes some
 # other gate COUNT times via tools/ci/campaign.sh. It boots nothing of its own,
 # so assigning it to a shard would make CI run an argument-less campaign that
 # immediately errors out. Excluded as infrastructure, not as a skipped test.
-EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-fs-liveness smoke-zanchor smoke-rcu smoke-lockdep smoke-fast"
+EXCLUDE="smoke-aarch64 smoke-riscv64 smoke-agent-live smoke-selftest smoke-fs-liveness smoke-zanchor smoke-rcu smoke-lockdep smoke-ptspan smoke-fast"
 
 excluded() {
     local t="$1" e

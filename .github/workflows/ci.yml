@@ -360,14 +360,15 @@ jobs:
   # back with the hash it had.
   #
   # Entries: smoke-zanchor (ZANCHOR_TEST=1, #115), smoke-rcu (RCU_TORTURE=1,
-  # DDR-1200), smoke-lockdep (LOCKDEP=1, DDR-1209).
+  # DDR-1200), smoke-lockdep (LOCKDEP=1, DDR-1209), smoke-ptspan (PTSPAN_PROBE=1,
+  # DDR-1183 A2).
   flag-gates:
     needs: build
     runs-on: ubuntu-24.04   # DDR-1191: pinned, as the shards are
     strategy:
       fail-fast: false
       matrix:
-        gate: [smoke-zanchor, smoke-rcu, smoke-lockdep]
+        gate: [smoke-zanchor, smoke-rcu, smoke-lockdep, smoke-ptspan]
     name: flag-gates (${{ matrix.gate }})
     steps:
       - name: Docs-only change, boot gates not run (DDR-1187)
