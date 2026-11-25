@@ -26,6 +26,10 @@
  * (possibly short for a full pipe), or a negative errno when nothing was written.
  * Shared by sys_write and sys_writev (PROC-D). */
 static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
+    /* DDR-1182: an O_RDONLY file is refused before the DDR-1170 charge below,
+     * so a refused write costs no budget and cannot end a budgeted task. */
+    if (e->kind == FD_VFS && e->file && !fd_can_write(e))
+        return -EBADF;
     /* DDR-1170: charged BEFORE any byte moves, on every fd kind, so a budgeted
      * task cannot emit past its limit by choosing a different descriptor. */
     if (count > 0 && aether_budget_charge(current_thread, TASK_BUDGET_BYTES,
@@ -114,8 +118,6 @@ static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
      * fewer vfs_write iterations, and each SFS extent now holds a full block so a
      * ring-3 SFS file reaches 4 extents * 4 KiB = 16 KiB instead of ~1 KiB. */
     if (e->kind == FD_VFS && e->file) {
-        if (!fd_can_write(e))
-            return -EBADF;           /* DDR-1182: opened O_RDONLY */
         if (e->flags & FD_RB_RO)
             return -EPERM;           /* DDR-1171: rollback task, existing file */
         /* DDR-782: O_APPEND. Re-position at end-of-file once per write() call,

@@ -27,7 +27,7 @@ POSIX access-mode semantics, enforced at every fd read/write path, with one help
 - **Write paths** (`fd_write_user`, io_uring `OP_WRITE`): `acc == O_RDONLY` → `-EBADF`. This check runs **before** the `FD_RB_RO` check (`-EPERM`) and before the DDR-1170 byte-budget charge, so a refused write costs no budget.
 - `ftruncate`: `acc == O_RDONLY` → `-EINVAL` (POSIX allows `EBADF` or `EINVAL`; Linux returns `EINVAL`, which musl callers expect).
 - **Read paths** (`read`, io_uring `OP_READ`): `acc == O_WRONLY` → `-EBADF`.
-- File-backed `mmap`: the fd must be readable, so `acc == O_WRONLY` → `-EACCES` (POSIX). `MAP_PRIVATE|PROT_WRITE` on an `O_RDONLY` fd stays allowed, because the copy is private and never written back. `MAP_SHARED` file mappings are still `-EINVAL`; when DDR-1178 P4 adds them, `PROT_WRITE` there will require `O_RDWR`.
+- File-backed `mmap`: the fd must be readable, so `acc == O_WRONLY` → `-EACCES` (POSIX). `MAP_PRIVATE|PROT_WRITE` on an `O_RDONLY` fd stays allowed, because the copy is private and never written back. File-backed `MAP_SHARED` (DDR-1178 A4, `file_shared_map`): an `O_WRONLY` fd → `-EACCES`; a read-only mapping is allowed from `O_RDONLY` or `O_RDWR`; `PROT_WRITE` needs an `O_RDWR` fd on a filesystem that overwrites in place and a write-authorized cap, else `-EACCES`.
 - `dup2` and fork already copy `flags` (`pipe.c:192`, `fd.c:78`), so a duplicate keeps its mode. The gate checks this.
 - Out of scope, recorded:
   - console fds (`FD_CONSOLE`) keep no direction;
