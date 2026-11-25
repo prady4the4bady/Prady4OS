@@ -249,7 +249,7 @@ static void ap_freeze_probe(void) {
         kputs(" bt=");
         for (unsigned k = 0; k < pc->d_btn; k++) {
             if (k) kputs(",");
-            kputhex(pc->d_bt[k]);
+            kputhex(kaslr_unslide(pc->d_bt[k]));   /* DDR-1179 A4.4: link-time, like rip= */
         }
         /* DDR-1123: WHO ELSE IS FROZEN. This line is a LATCH, not a census --
          * s_victim below pins the FIRST frozen CPU and `continue`s every later

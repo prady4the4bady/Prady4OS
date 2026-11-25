@@ -347,7 +347,7 @@ Ported from #84 (`3ddb03d`) onto step 2. It adds the applier in `boot.asm`, `kre
   - the double-free caller in `pmm.c`;
   - the three `caller=` return addresses in `sfs.c`.
 
-  The percpu pointers in `syscall.c`'s `gs FAIL` line are data and stay raw (§2.5).
+  The saved return addresses in `[apfreeze]`'s `bt=` list unslide too, like its `rip=` (Codex on #169). The percpu pointers in `syscall.c`'s `gs FAIL` line are data and stay raw (§2.5).
 - **Measured at slot 0:** 3,879 entries (3,490 `32S`, 389 `64`), a 5,015 B table, and `kreloc: slide-check OK` (the +2 MiB relocation equals the +2 MiB relink).
 
 **Mutants** (A2's K3-1 to K3-4, each to be shown red in CI before merge):
