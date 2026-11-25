@@ -4,7 +4,7 @@
  * DDR-1179 Amendment 4 (4,994 B measured for 3,864 fields; A1 had 6,144). */
 #pragma once
 
-#define KRELOC_RESERVE 8192
+#define KRELOC_RESERVE 1024   /* MUTANT K2-1 */
 
 /* Filled after the link by `llvm-objcopy --update-section .kreloc=`. */
 extern const unsigned char kreloc_table[KRELOC_RESERVE];
