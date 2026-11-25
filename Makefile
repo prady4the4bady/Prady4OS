@@ -937,7 +937,10 @@ $(KERNEL_BIN): tools/kreloc/kreloc.py $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(
 	$(LD) -nostdlib --emit-relocs -T build/kernel-slid.ld -o build/kernel-slid.elf $(KERNEL_OBJS) $(LWIP_LIB)
 	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin build/kernel-slid.elf
 	$(OBJCOPY) -O binary build/kernel-slid.elf build/kernel-slid.bin
-	python3 tools/kreloc/kreloc.py --slide-check $(KERNEL_ELF) $(KERNEL_BIN) build/kernel-slid.bin 0x200000
+	@# A failed slide check removes kernel.bin, so a re-run of make rebuilds it
+	@# instead of packaging the rejected binary (CodeRabbit on #169).
+	python3 tools/kreloc/kreloc.py --slide-check $(KERNEL_ELF) $(KERNEL_BIN) build/kernel-slid.bin 0x200000 \
+	    || { rm -f $(KERNEL_BIN); exit 1; }
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 1769472 || { echo "kernel.bin exceeds 1,769,472 B — the stage-2 read window (54x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, its A1 and its A2). Raise the chunk count in boot/stage2/stage2.asm (with KIMG_SIZE and this gate: the assertion below checks they agree). The 2 MiB disk image does NOT need to grow until 63 chunks. The kernel window is 4 MiB since DDR-1183 A2 (PT_HI and PT_HI2, ceiling 0x800000, checked next)."; exit 1; }
 	@c=$$(sed -n 's/^ *mov cx, \([0-9]*\) *; DDR-1183.*/\1/p' $(STAGE2_SRC)); \
 	 k=$$(sed -n 's/^KIMG_SIZE *equ \([0-9]*\) \* 0x8000.*/\1/p' $(STAGE2_SRC)); \
