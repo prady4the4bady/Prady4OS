@@ -71,7 +71,7 @@ kernel_entry:
     lea rdi, [r8 + rdx]
     test al, 1
     jz .reloc_32s
-    add [rdi], r9                     ; R_X86_64_64
+    nop                               ; MUTANT M1: skip R_X86_64_64
     jmp .reloc_adv
 .reloc_32s:
     add [rdi], r9d                    ; R_X86_64_32S: the slide is < 1 GiB
