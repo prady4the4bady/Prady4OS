@@ -622,7 +622,7 @@ kaslr_pick:
     xor edx, edx
     mov ecx, 510
     div ecx                     ; edx = r mod 510
-    inc edx                     ; [1, 510]: PD_HI[s] and PD_HI[s+1] both exist (A4.2)
+    mov edx, 7                  ; MUTANT M3: constant slot
     mov [kaslr_slot], edx
     mov [kaslr_srcv], ebx
     popad
