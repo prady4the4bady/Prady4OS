@@ -7520,3 +7520,26 @@ the 2026-11-22 entry are lifted.
 - **Gate:** `smoke-wxkernel` requires `[kaslr] table ok` and forbids
   `[kaslr] table FAIL`. Mutants K3-1 to K3-4.
 - QEMU (TCG) only, not verified on real hardware.
+
+## 2026-11-25 — DDR-1179 A3/A4.8, C1.7 step 4 (KASLR slot choice in both loaders)
+
+- **Slot choice:** both loaders draw `s` in `[1, 510]` from RDSEED, then
+  RDRAND, then the TSC (`weak`). They map `PD_HI[s]` and `PD_HI[s+1]`, and
+  enter the kernel at `KERNEL_VIRT + s·2 MiB`. The source is passed in RSI.
+- **The kernel:**
+  - it applies the slide (step 3);
+  - prints the slot on the serial console only (K1);
+  - names only the source in the ring-visible `PRADYOS_KASLR_B` line.
+- **Gate `smoke-kaslr`:** 3 boots with RDRAND and RDSEED, arms A to E:
+  - A: relocated `64` and `32S` fields;
+  - B: applied, from a hardware source;
+  - C: at least 2 distinct slots;
+  - D: a deliberate fault's RIP resolves, unslid, to `probe_kaslr_fault`;
+  - E: W^X under a slide.
+
+  Mutants M1 to M5.
+- **Every other gate boots slid**, with a weak TSC slot under TCG's default
+  CPU.
+- About 9 bits of entropy. A probabilistic hurdle, not a secret, and a
+  TSC-sourced slot is not counted as protection.
+- QEMU (TCG) only, not verified on real hardware.

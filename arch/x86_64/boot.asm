@@ -27,10 +27,12 @@ extern __bss_end
 extern __kimg_lo          ; DDR-1179 A2: running base of the image
 extern kreloc_table       ; DDR-1179 A1: the encoded relocation table
 extern kaslr_slide        ; DDR-1179 A2: published for the printers
+extern kaslr_src          ; DDR-1179 A3: 1 tsc, 2 rdrand, 3 rdseed, 0 none
 
 kernel_entry:
     lea rsp, [rel kernel_stack_top]   ; high-virtual kernel stack
     mov r15, rdi                      ; preserve boot_info pointer
+    mov r13, rsi                      ; DDR-1179 A3: the loader's entropy source
 
     ; DDR-1179 A2: self-relocation. slide = running base - link base; the link
     ; base is an immediate, so this instruction carries no relocation itself.
@@ -95,6 +97,7 @@ kernel_entry:
     rep stosb
 
     mov [rel kaslr_slide], r14        ; DDR-1179 A2 (.bss, so after the clear)
+    mov [rel kaslr_src], r13          ; DDR-1179 A3
     xor rbp, rbp                      ; terminate backtrace chain
     mov rdi, r15                      ; restore boot_info -> kmain arg 1
     call kmain
