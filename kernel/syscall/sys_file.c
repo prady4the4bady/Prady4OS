@@ -157,6 +157,15 @@ static long sys_fstat(long fd, long ustat, long a3, long a4, long a5, long a6) {
     memset(&st, 0, sizeof st);
     if (e->kind == FD_VFS && e->file) {
         st.st_size    = (int64_t)e->file->size;
+        /* DDR-1189 A5 P3b-3: a file identity, because musl's ld.so takes a
+         * library whose st_dev/st_ino match a loaded one as already loaded.
+         * Both 0 (as before) made every library match ld.so's own entry. Never
+         * 0 here; a mount with no ident op keeps 0/0 (none exists today). */
+        uint64_t id;
+        if (vfs_ident(e->file, &id) == 0) {
+            st.st_dev = (uint64_t)e->file->mnt + 1;
+            st.st_ino = id + 1;
+        }
         st.st_mode    = S_IFREG | 0644;
         st.st_nlink   = 1;
         st.st_blksize = 4096;
