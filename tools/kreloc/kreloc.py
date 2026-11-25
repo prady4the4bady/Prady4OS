@@ -6,6 +6,11 @@ applier (DDR-1179 sec.5 step 3) walks to add the slide to every absolute field.
 
     kreloc.py <kernel.elf> <out.bin> --reserve <bytes> --expect <n>
     kreloc.py --verify <kernel.elf>       (decodes the table IN the .kreloc section)
+    kreloc.py --slide-check <kernel.elf> <kernel.bin> <slid.bin> <slide>
+        applies the table in kernel.bin exactly as boot.asm does, with <slide>,
+        and requires the result to equal slid.bin -- the same objects linked
+        <slide> bytes higher (DDR-1179 A2). A field the table misses, or a
+        decoding slip, leaves a difference.
 
 Rules (each failure exits non-zero, so the build fails):
   * PC-relative types (PC32, PLT32) need no patching and are skipped;
@@ -153,7 +158,47 @@ def decode(blob):
     return out
 
 
+def apply_slide(img, tab_off, slide):
+    """boot.asm's .reloc_* loop, step for step, on a flat image (file offset =
+    VA - link base)."""
+    p = tab_off
+    if img[p:p + 4] != MAGIC:
+        die("slide-check: no table magic in the image")
+    count = struct.unpack_from("<I", img, p + 4)[0]
+    p, off = p + 12, -1
+    for _ in range(count):
+        v = shift = 0
+        while True:
+            byte = img[p]
+            p += 1
+            v |= (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                break
+        off += v >> 1
+        if v & 1:
+            struct.pack_into("<Q", img, off, (struct.unpack_from("<Q", img, off)[0] + slide) & (2**64 - 1))
+        else:
+            struct.pack_into("<I", img, off, (struct.unpack_from("<I", img, off)[0] + slide) & 0xFFFFFFFF)
+
+
 def main(argv):
+    if len(argv) == 6 and argv[1] == "--slide-check":
+        elf = Elf(argv[2])
+        img = bytearray(open(argv[3], "rb").read())
+        ref = open(argv[4], "rb").read()
+        slide = int(argv[5], 0)
+        if len(img) != len(ref):
+            die("slide-check: %d B vs %d B" % (len(img), len(ref)))
+        # By symbol: "KRL1" also occurs as boot.asm's compare immediate.
+        tab = elf.symbol("kreloc_table") - elf.symbol("__kimg_lo")
+        apply_slide(img, tab, slide)
+        bad = [i for i in range(len(ref)) if img[i] != ref[i]]
+        if bad:
+            die("slide-check: relocated image differs from the %#x-higher link at %d byte(s), first at "
+                "image offset %#x" % (slide, len(bad), bad[0]))
+        print("kreloc: slide-check OK (+%#x: relocated image == relinked image, %d B)" % (slide, len(img)))
+        return
     if len(argv) == 3 and argv[1] == "--verify":
         elf = Elf(argv[2])
         entries, _, _, kreloc = collect(elf)
