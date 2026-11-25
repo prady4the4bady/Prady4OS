@@ -336,3 +336,20 @@ A sweep of `kernel/`, `arch/` and `boot/` for `0xFFFFFFFF8` in non-comment code,
 Under K4, the operator reviews and merges each step; 7062649586 item 3 names step 4, the #85 replacement, explicitly. I do not merge any of them.
 
 QEMU (TCG) only, not verified on real hardware. Nothing here closes OPEN-1, OPEN-2, OPEN-12, OPEN-13 or U1–U3.
+
+### A4.7 Step 3 as built (the applier, still slot 0)
+
+Ported from #84 (`3ddb03d`) onto step 2. It adds the applier in `boot.asm`, `kreloc_selfcheck`, `kaslr_unslide` and the build-time slide check as in A2. On top of A2:
+- **The W^X walk** reads `PD_HI[slot]` and `PD_HI[slot+1]` (A4.2). A missing entry prints `[wx] kernel W^X FAIL: no PD[slot]` or `no PD[slot+1]`.
+- **`vmm_ptspan_probe`** takes its base from `__kimg_lo` (A4.3).
+- **Five code-address printers added since #84 now unslide** (A4.4):
+  - the `#BP` self-test RIP (`idt.c`);
+  - the double-free caller in `pmm.c`;
+  - the three `caller=` return addresses in `sfs.c`.
+
+  The percpu pointers in `syscall.c`'s `gs FAIL` line are data and stay raw (§2.5).
+- **Measured at slot 0:** 3,879 entries (3,490 `32S`, 389 `64`), a 5,015 B table, and `kreloc: slide-check OK` (the +2 MiB relocation equals the +2 MiB relink).
+
+**Mutants** (A2's K3-1 to K3-4, each to be shown red in CI before merge):
+- **K3-3 under two PT pages:** the walk indexes `PD_HI[slot+1]` and `PD_HI[slot+2]`. `PD_HI[2]` is empty, so it must print `no PD[slot+1]`.
+- **The A4.3 and A4.4 conversions cannot be shown red at slot 0,** because there the slide is 0 and old and new code agree. They are proven under a non-zero slide in step 4: arm D for the printers, and `smoke-ptspan` booted slid for the probe.
