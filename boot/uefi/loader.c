@@ -140,7 +140,7 @@ static void kaslr_pick(void) {
         r = lo;                         /* weak: never counted as protection */
         g_kaslr_src = 1;
     }
-    g_kaslr_slot = ((uint32_t)r % 510u) + 1u;   /* A4.2: pd_hi[s] and pd_hi[s+1] both exist */
+    g_kaslr_slot = 0; (void)r; /* MUTANT M2 */
 }
 
 static uint64_t build_page_tables(EFI_BOOT_SERVICES *bs) {
