@@ -28,8 +28,7 @@
 static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
     /* DDR-1182: an O_RDONLY file is refused before the DDR-1170 charge below,
      * so a refused write costs no budget and cannot end a budgeted task. */
-    if (e->kind == FD_VFS && e->file && !fd_can_write(e))
-        return -EBADF;
+    /* MUTANT M1 v4: the O_RDONLY refusal removed */
     /* DDR-1170: charged BEFORE any byte moves, on every fd kind, so a budgeted
      * task cannot emit past its limit by choosing a different descriptor. */
     if (count > 0 && aether_budget_charge(current_thread, TASK_BUDGET_BYTES,
