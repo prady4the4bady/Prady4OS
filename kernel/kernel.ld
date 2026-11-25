@@ -22,6 +22,7 @@ KERNEL_LMA   = 0x400000;
 SECTIONS
 {
     . = KERNEL_VBASE;
+    __kimg_lo = .;                 /* DDR-1179 A1: base of the relocated range */
 
     /* DDR-757 kernel-self W^X: section boundaries are page-aligned so each 4 KiB
      * PT_HI page carries exactly one policy (text RX / rodata R+NX / data RW+NX);
@@ -40,6 +41,11 @@ SECTIONS
     }
     .data : AT(ADDR(.data) - KERNEL_VBASE + KERNEL_LMA) {
         *(.data .data.*)
+    }
+    /* DDR-1179 A1: the KASLR relocation table, inside the file image so the
+     * pristine copy and SYS_INSTALL carry it. Data for W^X (RW+NX). */
+    .kreloc ALIGN(8) : AT(ADDR(.kreloc) - KERNEL_VBASE + KERNEL_LMA) {
+        KEEP(*(.kreloc))
         __data_end = .;            /* DDR-1143 §10.4: end of the file image */
     }
     .bss ALIGN(64) (NOLOAD) : {        /* 64 = cache-line alignment for IPC rings */
