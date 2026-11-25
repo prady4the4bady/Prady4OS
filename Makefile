@@ -245,7 +245,7 @@ USER_PIE_CFLAGS := --target=x86_64-elf -ffreestanding -fPIE -fno-asynchronous-un
   -nostdinc -nostdlib -Wall -Wextra -Werror \
   -Iuser/include -Ibuild/musl/include -I$(MUSL_DIR)/arch/x86_64 -I$(MUSL_DIR)/arch/generic -I$(MUSL_DIR)/include
 KERNEL_CS   := kernel/main.c kernel/console.c kernel/idt.c kernel/irq.c \
-               kernel/kreloc.c kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/mm.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
+               kernel/mm/kreloc.c kernel/mm/pmm.c kernel/mm/numa.c kernel/mm/kheap.c kernel/mm/vmm.c kernel/mm/vmm_cow.c kernel/mm/mm.c kernel/mm/tlb.c kernel/mm/uaccess.c kernel/cap.c \
                kernel/proc/sched.c kernel/proc/tss.c kernel/proc/fd.c kernel/proc/pipe.c kernel/proc/epoll.c kernel/proc/signal.c kernel/proc/kmutex.c kernel/proc/futex.c kernel/proc/rcu.c kernel/proc/lockdep.c kernel/ipc/ipc.c kernel/ipc/shm.c \
                kernel/ipc/bcast.c kernel/syscall/syscall.c kernel/syscall/sys_io.c kernel/syscall/sys_file.c kernel/syscall/sys_proc.c kernel/syscall/sys_mmap.c kernel/syscall/sys_exec.c kernel/syscall/sys_fork.c kernel/syscall/sys_thread.c kernel/syscall/sys_wait.c kernel/syscall/sys_io_uring.c kernel/acpi/acpi.c \
                kernel/drivers/pcie/pcie.c kernel/drivers/virtio/virtio_ring.c \
@@ -558,7 +558,7 @@ KERNEL_HS := $(wildcard kernel/*.h) $(wildcard kernel/*/*.h) $(wildcard kernel/*
 # to be fixed one entry at a time. A wildcard cannot go stale.
 KERNEL_ALL_CS := $(wildcard kernel/*.c) $(wildcard kernel/*/*.c) $(wildcard kernel/*/*/*.c)
 
-$(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
+$(KERNEL_BIN): tools/kreloc/kreloc.py $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_CS) $(KERNEL_ALL_CS) $(KERNEL_HS) $(KERNEL_LD) $(USER_ALL_SRCS) $(USER_C_LD) $(MUSL_LIB) $(MUSL_CRT) $(LWIP_LIB) third_party/lwip-port/lwip_port.c $(USER_LD)
 	@mkdir -p build
 	# Phase 5a: build the freestanding ring-3 programs and link each as its own
 	# static ELF at 0x8000000000 (W^X: one R+X segment). user_image.asm then
@@ -805,7 +805,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	$(CC) $(KCFLAGS) -c kernel/console.c       -o build/console.o
 	$(CC) $(KCFLAGS) -c kernel/idt.c           -o build/idt.o
 	$(CC) $(KCFLAGS) -c kernel/irq.c           -o build/irq.o
-	$(CC) $(KCFLAGS) -c kernel/kreloc.c        -o build/kreloc.o
+	$(CC) $(KCFLAGS) -c kernel/mm/kreloc.c     -o build/kreloc.o
 	$(CC) $(KCFLAGS) -c kernel/mm/pmm.c        -o build/pmm.o
 	$(CC) $(KCFLAGS) -c kernel/mm/kheap.c      -o build/kheap.o
 	$(CC) $(KCFLAGS) -c kernel/mm/vmm.c        -o build/vmm.o
@@ -924,7 +924,7 @@ $(KERNEL_BIN): $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(KERNEL_ASMS) $(KERNEL_C
 	@# build), objcopy writes it into .kreloc, and --verify decodes it back OUT
 	@# OF THE SECTION. kernel.bin carries it; nothing applies it yet (slot 0).
 	python3 tools/kreloc/kreloc.py $(KERNEL_ELF) build/kreloc.bin \
-	    --reserve $$(awk '/^#define KRELOC_RESERVE/ { print $$3 }' kernel/kreloc.h) \
+	    --reserve $$(awk '/^#define KRELOC_RESERVE/ { print $$3 }' kernel/mm/kreloc.h) \
 	    --expect $$(llvm-readelf -rW $(KERNEL_ELF) | grep -cE ' R_X86_64_(64|32S) ')
 	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin $(KERNEL_ELF)
 	python3 tools/kreloc/kreloc.py --verify $(KERNEL_ELF)

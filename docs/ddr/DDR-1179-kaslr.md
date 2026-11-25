@@ -331,6 +331,8 @@ A sweep of `kernel/`, `arch/` and `boot/` for `0xFFFFFFFF8` in non-comment code,
 2. **Step 3:** the applier, the in-kernel self-check, the build-time slide check, and the slide-aware users of A4.3. Still slot 0.
 3. **Step 4:** slot choice in both loaders, with the A4.2 range, and `smoke-kaslr` arms A–E.
 
+**Paths.** `AGENTS.md` allows no new flat files in `kernel/`, so the reservation lives in `kernel/mm/kreloc.c` and `kernel/mm/kreloc.h` (A1 names them `kernel/kreloc.*`). `kernel.bin` depends on `tools/kreloc/kreloc.py`, so a changed generator rebuilds the table.
+
 Under K4, the operator reviews and merges each step; 7062649586 item 3 names step 4, the #85 replacement, explicitly. I do not merge any of them.
 
 QEMU (TCG) only, not verified on real hardware. Nothing here closes OPEN-1, OPEN-2, OPEN-12, OPEN-13 or U1–U3.

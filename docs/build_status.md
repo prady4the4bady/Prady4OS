@@ -7483,3 +7483,22 @@ the 2026-11-22 entry are lifted.
 - **Sizes are unchanged:** `kernel.bin` 1,716,626 B, and 1,733,010 B for
   `RCU_TORTURE=1`.
 - QEMU only, not verified on real hardware.
+
+## 2026-11-25 — DDR-1179 A1/A4, C1.7 step 2 (the KASLR relocation table, PR #168)
+
+- **`.kreloc`:** the kernel is linked with `--emit-relocs`, and
+  `tools/kreloc/kreloc.py` encodes every `R_X86_64_64`/`32S` field into a fixed
+  8,192 B section (`kernel/mm/kreloc.c`), written in by `llvm-objcopy` and read
+  back by `kreloc.py --verify`.
+  - Measured: 3,864 fields (3,475 `32S`, 389 `64`), 0 absolute; the table is
+    4,994 B.
+  - The build fails on an unknown relocation type, an over-full table, a
+    section-size mismatch, a count that disagrees with `llvm-readelf`, or a
+    section that does not decode back to the link.
+- **No behaviour change:** nothing reads the table yet, and the kernel runs at
+  slot 0. The applier is step 3; slot choice is step 4.
+- **Sizes** (CI, run 45561773398): `kernel.bin` 1,724,824 B (44,648 B under the
+  1,769,472 B gate); the `RCU_TORTURE=1`/`LOCKDEP=1` build 1,741,208 B.
+- **Gate:** the build itself. Mutants K2-1 to K2-4 each failed the build at
+  their own check in CI.
+- QEMU (TCG) only, not verified on real hardware.

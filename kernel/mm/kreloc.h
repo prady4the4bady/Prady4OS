@@ -1,4 +1,4 @@
-/* kernel/kreloc.h — KASLR relocation table reservation (DDR-1179 Amendment 1).
+/* kernel/mm/kreloc.h — KASLR relocation table reservation (DDR-1179 Amendment 1).
  * The Makefile reads KRELOC_RESERVE from this line and tools/kreloc/kreloc.py
  * checks the linked .kreloc section is exactly this size. 8,192 B since
  * DDR-1179 Amendment 4 (4,994 B measured for 3,864 fields; A1 had 6,144). */
