@@ -37,3 +37,5 @@ int fault_expect_arm(uint64_t lo, uint64_t hi, uint64_t resume);
 /* Disarm. Returns 1 if the latch fired, and then stores the faulting vector and
  * error code through the out-pointers (either may be NULL). */
 int fault_expect_taken(uint32_t *vec_out, uint32_t *err_out);
+/* DDR-1179 A3: the RIP (as it ran, slid) of the last expected fault taken. */
+uint64_t fault_expect_rip(void);

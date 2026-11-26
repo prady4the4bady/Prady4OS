@@ -22,6 +22,7 @@
 #include "sched.h"
 #include "console.h"
 #include "irq.h"
+#include "kreloc.h"            /* DDR-1179 A4.9: kaslr_unslide for printed sites */
 
 #if LOCKDEP
 
@@ -437,7 +438,7 @@ static void ld_print_rep(const struct ld_rep *r) {
         kline_s(&k, " take=");
         ld_cls(&k, r->b);
         kline_s(&k, " held_at=");
-        kline_x(&k, 0xffffffff00000000ull | (uint32_t)r->held);
+        kline_x(&k, kaslr_unslide(0xffffffff00000000ull | (uint32_t)r->held));
     } else if (r->kind == LDR_REC || r->kind == LDR_NEST) {
         ld_cls(&k, r->a);
         kline_s(&k, " lock=");
@@ -446,7 +447,7 @@ static void ld_print_rep(const struct ld_rep *r) {
         kline_x(&k, (uint64_t)(uintptr_t)r->lock);
     }
     kline_s(&k, " at=");
-    kline_x(&k, r->take);
+    kline_x(&k, kaslr_unslide(r->take));      /* DDR-1179 A4.9: link-time */
     kline_s(&k, " cpu=");
     kline_d(&k, r->cpu);
     kline_s(&k, "\r\n");

@@ -4,6 +4,11 @@
 
 include tools/build/toolchain.mk
 
+# DDR-1179 A4.9: a recipe that fails after writing its target removes it, so
+# a re-run rebuilds instead of packaging a kernel.bin whose later checks (the
+# slid relink, the size gate, the chunk-count and __bss_end checks) never ran.
+.DELETE_ON_ERROR:
+
 BUILD_DIR := build/toolchain
 TC_DIR    := tests/toolchain
 RUST_LIB  := $(TC_DIR)/hello_rs/target/$(RUST_TARGET)/release/libhello_rs.a
@@ -358,7 +363,7 @@ KCFLAGS += -DPTSPAN_PROBE=$(PTSPAN_PROBE)
 # Treat every assembler warning as fatal too (user mandate: zero warnings).
 NASM_WERROR := -Werror
 
-.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl musl-so lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt  smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-ptspan smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check
+.PHONY: smoke-blk-timeout smoke-fs-liveness all setup toolchain-check kernel musl musl-so lwip image smoke smoke-selftest smoke-fpu smoke-init smoke-shell smoke-fs smoke-fs-rw smoke-fs-sfs-rw smoke-fs-ext4 smoke-user smoke-uaccess smoke-sysio smoke-sysfile smoke-sysproc smoke-sysmmap smoke-sysexec smoke-sysfork smoke-syswait smoke-mitigations smoke-smep smoke-smap smoke-mce smoke-pmm-poison smoke-vdso smoke-cowfork smoke-sharedpte smoke-net smoke-net-lo smoke-net-fuzz smoke-aether smoke-aether-queue smoke-aether-sec smoke-agent-live smoke-mode smoke-gpu smoke-fs-budget smoke-nvme smoke-mkfs-sfs smoke-sfs-persist smoke-aether-sfsroot smoke-fb smoke-input smoke-compositor smoke-mouse smoke-surface smoke-perrestore smoke-ghostclick smoke-horizon smoke-ctrlaltt smoke-poll smoke-mprotect smoke-execve-argv smoke-dynlink smoke-sendipc smoke-actionread smoke-actiondel smoke-actionspawn smoke-actionquery smoke-actionhypo smoke-agents smoke-focus smoke-ambiance smoke-drag smoke-syspipe smoke-sysepoll smoke-syssignal smoke-sysiouring smoke-rqstress-liveness smoke-metric smoke-rtc-smp smoke-serialflood smoke-sovereign-egress smoke-egress-audit smoke-x25519 smoke-sfs-btree-smp4 smoke-sha512 smoke-aead smoke-ed25519 smoke-acc smoke-ftruncate smoke-thread smoke-zanchor smoke-rcu smoke-lockdep smoke-ptspan smoke-rename smoke-rename-sfs smoke-bench smoke-ahci smoke-e1000e smoke-numa smoke-numa-alloc smoke-numa-steal smoke-uefi smoke-gop smoke-xhci smoke-part esp-image iso smoke-iso-x86 smoke-iso-userspace smoke-fat32-multicluster ahci-image fat-image sfs-image ext4-image clean ci-shard-check ci-start-align-check ci-probe-rodata-check ci-resizecheck-selftest ci-aptprepare-selftest ci-runnerenv-selftest ci-docstate-check ci-cr3-writers-check ci-huntprint-selftest ci-palette-check smoke-kaslr
 
 # ---------------------------------------------------------------------------
 # DDR-859 - print-flags: the Makefile is the SINGLE SOURCE OF TRUTH for build
@@ -2389,6 +2394,20 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # is the one that was silently wrong for as long as DDR-757 has existed. The
 # explicit line makes rw=/nx= visible in every capture and lets a mutant be
 # attributed instead of guessed at.
+# DDR-1179 Amendment 3: KASLR. Three boots with hardware RNG exposed. Arms A
+# and E are each boot's sentinels; B (hardware source), C (>= 2 distinct
+# serial-only slots) and D (the unslid fault RIP resolves to probe_kaslr_fault
+# via sym_at.sh) are checked across the three logs by tools/ci/kaslr_check.sh.
+smoke-kaslr: $(IMG) fat-image sfs-image
+	@rm -f build/kaslr-1.log build/kaslr-2.log build/kaslr-3.log
+	@for i in 1 2 3; do \
+	  SERIAL_LOG=build/kaslr-$$i.log KEEP_SERIAL=1 TIMEOUT_S=90 QEMU_CPU=qemu64,+rdrand,+rdseed \
+	  EXTRA_SENTINEL="$$(printf 'PRADYOS_KASLR_A reloc_ok=1\n[kaslr] D fault_hit=1\n[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14')" \
+	  FORBIDDEN_SENTINEL="$$(printf '[kaslr] table FAIL\nkernel W^X FAIL\n[kaslr] D arm FAIL')" \
+	    bash tools/qemu_runner/boot_test.sh $(IMG) || exit 1; \
+	done
+	@bash tools/ci/kaslr_check.sh build/kaslr-1.log build/kaslr-2.log build/kaslr-3.log
+
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
 	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003\n[kaslr] table ok entries=')" \

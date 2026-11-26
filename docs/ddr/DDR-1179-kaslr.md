@@ -353,3 +353,33 @@ Ported from #84 (`3ddb03d`) onto step 2. It adds the applier in `boot.asm`, `kre
 **Mutants** (A2's K3-1 to K3-4, each to be shown red in CI before merge):
 - **K3-3 under two PT pages:** the walk indexes `PD_HI[slot+1]` and `PD_HI[slot+2]`. `PD_HI[2]` is empty, so it must print `no PD[slot+1]`.
 - **The A4.3 and A4.4 conversions cannot be shown red at slot 0,** because there the slide is 0 and old and new code agree. They are proven under a non-zero slide in step 4: arm D for the printers, and `smoke-ptspan` booted slid for the probe.
+
+### A4.8 Step 4 as built (slot choice in both loaders)
+
+Ported from #85 (`266bb8d`) onto step 3. It is A3 with the A4.2 range.
+- **The slot is `s = (r mod 510) + 1`, in `[1, 510]`, in both loaders.**
+  - `stage2.asm` maps `PD_HI[s] -> PT_HI` and `PD_HI[s+1] -> PT_HI2`, then jumps to `KERNEL_VIRT + s·2 MiB`.
+  - `loader.c` maps `pd_hi[s]` and `pd_hi[s+1]`.
+- **The port found the A4.2 hazard in code, not only on paper.** `loader.c` merged without a conflict, and the merged code mapped `pd_hi[pdi]` and `pd_hi[pdi + 1]` while still drawing `r % 511 + 1`. At `s = 511` that writes entry 512, one past the end of the PD page, silently. Both loaders are fixed to 510 in the same commit.
+- **The kernel side is A3 unchanged:**
+  - `kaslr_src` comes from RSI;
+  - the slot is printed by `kputs_serial_only` (K1);
+  - `PRADYOS_KASLR_B` names only the source;
+  - arm D's probe is `probe_kaslr_fault` under the fault-expect latch.
+- **`smoke-kaslr`** boots 3 times with `QEMU_CPU=qemu64,+rdrand,+rdseed` and checks arms A to E. `tools/ci/kaslr_check.sh` judges B, C and D across the boots.
+- **Every other gate now boots slid.** Under TCG's default `qemu64` that is a weak TSC slot (K2). That is how the A4.3 probe change (`smoke-ptspan`) and the A4.4 printer changes are first exercised under a non-zero slide.
+- **Mutants M1 to M5** as in A3, with:
+  - M2 and M3 setting the slot in both loaders;
+  - M5 walking `PD[0]` and `PD[1]`.
+
+### A4.9 Review fixes to step 4 (Codex on #170)
+
+- **The UEFI handoff binds its registers by constraint.** The asm loaded RDI, RSI and RAX with `mov` from `"r"` inputs. Nothing stopped the compiler from putting one input in a register an earlier `mov` had already overwritten. The built `uefi_loader.obj` happens to allocate safely (inputs in RAX, RCX, RDX and R8), so this is a latent hazard, not a seen failure. The inputs are now `"D"`, `"S"` and `"a"`, and the asm is `cli`, `mov %0, %cr3`, `jmp *%rax`.
+- **Four more printers of code addresses unslide.** A4.4's sweep went by name and missed:
+  - `kheap.c`'s double-free `freed_by=` and `now_by=` (Codex);
+  - `lockdep.c`'s `at=` and `held_at=`, found by the same search. `held_at=` rebuilds the high 32 bits as `0xffffffff`. That still holds under a slide: the 4 MiB window of the highest slot, 510, ends at `0xFFFFFFFFC0000000`.
+  - `sched.c`'s saved `ret=` in the stack-check report.
+
+  `kaslr_unslide` changes only addresses inside the running image, so a garbage `ret=` passes through unchanged.
+- **A failed `kernel.bin` recipe removes the file (CodeRabbit on #170).** #169 removed `kernel.bin` only when the slide check failed. The file is written before the slid relink, its two `objcopy` steps, the size gate and the chunk-count and `__bss_end` checks. A failure in any of those left it on disk, newer than its inputs, so a re-run of `make image` packaged it. `.DELETE_ON_ERROR:` now covers every step. No file target is a log, and none is marked `.PRECIOUS`. Shown locally with a `false` injected after the slid relink: without the line, `kernel.bin` stays; with it, make prints `Deleting file 'build/kernel.bin'`.
+- **Not gated.** No gate checks these diagnostic lines, and none fires on a healthy boot. The handoff change is covered by every UEFI boot (`smoke-uefi`, the UEFI arm of `smoke-iso-x86`). The printer changes are labelled not verified.

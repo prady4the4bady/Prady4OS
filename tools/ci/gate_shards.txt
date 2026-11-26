@@ -82,6 +82,7 @@
 2	smoke-blk-timeout	120	strict
 2	smoke-netallow	90	strict
 2	smoke-wxkernel	90	strict
+8	smoke-kaslr	270	strict
 2	smoke-numa	90	strict
 2	smoke-net-tcp-lo	60	strict
 2	smoke-ambiance	30	fast

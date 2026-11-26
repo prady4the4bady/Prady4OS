@@ -143,8 +143,9 @@ uint64_t g_thre_drops;
 uint64_t g_rx_drops;
 static volatile int g_rx_armed;               /* set by console_rx_init */
 
-void kputc(char c) {
-    klog_putc(c);                             /* DDR-750: capture into the log ring */
+/* The UART half of kputc. DDR-1179 A3: kputs_serial_only uses it alone, so a
+ * line reaches the operator's serial console and never the SYS_DMESG ring. */
+static void uart_putc(char c) {
     unsigned spins = 0;
     while ((inb(COM1 + 5) & 0x20) == 0) {     /* wait for THRE */
         /* DDR-809/DDR-808: kputs/kwrite hold the console lock with interrupts
@@ -167,6 +168,18 @@ void kputc(char c) {
      * counts, it changed nothing — 3/3 runs still lost BIGTAIL and EAP55a at
      * exactly the same point. Drain FREQUENCY is not the constraint; ring
      * CAPACITY is (see RX_RING_SZ). Do not re-add without new evidence. */
+}
+
+void kputc(char c) {
+    klog_putc(c);                             /* DDR-750: capture into the log ring */
+    uart_putc(c);
+}
+
+void kputs_serial_only(const char *s) {
+    uint64_t f = irq_save();                  /* one locked unit, like kputs */
+    for (; *s; s++)
+        uart_putc(*s);
+    irq_restore(f);
 }
 
 /* COM1 RX ring buffer (5e). An IRQ4 handler drains the UART into this ring from
