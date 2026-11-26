@@ -371,3 +371,15 @@ Ported from #85 (`266bb8d`) onto step 3. It is A3 with the A4.2 range.
 - **Mutants M1 to M5** as in A3, with:
   - M2 and M3 setting the slot in both loaders;
   - M5 walking `PD[0]` and `PD[1]`.
+
+### A4.9 Review fixes to step 4 (Codex on #170)
+
+- **The UEFI handoff binds its registers by constraint.** The asm loaded RDI, RSI and RAX with `mov` from `"r"` inputs. Nothing stopped the compiler from putting one input in a register an earlier `mov` had already overwritten. The built `uefi_loader.obj` happens to allocate safely (inputs in RAX, RCX, RDX and R8), so this is a latent hazard, not a seen failure. The inputs are now `"D"`, `"S"` and `"a"`, and the asm is `cli`, `mov %0, %cr3`, `jmp *%rax`.
+- **Four more printers of code addresses unslide.** A4.4's sweep went by name and missed:
+  - `kheap.c`'s double-free `freed_by=` and `now_by=` (Codex);
+  - `lockdep.c`'s `at=` and `held_at=`, found by the same search. `held_at=` rebuilds the high 32 bits as `0xffffffff`. That still holds under a slide: the 4 MiB window of the highest slot, 510, ends at `0xFFFFFFFFC0000000`.
+  - `sched.c`'s saved `ret=` in the stack-check report.
+
+  `kaslr_unslide` changes only addresses inside the running image, so a garbage `ret=` passes through unchanged.
+- **A failed `kernel.bin` recipe removes the file (CodeRabbit on #170).** #169 removed `kernel.bin` only when the slide check failed. The file is written before the slid relink, its two `objcopy` steps, the size gate and the chunk-count and `__bss_end` checks. A failure in any of those left it on disk, newer than its inputs, so a re-run of `make image` packaged it. `.DELETE_ON_ERROR:` now covers every step. No file target is a log, and none is marked `.PRECIOUS`. Shown locally with a `false` injected after the slid relink: without the line, `kernel.bin` stays; with it, make prints `Deleting file 'build/kernel.bin'`.
+- **Not gated.** No gate checks these diagnostic lines, and none fires on a healthy boot. The handoff change is covered by every UEFI boot (`smoke-uefi`, the UEFI arm of `smoke-iso-x86`). The printer changes are labelled not verified.

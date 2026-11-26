@@ -448,16 +448,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
 exited:
     /* No firmware call is legal past this point — not even a print. */
+    /* DDR-1179 A4.9: RDI, RSI and RAX are bound by the constraints, not by
+     * movs after them. With "r" operands and hard-coded movs, the compiler may
+     * put one input in a register an earlier mov has already overwritten. */
     __asm__ volatile(
         "cli\n"
         "mov %0, %%cr3\n"
-        "mov %1, %%rdi\n"
-        "mov %3, %%rsi\n"                  /* DDR-1179 A3: entropy source */
-        "mov %2, %%rax\n"
         "jmp *%%rax\n"
         :
-        : "r"(cr3), "r"(BOOT_INFO_PHYS), "r"(KERNEL_VBASE + (g_kaslr_slot << 21)),
-          "r"(g_kaslr_src)
+        : "r"(cr3), "D"(BOOT_INFO_PHYS),
+          "S"(g_kaslr_src),                 /* DDR-1179 A3: entropy source */
+          "a"(KERNEL_VBASE + (g_kaslr_slot << 21))
         : "memory");
     for (;;)
         __asm__ volatile("hlt");

@@ -7543,3 +7543,11 @@ the 2026-11-22 entry are lifted.
 - About 9 bits of entropy. A probabilistic hurdle, not a secret, and a
   TSC-sourced slot is not counted as protection.
 - QEMU (TCG) only, not verified on real hardware.
+- **Review fixes (DDR-1179 A4.9, Codex on #170):**
+  - the UEFI handoff binds RDI, RSI and RAX by asm constraint;
+  - `kheap.c`'s `freed_by=`/`now_by=`, `lockdep.c`'s `at=`/`held_at=` and
+    `sched.c`'s `ret=` unslide.
+  - `.DELETE_ON_ERROR:` removes `kernel.bin` when any later step of its
+    recipe fails (CodeRabbit on #170).
+
+  These printer lines are not gated.

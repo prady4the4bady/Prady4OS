@@ -16,6 +16,7 @@
 #include "pmm.h"
 #include "string.h"
 #include "console.h"
+#include "kreloc.h"            /* DDR-1179 A4.9: kaslr_unslide for printed call sites */
 
 #define KHEAP_DEBUG 1
 #define SLAB_MAGIC  0x534C4142u          /* 'SLAB' */
@@ -166,9 +167,9 @@ static void cache_free(struct kmem_cache *c, void *ptr, uint64_t site) {
              * dedicated cap cache (also 16) keep today's output. */
             if (c->obj_size >= KHEAP_SITE_MIN) {
                 kputs(" freed_by=");
-                kputhex(*(uint64_t *)((uint8_t *)ptr + KHEAP_SITE_OFF));
+                kputhex(kaslr_unslide(*(uint64_t *)((uint8_t *)ptr + KHEAP_SITE_OFF)));
                 kputs(" now_by=");
-                kputhex(site);
+                kputhex(kaslr_unslide(site));
             }
             kputs("\r\n");
             heap_panic("kfree: double free");

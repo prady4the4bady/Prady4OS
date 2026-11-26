@@ -4,6 +4,11 @@
 
 include tools/build/toolchain.mk
 
+# DDR-1179 A4.9: a recipe that fails after writing its target removes it, so
+# a re-run rebuilds instead of packaging a kernel.bin whose later checks (the
+# slid relink, the size gate, the chunk-count and __bss_end checks) never ran.
+.DELETE_ON_ERROR:
+
 BUILD_DIR := build/toolchain
 TC_DIR    := tests/toolchain
 RUST_LIB  := $(TC_DIR)/hello_rs/target/$(RUST_TARGET)/release/libhello_rs.a

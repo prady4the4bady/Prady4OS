@@ -20,6 +20,7 @@
 #include "rcu.h"               /* DDR-1200: rule-1 check in schedule() */
 #include "lapic.h"             /* DDR-1188 A7: hrt_nohz_enter / exit */
 #include "vdso_page.h"         /* DDR-1188 A7: ktime_mono_ns for dl_now */
+#include "kreloc.h"            /* DDR-1179 A4.9: kaslr_unslide for the printed ret= */
 
 /* DDR-1106: boot.asm's .bss BSP kernel stack, exported there for exactly one
  * reader -- init_idle, which records its base as idle0's kstack_base so
@@ -2867,7 +2868,7 @@ static void schedule_locked(uint64_t fl) {
                 kline_s(&k, " r15=");
                 kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x08u));
                 kline_s(&k, " ret=");
-                kline_x(&k, *(const volatile uint64_t *)(uintptr_t)(nrsp + 0x38u));
+                kline_x(&k, kaslr_unslide(*(const volatile uint64_t *)(uintptr_t)(nrsp + 0x38u)));
             } else {
                 /* An absence must NAME ITSELF (DDR-1049) -- "no r15= in the
                  * capture" and "the window was out of bounds so we refused to
