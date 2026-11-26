@@ -7,6 +7,7 @@
  * correct and simple; a per-block state bitmap is the obvious later speedup.
  */
 #include "pmm.h"
+#include "kreloc.h"            /* DDR-1179 A4.4: kaslr_unslide for printed code addresses */
 #include "numa.h"      /* DDR-882 17b: per-node free lists */
 #include "lapic.h"     /* lapic_id() — which node is this CPU on */
 #include "console.h"
@@ -217,7 +218,7 @@ int pmm_free_pages(uint64_t addr, unsigned order) {
             kputs("[pmm] DOUBLE FREE rejected addr=");
             kputhex(addr);
             kputs(" caller=");
-            kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+            kputhex(kaslr_unslide((uint64_t)(uintptr_t)__builtin_return_address(0)));
             kputs("\r\n");
             irq_restore(fl);
             return 0;                   /* DDR-1065: rejected, nothing released */

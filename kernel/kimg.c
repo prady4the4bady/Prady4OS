@@ -4,15 +4,14 @@
 #include "console.h"
 #include "crypto/sha256.h"
 
-extern char __data_end[];
-#define KERNEL_VBASE 0xFFFFFFFF80000000ull
+extern char __data_end[], __kimg_lo[];   /* DDR-1179 A2: both run slid */
 #define KIMG_FLOOR   0x1000000ull          /* == pmm.c PMM_MIN_PHYS */
 
 static struct boot_kimg g_kimg;
 static int g_kimg_ok;
 
 static uint64_t image_len(void) {
-    return (uint64_t)(uintptr_t)__data_end - KERNEL_VBASE;
+    return (uint64_t)(uintptr_t)__data_end - (uint64_t)(uintptr_t)__kimg_lo;
 }
 
 /* BIOS: exactly KIMG_PHYS (stage2's fixed choice). UEFI: firmware-chosen, so

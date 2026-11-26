@@ -7502,3 +7502,21 @@ the 2026-11-22 entry are lifted.
 - **Gate:** the build itself. Mutants K2-1 to K2-4 each failed the build at
   their own check in CI.
 - QEMU (TCG) only, not verified on real hardware.
+
+## 2026-11-25 — DDR-1179 A2/A4.7, C1.7 step 3 (the KASLR applier, still slot 0)
+
+- **Applier:** `arch/x86_64/boot.asm` computes the slide from `__kimg_lo` and
+  applies `.kreloc` before `.bss` is cleared; at slot 0 it decodes every entry
+  and adds 0.
+- **Checks:**
+  - `kreloc_selfcheck` (in `kmain`) prints `[kaslr] table ok entries=N` or
+    `[kaslr] table FAIL`;
+  - the build links a second image at +2 MiB and requires
+    `kreloc.py --slide-check` to reproduce it byte for byte.
+- **Slide-aware users:**
+  - the W^X walk (`PD_HI[slot]`, `PD_HI[slot+1]`), `kimg.c` and
+    `vmm_ptspan_probe` compute from `__kimg_lo`;
+  - every kernel code-address printer goes through `kaslr_unslide`.
+- **Gate:** `smoke-wxkernel` requires `[kaslr] table ok` and forbids
+  `[kaslr] table FAIL`. Mutants K3-1 to K3-4.
+- QEMU (TCG) only, not verified on real hardware.

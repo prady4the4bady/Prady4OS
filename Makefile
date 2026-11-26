@@ -929,6 +929,18 @@ $(KERNEL_BIN): tools/kreloc/kreloc.py $(STAGE1_BIN) $(STAGE2_BIN) $(UEFI_EFI) $(
 	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin $(KERNEL_ELF)
 	python3 tools/kreloc/kreloc.py --verify $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL_BIN)
+	@# DDR-1179 A2: the same objects linked 2 MiB higher must equal kernel.bin
+	@# after boot.asm's applier runs over it with a 2 MiB slide (kreloc.py
+	@# replays that loop). Proves the table complete on every build.
+	sed 's/^KERNEL_VBASE = 0xFFFFFFFF80000000;/KERNEL_VBASE = 0xFFFFFFFF80200000;/' $(KERNEL_LD) > build/kernel-slid.ld
+	grep -q '^KERNEL_VBASE = 0xFFFFFFFF80200000;' build/kernel-slid.ld
+	$(LD) -nostdlib --emit-relocs -T build/kernel-slid.ld -o build/kernel-slid.elf $(KERNEL_OBJS) $(LWIP_LIB)
+	$(OBJCOPY) --update-section .kreloc=build/kreloc.bin build/kernel-slid.elf
+	$(OBJCOPY) -O binary build/kernel-slid.elf build/kernel-slid.bin
+	@# A failed slide check removes kernel.bin, so a re-run of make rebuilds it
+	@# instead of packaging the rejected binary (CodeRabbit on #169).
+	python3 tools/kreloc/kreloc.py --slide-check $(KERNEL_ELF) $(KERNEL_BIN) build/kernel-slid.bin 0x200000 \
+	    || { rm -f $(KERNEL_BIN); exit 1; }
 	@test "$$(wc -c < $(KERNEL_BIN))" -le 1769472 || { echo "kernel.bin exceeds 1,769,472 B — the stage-2 read window (54x64 sectors from LBA 17; DDR-733, raised by DDR-827, DDR-960, DDR-1183, its A1 and its A2). Raise the chunk count in boot/stage2/stage2.asm (with KIMG_SIZE and this gate: the assertion below checks they agree). The 2 MiB disk image does NOT need to grow until 63 chunks. The kernel window is 4 MiB since DDR-1183 A2 (PT_HI and PT_HI2, ceiling 0x800000, checked next)."; exit 1; }
 	@c=$$(sed -n 's/^ *mov cx, \([0-9]*\) *; DDR-1183.*/\1/p' $(STAGE2_SRC)); \
 	 k=$$(sed -n 's/^KIMG_SIZE *equ \([0-9]*\) \* 0x8000.*/\1/p' $(STAGE2_SRC)); \
@@ -2379,8 +2391,8 @@ smoke-uaccess: $(IMG) fat-image sfs-image
 # attributed instead of guessed at.
 smoke-wxkernel: $(IMG) fat-image sfs-image
 	TIMEOUT_S=90 \
-	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003')" \
-	FORBIDDEN_SENTINEL="kernel W^X FAIL" \
+	EXTRA_SENTINEL="$$(printf '[wx] kernel W^X OK\nPRADYOS_WX_ALIAS present=1 rw=0 nx=1\nPRADYOS_WP_ENFORCED vec=14 err=0x0000000000000003\n[kaslr] table ok entries=')" \
+	FORBIDDEN_SENTINEL="$$(printf 'kernel W^X FAIL\n[kaslr] table FAIL')" \
 	    bash tools/qemu_runner/boot_test.sh $(IMG)
 
 # DDR-758 syscall-fuzz gate: a ring-3 probe floods 3000 hostile syscalls (bad NSI

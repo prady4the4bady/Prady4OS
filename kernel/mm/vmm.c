@@ -11,6 +11,7 @@
 #include "console.h"           /* kputs for the DDR-757 W^X audit sentinel */
 #include "tlb.h"               /* DDR-1177: cross-CPU shootdown */
 #include "string.h"            /* DDR-1202: memcpy for the copy before write is added */
+#include "kreloc.h"            /* DDR-1179 A2: kaslr_slide for the W^X walk */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -81,22 +82,25 @@ uint64_t vmm_kernel_cr3(void) {
  * 0x400000 (execute-via-alias). Per-process ASes share the kernel top-level
  * entries, so this single pass hardens every AS. NX bits gate on g_nx_ok
  * (identical to user W^X); text RW-clearing is unconditional. */
-#define KERNEL_VBASE_WX 0xFFFFFFFF80000000ull
 extern char __text_end[], __rodata_end[];      /* page-aligned (kernel.ld) */
+extern char __kimg_lo[];                       /* DDR-1179 A2: running base */
 static uint64_t *table_at(uint64_t phys);      /* defined below */
 
 void vmm_protect_kernel(void) {
-    /* Master walk: PML4[511] -> PDPT[510] -> PD[0] and PD[1] -> the two PT
-     * pages of the 4 MiB kernel window (DDR-1183 A2). */
+    /* Master walk: PML4[511] -> PDPT[510] -> PD[slot] and PD[slot+1] -> the
+     * two PT pages of the 4 MiB kernel window (DDR-1183 A2). DDR-1179 A2/A4.2:
+     * the slot is the slide in 2 MiB steps (0 until step 4). */
+    unsigned slot = (unsigned)(kaslr_slide >> 21);
+    uint64_t kbase = (uint64_t)(uintptr_t)__kimg_lo;
     uint64_t *pml4 = table_at(g_kernel_pml4);
     uint64_t pdpt = pml4[511] & PTE_ADDR;
     if (!pdpt) { kputs("[wx] kernel W^X FAIL: no PML4[511]\r\n"); return; }
     uint64_t pd = table_at(pdpt)[510] & PTE_ADDR;
     if (!pd)   { kputs("[wx] kernel W^X FAIL: no PDPT[510]\r\n"); return; }
-    uint64_t pt = table_at(pd)[0] & PTE_ADDR;
-    if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[0]\r\n"); return; }
-    uint64_t pt2 = table_at(pd)[1] & PTE_ADDR;
-    if (!pt2)  { kputs("[wx] kernel W^X FAIL: no PD[1]\r\n"); return; }
+    uint64_t pt = table_at(pd)[slot] & PTE_ADDR;
+    if (!pt)   { kputs("[wx] kernel W^X FAIL: no PD[slot]\r\n"); return; }
+    uint64_t pt2 = table_at(pd)[slot + 1] & PTE_ADDR;
+    if (!pt2)  { kputs("[wx] kernel W^X FAIL: no PD[slot+1]\r\n"); return; }
 
     uint64_t alias_pte  = 0;   /* DDR-1046: the identity-alias PD entry, read back */
     uint64_t *ptp[2]    = { table_at(pt), table_at(pt2) };
@@ -107,7 +111,7 @@ void vmm_protect_kernel(void) {
         uint64_t e = ptes[i & 511];
         if (!(e & PTE_PRESENT))
             continue;
-        uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
+        uint64_t va = kbase + (uint64_t)i * 4096ull;
         if (va < text_end) {
             e &= ~VMM_RW;                       /* text: RX */
         } else if (va < rodata_end) {
@@ -184,7 +188,7 @@ void vmm_protect_kernel(void) {
         uint64_t e = ptp[i >> 9][i & 511];
         if (!(e & PTE_PRESENT))
             continue;
-        uint64_t va = KERNEL_VBASE_WX + (uint64_t)i * 4096ull;
+        uint64_t va = kbase + (uint64_t)i * 4096ull;
         if (va < text_end) {
             if (e & VMM_RW) ok = 0;             /* writable text = FAIL */
         } else {
@@ -211,8 +215,11 @@ void vmm_ptspan_probe(void) {
     int rw_ok = p[0] == 0xA5 && p[n - 1] == 0x5A;
     uint64_t last = (uint64_t)(uintptr_t)&g_ptspan_pad[n - 1];
     uint64_t pte = vmm_resolve_pte(g_kernel_pml4, last);
-    uint64_t end = (uint64_t)(uintptr_t)__bss_end - KERNEL_VBASE_WX + 0x400000ull;
-    int hi = end > 0x600000ull && last - KERNEL_VBASE_WX + 0x400000ull >= 0x600000ull;
+    /* DDR-1179 A4.3: physical = VA - the RUNNING base + 0x400000. The link
+     * constant would add the slide, and hi= would then hold for any image. */
+    uint64_t kbase = (uint64_t)(uintptr_t)__kimg_lo;
+    uint64_t end = (uint64_t)(uintptr_t)__bss_end - kbase + 0x400000ull;
+    int hi = end > 0x600000ull && last - kbase + 0x400000ull >= 0x600000ull;
     int rw = (pte & VMM_RW) ? 1 : 0;
     int nx = (!g_nx_ok || (pte & VMM_NX)) ? 1 : 0;
     kline k; kline_init(&k);
