@@ -7,6 +7,9 @@ uint32_t klog_read(char *dst, uint32_t max); /* DDR-750: copy recent kernel log 
 void console_rx_init(void);                /* arm COM1 RX IRQ + ring buffer (5e) */
 int  kgetc_nb(void);                       /* COM1 RX: one buffered byte, or -1 (5e) */
 void kputs(const char *s);                /* NUL-terminated string to COM1 */
+/* DDR-1179 A3 (K1): to the serial console ONLY, never the SYS_DMESG log ring,
+ * so local processes cannot read it. For the KASLR slot line. */
+void kputs_serial_only(const char *s);
 void kwrite(const char *buf, uint64_t n); /* n bytes to COM1 as one locked unit */
 void kputhex(uint64_t v);                 /* "0x" + 16 hex digits to COM1 */
 void kputdec(uint64_t v);                 /* unsigned decimal to COM1 */

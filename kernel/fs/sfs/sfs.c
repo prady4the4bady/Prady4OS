@@ -10,6 +10,7 @@
  * File data extents (read/write) are slice 4f — they remain stubs here.
  */
 #include "sfs.h"
+#include "kreloc.h"            /* DDR-1179 A4.4: kaslr_unslide for printed code addresses */
 #include "errno.h"      /* DDR-891: distinct create failure codes, not bare -1 */
 #include "lz4.h"
 #include "vfs.h"
@@ -122,7 +123,7 @@ static void sfs_bd_guard(const struct blk_device *bd, uint64_t blk,
     kputs("[sfs-uaf] STALE CTX op="); kputs(op);
     kputs(" bd=");     kputhex((uint64_t)(uintptr_t)bd);
     kputs(" blk=");    kputdec(blk);
-    kputs(" caller="); kputhex((uint64_t)(uintptr_t)ret);
+    kputs(" caller="); kputhex(kaslr_unslide((uint64_t)(uintptr_t)ret));
     if ((uint64_t)(uintptr_t)bd == SFS_MAGIC)
         kputs(" note=bd-holds-SFS_MAGIC-ctx-aliases-a-superblock");
     kputs("\r\n");
@@ -410,7 +411,7 @@ static void sfs_umount(void *ctx) {
      * sfs_bd_guard can be matched against the ctx that was freed, and by whom.
      * Paired with the [sfs] mount line below. Diagnostic only. */
     kputs("[sfs] umount ctx="); kputhex((uint64_t)(uintptr_t)ctx);
-    kputs(" caller="); kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+    kputs(" caller="); kputhex(kaslr_unslide((uint64_t)(uintptr_t)__builtin_return_address(0)));
     kputs(" live="); kputdec((uint64_t)__atomic_sub_fetch(&g_sfs_live, 1, __ATOMIC_SEQ_CST));
     kputs("\r\n");
     kfree(ctx);
@@ -1329,7 +1330,7 @@ static int sfs_mount(struct blk_device *bd, void **ctx) {
     /* DDR-953 STEP 1-A: record every ctx birth (pointer + its bd). */
     kputs("[sfs] mount ctx="); kputhex((uint64_t)(uintptr_t)c);
     kputs(" bd=");             kputhex((uint64_t)(uintptr_t)c->bd);
-    kputs(" caller=");         kputhex((uint64_t)(uintptr_t)__builtin_return_address(0));
+    kputs(" caller=");         kputhex(kaslr_unslide((uint64_t)(uintptr_t)__builtin_return_address(0)));
     /* `live` is the count of SFS contexts mounted and not yet umounted. It is
      * the discriminator for the FSRM family (`FSRM FAIL: created file did not
      * persist`, build_status "A FOURTH intermittent family"): the ring-3 FSRM

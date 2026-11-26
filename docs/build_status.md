@@ -7483,3 +7483,71 @@ the 2026-11-22 entry are lifted.
 - **Sizes are unchanged:** `kernel.bin` 1,716,626 B, and 1,733,010 B for
   `RCU_TORTURE=1`.
 - QEMU only, not verified on real hardware.
+
+## 2026-11-25 — DDR-1179 A1/A4, C1.7 step 2 (the KASLR relocation table, PR #168)
+
+- **`.kreloc`:** the kernel is linked with `--emit-relocs`, and
+  `tools/kreloc/kreloc.py` encodes every `R_X86_64_64`/`32S` field into a fixed
+  8,192 B section (`kernel/mm/kreloc.c`), written in by `llvm-objcopy` and read
+  back by `kreloc.py --verify`.
+  - Measured: 3,864 fields (3,475 `32S`, 389 `64`), 0 absolute; the table is
+    4,994 B.
+  - The build fails on an unknown relocation type, an over-full table, a
+    section-size mismatch, a count that disagrees with `llvm-readelf`, or a
+    section that does not decode back to the link.
+- **No behaviour change:** nothing reads the table yet, and the kernel runs at
+  slot 0. The applier is step 3; slot choice is step 4.
+- **Sizes** (CI, run 45561773398): `kernel.bin` 1,724,824 B (44,648 B under the
+  1,769,472 B gate); the `RCU_TORTURE=1`/`LOCKDEP=1` build 1,741,208 B.
+- **Gate:** the build itself. Mutants K2-1 to K2-4 each failed the build at
+  their own check in CI.
+- QEMU (TCG) only, not verified on real hardware.
+
+## 2026-11-25 — DDR-1179 A2/A4.7, C1.7 step 3 (the KASLR applier, still slot 0)
+
+- **Applier:** `arch/x86_64/boot.asm` computes the slide from `__kimg_lo` and
+  applies `.kreloc` before `.bss` is cleared; at slot 0 it decodes every entry
+  and adds 0.
+- **Checks:**
+  - `kreloc_selfcheck` (in `kmain`) prints `[kaslr] table ok entries=N` or
+    `[kaslr] table FAIL`;
+  - the build links a second image at +2 MiB and requires
+    `kreloc.py --slide-check` to reproduce it byte for byte.
+- **Slide-aware users:**
+  - the W^X walk (`PD_HI[slot]`, `PD_HI[slot+1]`), `kimg.c` and
+    `vmm_ptspan_probe` compute from `__kimg_lo`;
+  - every kernel code-address printer goes through `kaslr_unslide`.
+- **Gate:** `smoke-wxkernel` requires `[kaslr] table ok` and forbids
+  `[kaslr] table FAIL`. Mutants K3-1 to K3-4.
+- QEMU (TCG) only, not verified on real hardware.
+
+## 2026-11-25 — DDR-1179 A3/A4.8, C1.7 step 4 (KASLR slot choice in both loaders)
+
+- **Slot choice:** both loaders draw `s` in `[1, 510]` from RDSEED, then
+  RDRAND, then the TSC (`weak`). They map `PD_HI[s]` and `PD_HI[s+1]`, and
+  enter the kernel at `KERNEL_VIRT + s·2 MiB`. The source is passed in RSI.
+- **The kernel:**
+  - it applies the slide (step 3);
+  - prints the slot on the serial console only (K1);
+  - names only the source in the ring-visible `PRADYOS_KASLR_B` line.
+- **Gate `smoke-kaslr`:** 3 boots with RDRAND and RDSEED, arms A to E:
+  - A: relocated `64` and `32S` fields;
+  - B: applied, from a hardware source;
+  - C: at least 2 distinct slots;
+  - D: a deliberate fault's RIP resolves, unslid, to `probe_kaslr_fault`;
+  - E: W^X under a slide.
+
+  Mutants M1 to M5.
+- **Every other gate boots slid**, with a weak TSC slot under TCG's default
+  CPU.
+- About 9 bits of entropy. A probabilistic hurdle, not a secret, and a
+  TSC-sourced slot is not counted as protection.
+- QEMU (TCG) only, not verified on real hardware.
+- **Review fixes (DDR-1179 A4.9, Codex on #170):**
+  - the UEFI handoff binds RDI, RSI and RAX by asm constraint;
+  - `kheap.c`'s `freed_by=`/`now_by=`, `lockdep.c`'s `at=`/`held_at=` and
+    `sched.c`'s `ret=` unslide.
+  - `.DELETE_ON_ERROR:` removes `kernel.bin` when any later step of its
+    recipe fails (CodeRabbit on #170).
+
+  These printer lines are not gated.
