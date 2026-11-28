@@ -237,7 +237,7 @@ back in.
   in `kernel/mm/uaccess.c`; `ring_frame` in `sys_io_uring.c`; and the
   three checks in `sys_thread.c`. Each calls `swap_prefault` first (A1.10
   point 2 makes this a pin taken under the mm lock). A swap-in
-  that fails is handled as A1.10 point 4 says (`SIGBUS`, or the out-of-memory kill).
+  that fails is handled as A1.10 point 4 says (an uncatchable termination, or the out-of-memory kill).
 - **io_uring is safe under this design.** `ring_frame` resolves the ring's
   frame under the mm lock on every `io_uring_enter`, and reclaim takes the same
   lock (A1.6), so the frame cannot be reclaimed between the check and its use.
@@ -413,21 +413,50 @@ disk read, so it must never run inside a spinlock. `ledger_sign`
 **4. What a failed swap-in does (CodeRabbit 4726661220).** A1.4's "as an
 unmapped page does today" is withdrawn. The pre-pass and a ring-3 fault
 behave the same:
-- **A failed tag check or a disk error** sends `SIGBUS` to the process (V1,
-  section 5). The syscall returns `-EFAULT` with the signal pending, so the
-  process dies before it can use the result.
+- **A failed tag check or a disk error terminates the process, whatever its
+  signal disposition** (CodeRabbit 4726935818). This kernel defines no
+  `SIGBUS` (`kernel/proc/signal.h` has a minimal set). A catchable signal
+  would let a process with a handler carry on with a page the kernel could
+  not authenticate, so V1's and section 5's "`SIGBUS`" means this in P1:
+  - the kernel logs `[swap] integrity FAIL pid=... slot=...`, or
+    `[swap] read FAIL pid=... slot=...` for a disk error;
+  - it then terminates the process through the `SIGKILL` path, which cannot
+    be caught or blocked (`SIG_UNMASKABLE`, DDR-1090);
+  - the syscall that met it returns `-EFAULT`, but the process is killed at
+    the next yield point, before ring 3 can use the result.
+
+  Adding `SIGBUS` itself, with an exit status that names it, is outside P1.
 - **No frame** is V4's out-of-memory case: the process is killed, as a ring-3
   fault with no frame is today (`vmm_stack_fault`).
 
-**5. Gate additions.**
+**6. `munmap` of a range a pinned copy is using (CodeRabbit 4726935813).**
+The pin protects **frames from reclaim only**. It does not protect the
+mapping. A sibling thread's `munmap` (or `MAP_FIXED` replacement) takes the mm
+lock, which the `_pinned` copies do not hold, and proceeds as it does today:
+- `vmm_unmap_range_flush` first clears `PTE_PRESENT` and tags the leaf
+  `PTE_SW_DYING`. It then runs one `tlb_shoot`, and frees the frame only after
+  every CPU has acknowledged it (DDR-1177).
+- So a copy running on another CPU keeps reading the old frame until its TLB
+  entry is shot down. Its next access then faults to `uaccess_copy_fault` and
+  returns `-EFAULT`. It never reaches a frame that has been freed and reused.
+  A copy running with interrupts masked delays the acknowledgement, and the
+  frame is freed only after the copy ends.
+- This is the same race a sibling `munmap` has with a plain `copyin` today, a
+  program's own error, with the same `-EFAULT` result. P1 adds nothing to it,
+  and `munmap` neither waits for nor refuses a pinned range.
+- **Pin accounting is untouched by `munmap`.** The pin is per thread and per
+  address space, not per range, so an unmapped range leaves no pin behind
+  (`uaccess_unpin` is still called by the copier).
+
+**7. Gate additions.**
 
 | Arm | Part | Assertion | Mutant | What the mutant breaks |
 |---|---|---|---|---|
-| N2 | P1 | a `read()` into an arena buffer on CPU 1 runs while reclaim on CPU 0 targets that buffer's pages, and returns the full count | M14b | reclaim ignores `uaccess_active` |
+| N2 | P1 | through probe-only ops of a new syscall (`SYS_SWAP_PROBE`, NSI 125, verified free in `kernel/syscall/syscall.h` when built): pin a resident arena page with `uaccess_pin`, then ask reclaim to evict exactly that page while the pin is held. The page's swap-out count must be unchanged and the op must report `skipped=pinned`. Then unpin and ask again: this time the count must rise by 1, so the arm cannot pass on a tree where reclaim never evicts | M14b | reclaim ignores `uaccess_active`, so the first eviction succeeds while the page is pinned |
 | N3 | P1 | under `LOCKDEP=1`, the probe swaps out the page of its own buffer `ubuf`, then calls `ledger_sign(ubuf)`. The call returns `LEDGER_MSG_BYTES`, the data matches, and no copy-under-spinlock report is recorded | M14c | `ledger_sign` uses an unpinned plain `copyout` under `g_ledger_lock`: a report, and `-EFAULT` |
-| C2 | P1 | a `read()` whose buffer page fails the tag check kills the process with `SIGBUS`; it does not get `-EFAULT` and continue | M3d | the pre-pass maps a tag failure to a plain `-EFAULT` |
+| C2 | P1 | a probe that has installed a handler for every catchable signal calls `read()` into a buffer whose page fails the tag check. It is killed: `[swap] integrity FAIL` is logged and its handlers never run. It does not get `-EFAULT` and continue | M3d | the pre-pass maps a tag failure to a plain `-EFAULT` |
 
-**Vacuity.** N2 needs that page's swap-out count above 0 during the run. N3
+**Vacuity.** N2's second eviction must raise the page's swap-out count, so N2 fails on a tree without reclaim. N3
 needs the swap-out count of `ubuf`'s page above 0 before the call. C2 needs a swapped-out page whose sealed copy was corrupted. Each
 condition fails on a tree without swap.
 
