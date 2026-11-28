@@ -248,7 +248,7 @@ static void aead_tag(const uint8_t polykey[32],
     poly1305_init(&st, polykey);
     poly1305_update(&st, aad, aadlen);
     poly1305_update(&st, zeros, (16u - (aadlen % 16u)) % 16u);
-    poly1305_update(&st, ct, ctlen);
+    poly1305_update(&st, ct, ctlen > 1024u ? 1024u : ctlen);   /* MUTANT A2 */
     poly1305_update(&st, zeros, (16u - (ctlen % 16u)) % 16u);
     uint8_t lens[16];
     for (unsigned i = 0; i < 8u; i++) lens[i]     = (uint8_t)((uint64_t)aadlen >> (i * 8));
