@@ -369,10 +369,15 @@ disk read, so it must never run inside a spinlock. `ledger_sign`
 - **The rule, made explicit in the API:** a caller that copies under a
   spinlock pins the user range before it takes the lock, unpins after
   releasing it, and copies with `copyin_pinned` / `copyout_pinned`. Those
-  never pre-pass and never sleep. In every build they check that
-  `mm->uaccess_active` is above zero and that every page of the range is
-  resident, and otherwise refuse with `-EFAULT`. No spinlock detection is
-  needed for that. The audit's fix at each site is therefore visible in the
+  never pre-pass, never take the mm lock, and never sleep. In every build
+  they check that the **calling thread** holds a pin and that every page of
+  the range is resident, and otherwise refuse with `-EFAULT`. A nonzero
+  per-mm count alone could be another thread's pin, which that thread could
+  drop in the middle of this copy, so the check reads a per-thread count:
+  `uaccess_pin` raises both `t->uaccess_pins` and `mm->uaccess_active`, and
+  `uaccess_unpin` lowers both. `t->uaccess_pins` is a new `struct tcb` field,
+  with an explicit initialiser in `sched_create_state` (`kmalloc` does not
+  zero). No spinlock detection is needed for any of this. The audit's fix at each site is therefore visible in the
   code, as a `_pinned` call with a pin around its lock. `ledger_sign` becomes
   `uaccess_pin(ubuf)`, `spin_lock`, `copyout_pinned`, `spin_unlock`,
   `uaccess_unpin`.
