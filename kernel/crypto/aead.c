@@ -246,7 +246,7 @@ static void aead_tag(const uint8_t polykey[32],
     static const uint8_t zeros[16] = { 0 };
     struct poly1305_st st;
     poly1305_init(&st, polykey);
-    poly1305_update(&st, aad, aadlen);
+    (void)aad;                                  /* MUTANT A3: AAD left out */
     poly1305_update(&st, zeros, (16u - (aadlen % 16u)) % 16u);
     poly1305_update(&st, ct, ctlen);
     poly1305_update(&st, zeros, (16u - (ctlen % 16u)) % 16u);
