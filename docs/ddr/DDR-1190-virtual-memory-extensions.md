@@ -367,19 +367,29 @@ disk read, so it must never run inside a spinlock. `ledger_sign`
 (`kernel/syscall/sys_ledger.c`) calls `copyout` while holding
 `g_ledger_lock`, which guards its `static` output buffer.
 - **The rule:** a caller that copies under a spinlock pins the user range
-  before it takes the lock, and unpins after releasing it. `copyin` and
-  `copyout` reached with a spinlock held do not pin. In the default build
-  they refuse a swapped-out page with `-EFAULT` and never sleep.
+  before it takes the lock, and unpins after releasing it. Its copy then
+  finds every page resident and pinned, so the copy's own pre-pass has
+  nothing to swap in and does not sleep.
+- **What the default build cannot see (a limit).** In the default build,
+  `spin_lock` is a bare test-and-set (`kernel/include/spinlock.h`). It keeps
+  no held-lock depth and does not mask interrupts, so a copy cannot tell that
+  it runs under a spinlock. A site the audit misses would sleep under its
+  lock there. Detection is in the `LOCKDEP=1` build only, the same posture
+  DDR-1209 takes for lock order. Adding a held-lock count to every
+  `spin_lock` in every build is rejected: it would put a cost on the hottest
+  lock path to catch what the audit and the `LOCKDEP=1` gate already catch.
 - **`ledger_sign`** calls `uaccess_pin(ubuf, sizeof out)` before
   `spin_lock(&g_ledger_lock)`.
 - **The audit.** The P1 PR reads every `copyin`, `copyout` and `copyinstr` call
   site reached with a spinlock held, not only grep's matches, and lists each
   one here with the same fix.
 - **The detector.** In the `LOCKDEP=1` build, a `copyin`, `copyout` or
-  `copyinstr` that is reached with a spinlock held (DDR-1209 `ld_held`) and
-  finds a swap entry in its range records a lockdep report before it refuses.
-  `smoke-lockdep` forbids the report, so a missed site that meets a
-  swapped-out page turns that gate red.
+  `copyinstr` reached with a spinlock held (DDR-1209 `ld_held`) checks,
+  without sleeping, that every page of its range is resident and pinned
+  (`mm->uaccess_active` above zero). If one is not, it records a lockdep
+  report and refuses with `-EFAULT` rather than swap in. `smoke-lockdep`
+  forbids the report, so a missed site that meets a swapped-out page turns
+  that gate red.
 - **Mutant M14c:** the `ledger_sign` pin is removed, and the `LOCKDEP=1` run
   of arm N must show the report.
 - **Lock order.** A copy made while holding a `kmutex` now takes the mm lock
