@@ -394,6 +394,14 @@ disk read, so it must never run inside a spinlock. `ledger_sign`
 - **The audit.** The P1 PR reads every `copyin`, `copyout` and `copyinstr` call
   site reached with a spinlock held, not only grep's matches, and lists each
   one here with the same fix.
+  - **First pass, on `47b6f67`:** two scans found one site, `ledger_sign`
+    (`kernel/syscall/sys_ledger.c`, under `g_ledger_lock`). The first scan
+    looks for a copy written between `spin_lock` and `spin_unlock` in one
+    function. The second looks for any of the 157 functions that reach a user
+    copy through direct calls, called with a spinlock held.
+  - **Still to read by hand in P1a:** calls through function pointers (file
+    and fd ops, the syscall table) made with a spinlock held, and locks taken
+    by macros or by helpers that return holding them.
 - **The detector.** In the `LOCKDEP=1` build, a plain `copyin`, `copyout`
   or `copyinstr` reached with a spinlock held (DDR-1209 `ld_held`) records a
   lockdep report and refuses with `-EFAULT`, without swapping in. It fires
@@ -459,6 +467,51 @@ lock, which the `_pinned` copies do not hold, and proceeds as it does today:
 **Vacuity.** N2's second eviction must raise the page's swap-out count, so N2 fails on a tree without reclaim. N3
 needs the swap-out count of `ubuf`'s page above 0 before the call. C2 needs a swapped-out page whose sealed copy was corrupted. Each
 condition fails on a tree without swap.
+
+### A1.11 P1 is built in two PRs, P1a and P1b
+
+P1 as A1.1 to A1.10 describe it is too large for one reviewable PR: the swap
+entry, five walkers, the pin API and its call sites, the AEAD store, a swap
+device on a second disk, reclaim, and about sixteen arms. It is split so each
+half is gated on its own.
+
+- **P1a, the swap entry and everything that must handle it.** Swap-outs come
+  from `SYS_SWAP_PROBE` (NSI 125), not from memory pressure. The probe's ops
+  are:
+  - swap out one named arena page;
+  - pin and unpin;
+  - ask reclaim to evict one named page (P1a's "reclaim" is that single
+    eviction, with the candidate rule and the pin check);
+  - corrupt a slot's sealed copy;
+  - read a page's swap-out count.
+
+  The store is a small RAM array of sealed slots, sealed with the AEAD exactly
+  as V1 says: nonce from the counter, the trusted `swap_ctr[]`, AAD of slot and
+  counter. Only the backend differs from P1b.
+
+  P1a carries:
+  - `PTE_SW_SWAP` and its encoding (A1.5, A1.10 point 1);
+  - the swap-in fault path;
+  - the fork pre-pass, unmap, teardown and `mprotect` handling (A1.6);
+  - `uaccess_pin`, `copyin_pinned`/`copyout_pinned`, the `tcb` field, the seven
+    call sites, the `ledger_sign` fix, the audit and the `LOCKDEP=1` detector
+    (A1.10 points 2, 3, 6);
+  - the uncatchable termination (A1.10 point 4).
+
+  Its gate is `smoke-swapent`, arms N, N2, N3, O, P, C2, and the tamper half of
+  C (a corrupted slot kills the touching process), with mutants M14, M14b,
+  M14c, M15, M16, M3b, M3c and M3d.
+  - **Vacuity:** every arm first needs a probe-made swap-out, which a tree
+    without P1a cannot make.
+- **P1b, the device and reclaim.** It adds:
+  - the `0x82` partition on a second virtio-blk disk (V3);
+  - the disk backend behind the same store interface;
+  - clock reclaim triggered by a failed frame allocation, with try-locks
+    (A1.6) and `tlb_shoot` (arm M).
+
+  Its gate is `smoke-mempressure`, arms A, B, C (the at-rest half: no pattern
+  in the raw partition), D, J, K and M, with mutants M1, M2, M3, M4, M10, M11
+  and M13. The probe store stays in the tree for P1a's arms.
 
 ### A1.9 Honesty labels
 

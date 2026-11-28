@@ -132,7 +132,7 @@ Exit gate: `smoke-kaslr` (arms A to E, 3 boots with RDRAND and RDSEED, shard 8),
 ## Phase 2. Memory and storage
 
 ### C2.1 Virtual memory extensions
-Status: TODO. Needs: C1.3.
+Status: IN PROGRESS (design rechecked: DDR-1190 Amendment 1, #172 `5a7a0d0`; P1 is split into P1a and P1b, A1.11). Needs: C1.3 (done).
 - [ ] swap device, page replacement (clock/LRU-approximation), working-set control
 - [ ] page cache with dirty-page write-back
 - [ ] huge pages, `mlock`

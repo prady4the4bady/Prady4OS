@@ -38,8 +38,8 @@ Older checkpoints are in `docs/archive/SESSION_HANDOFF-2026-10-17.md`.
 
 ## Next
 
-- Merge this bookkeeping PR (C1.7 ticked, FEATURE_STATUS, the CLAUDE.md size line).
-- **#72 (DDR-1182, fd access mode):** the KASLR merges put it in conflict (the `.PHONY` line); `dev/phase1` merged in as `1e31557`, green 20/20 (run 45790758154), clean. The operator merges it (7111929379 item 3). Its zero-length-write Minor (`write(ro_fd, p, 0)` returns `-EBADF`) is a recorded follow-up.
+- **C2.1 P1a** (this branch, `c21-p1-swap`): swap entries with a RAM-backed probe store, every user page-table walker, the `uaccess_pin` API and the `ledger_sign` fix (DDR-1190 A1.10, A1.11). Then **P1b**: the encrypted swap device and reclaim. The design is #172 `5a7a0d0` (A1 + A1.10); #171 `c6f7d33` was the C1.7 bookkeeping.
+- **#72 (DDR-1182, fd access mode):** `dev/phase1` merged in again as `f57e9f4` (docs only), green 20/20 (run 46137346928), clean. The operator merges it (7111929379 item 3). Its zero-length-write Minor (`write(ro_fd, p, 0)` returns `-EBADF`) is a recorded follow-up.
 - **Then C2.1** (virtual memory extensions: swap and page replacement, page cache with write-back, huge pages and `mlock`). C1.6 P4 (shared text) and C1.5's memory PSI follow it.
 - The operator closes the parked drafts (7111929379 item 5); #88 is one.
 - DDR-1208 follow-up, not started: the virtqueue is not given back when a virtio-blk probe fails after queue setup (predates DDR-1208; noted on #148).
