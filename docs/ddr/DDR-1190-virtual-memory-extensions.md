@@ -366,15 +366,21 @@ a pin that reclaim honours:
 disk read, so it must never run inside a spinlock. `ledger_sign`
 (`kernel/syscall/sys_ledger.c`) calls `copyout` while holding
 `g_ledger_lock`, which guards its `static` output buffer.
-- **The rule:** a caller that copies under a spinlock pins the user range
-  before it takes the lock, and unpins after releasing it. Its copy then
-  finds every page resident and pinned, so the copy's own pre-pass has
-  nothing to swap in and does not sleep.
+- **The rule, made explicit in the API:** a caller that copies under a
+  spinlock pins the user range before it takes the lock, unpins after
+  releasing it, and copies with `copyin_pinned` / `copyout_pinned`. Those
+  never pre-pass and never sleep. In every build they check that
+  `mm->uaccess_active` is above zero and that every page of the range is
+  resident, and otherwise refuse with `-EFAULT`. No spinlock detection is
+  needed for that. The audit's fix at each site is therefore visible in the
+  code, as a `_pinned` call with a pin around its lock. `ledger_sign` becomes
+  `uaccess_pin(ubuf)`, `spin_lock`, `copyout_pinned`, `spin_unlock`,
+  `uaccess_unpin`.
 - **What the default build cannot see (a limit).** In the default build,
   `spin_lock` is a bare test-and-set (`kernel/include/spinlock.h`). It keeps
-  no held-lock depth and does not mask interrupts, so a copy cannot tell that
-  it runs under a spinlock. A site the audit misses would sleep under its
-  lock there. Detection is in the `LOCKDEP=1` build only, the same posture
+  no held-lock depth and does not mask interrupts, so a plain `copyin` or
+  `copyout` cannot tell that it runs under a spinlock. A site the audit
+  misses, one still using the plain call under a lock, would sleep there. Detection is in the `LOCKDEP=1` build only, the same posture
   DDR-1209 takes for lock order. Adding a held-lock count to every
   `spin_lock` in every build is rejected: it would put a cost on the hottest
   lock path to catch what the audit and the `LOCKDEP=1` gate already catch.
@@ -383,15 +389,16 @@ disk read, so it must never run inside a spinlock. `ledger_sign`
 - **The audit.** The P1 PR reads every `copyin`, `copyout` and `copyinstr` call
   site reached with a spinlock held, not only grep's matches, and lists each
   one here with the same fix.
-- **The detector.** In the `LOCKDEP=1` build, a `copyin`, `copyout` or
-  `copyinstr` reached with a spinlock held (DDR-1209 `ld_held`) checks,
-  without sleeping, that every page of its range is resident and pinned
-  (`mm->uaccess_active` above zero). If one is not, it records a lockdep
-  report and refuses with `-EFAULT` rather than swap in. `smoke-lockdep`
+- **The detector.** In the `LOCKDEP=1` build, a plain `copyin`, `copyout`
+  or `copyinstr` reached with a spinlock held (DDR-1209 `ld_held`) records a
+  lockdep report and refuses with `-EFAULT`, without swapping in. It fires
+  whether or not the range is resident, so a missed site is found on any
+  run that reaches it. `smoke-lockdep`
   forbids the report, so a missed site that meets a swapped-out page turns
   that gate red.
-- **Mutant M14c:** the `ledger_sign` pin is removed, and the `LOCKDEP=1` run
-  of arm N must show the report.
+- **Mutant M14c:** `ledger_sign` goes back to an unpinned plain `copyout`
+  under `g_ledger_lock`, and the `LOCKDEP=1` run of arm N3 must show the
+  report.
 - **Lock order.** A copy made while holding a `kmutex` now takes the mm lock
   after it. `mmap` of a file holds the mm lock and then reads the file, so
   the `LOCKDEP=1` run (A1.6) is also the check for an inversion between file
@@ -412,11 +419,11 @@ behave the same:
 | Arm | Part | Assertion | Mutant | What the mutant breaks |
 |---|---|---|---|---|
 | N2 | P1 | a `read()` into an arena buffer on CPU 1 runs while reclaim on CPU 0 targets that buffer's pages, and returns the full count | M14b | reclaim ignores `uaccess_active` |
-| N3 | P1 | under `LOCKDEP=1`, the probe swaps out the page holding `ledger_sign`'s output buffer, then calls `ledger_sign`. The call returns the full count and records no copy-under-spinlock report | M14c | the `ledger_sign` pin is removed, so the copy meets the swap entry under `g_ledger_lock`: a report, and `-EFAULT` |
+| N3 | P1 | under `LOCKDEP=1`, the probe swaps out the page of its own buffer `ubuf`, then calls `ledger_sign(ubuf)`. The call returns `LEDGER_MSG_BYTES`, the data matches, and no copy-under-spinlock report is recorded | M14c | `ledger_sign` uses an unpinned plain `copyout` under `g_ledger_lock`: a report, and `-EFAULT` |
 | C2 | P1 | a `read()` whose buffer page fails the tag check kills the process with `SIGBUS`; it does not get `-EFAULT` and continue | M3d | the pre-pass maps a tag failure to a plain `-EFAULT` |
 
 **Vacuity.** N2 needs that page's swap-out count above 0 during the run. N3
-needs the output page's swap-out count above 0 before the call. C2 needs a swapped-out page whose sealed copy was corrupted. Each
+needs the swap-out count of `ubuf`'s page above 0 before the call. C2 needs a swapped-out page whose sealed copy was corrupted. Each
 condition fails on a tree without swap.
 
 ### A1.9 Honesty labels
