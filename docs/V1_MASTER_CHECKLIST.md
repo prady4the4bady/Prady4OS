@@ -119,8 +119,13 @@ Status: IN-PROGRESS (P1 #154, P2 #156, P3a #158 and P3b #166 merged; P4 (shared 
 Exit gate: dynamic-linking gate (name TBD).
 
 ### C1.7 KASLR
-Status: TODO (was deferred, now in scope). Needs: C0.1. Ref: DDR-1051.
-Exit gate: KASLR gate (name TBD).
+Status: DONE (DDR-1179 steps 2 to 4, rebuilt as fresh PRs per #45 7062649586 item 3, merged by the operator under K4). Needs: C0.1. Ref: DDR-1051, DDR-1179 (Amendment 4 is the recheck against the loader, user ASLR and the kernel-size changes).
+- [x] the kernel image runs at a random 2 MiB slot, `s` in `[1, 510]`, in both loaders (about 9 bits).
+  - **Step 2, the relocation table:** #168 `a7b8b24` (DDR-1179 A1, A4). `.kreloc` holds the `R_X86_64_64` and `32S` fields as LEB128 deltas in an 8,192 B reservation. Every build checks it twice: `kreloc.py --verify` decodes it back out of the section, and `--slide-check` relinks 2 MiB higher and requires the relocated image to be byte-identical. Head `a690ca0` green, 20 of 20 (run [45589149161](https://github.com/prady4the4bady/Prady4OS/actions/runs/45589149161)). Mutants K2-1 to K2-4 red at build time (runs 45563141034, 45563144125, 45563360435, 45563427183).
+  - **Step 3, the applier, still at slot 0:** #169 `6b44a76` (DDR-1179 A2, A4.7). `boot.asm` applies the table; `kreloc_selfcheck` prints `[kaslr] table ok entries=N`. Every printer of a code address unslides (`kaslr_unslide`); W^X walks `PD[slot]` and `PD[slot+1]`. Head `2f67c22` green, 20 of 20 (run [45708057207](https://github.com/prady4the4bady/Prady4OS/actions/runs/45708057207)). Mutants K3-1 to K3-4 red (runs 45611084777, 45611169106, 45611259722, 45611345242).
+  - **Step 4, slot choice:** #170 `3890e4c` (DDR-1179 A3, A4.8, A4.9). RDSEED, else RDRAND, else the TSC (`weak`, K2); the slot is printed on the serial console only (K1). Both loaders were fixed from #85's `% 511` to `% 510`: with the two-page kernel window, slot 511 would map one entry past the PD page. Review fixes in A4.9: the UEFI handoff binds RDI, RSI and RAX by constraint, four more printers unslide, `.DELETE_ON_ERROR`. Head `324a68a` green, 20 of 20, every gate booting slid (run [45750629607](https://github.com/prady4the4bady/Prady4OS/actions/runs/45750629607)). Mutants M1 to M5 ran on `926b8dc`, each red on its own arm: M1 table check (`bad=389`, run 45712055781), M2 arm B (`applied=0`, 45722479522), M3 arm C (1 distinct slot, 45722553890), M4 arm D (raw RIP resolves to `__bss_end`, 45722619693), M5 arm E (`W^X FAIL: no PD[slot]`, 45732427576).
+  - Not gated: the `kheap` and `sched` printer lines (A4.9). Limits: about 9 bits, a probabilistic hurdle that any kernel-address leak defeats (raw data pointers in dumps are such a leak, §2.5); a TSC slot is labelled `weak` and not counted as protection, and in CI only the `smoke-kaslr` boots get RDSEED. QEMU (TCG) only, not verified on real hardware.
+Exit gate: `smoke-kaslr` (arms A to E, 3 boots with RDRAND and RDSEED, shard 8), plus the build-time `--verify` and `--slide-check`.
 
 ---
 
