@@ -46,7 +46,7 @@ Gates that exist only on `dev/phase1-seyp3n` (PR #29, not yet in
 | Machine check (#MC) | gated | `smoke-mce` | A hardware fault reports instead of triple-faulting |
 | KASAN UAF regression | gated (seyp3n) | `smoke-kasan-uaf` | Freed memory read is caught |
 | CPU model matrix | partial | `smoke-chipset` (4 QEMU models) | Runtime CPUID dispatch exists for ERMS (memcpy/memset) and NX/SMEP/SMAP/MCE; no per-microarchitecture code paths beyond that. Log path fixed in DDR-1166 §3. |
-| KASLR (kernel image, 510 slots of 2 MiB) | gated | `smoke-kaslr`; build-time `kreloc.py --verify` and `--slide-check` | A different kernel address on each boot (DDR-1179, C1.7). About 9 bits; a TSC-sourced slot is labelled `weak`. QEMU only, not verified on real hardware |
+| KASLR (kernel image, 510 slots of 2 MiB) | gated | `smoke-kaslr`; build-time `kreloc.py --verify` and `--slide-check` | The kernel address varies between boots (DDR-1179, C1.7): about 9 bits, and two boots can draw the same slot; a TSC-sourced slot is labelled `weak`. QEMU only, not verified on real hardware |
 
 ## Scheduler, SMP, IPC
 
