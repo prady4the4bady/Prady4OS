@@ -264,6 +264,7 @@ struct tcb {
     uint64_t   block_deadline;   /* g_ticks + timeout; 0 = no deadline */
     int        wake_timed_out;   /* 1 if timer expired before wakeup   */
     struct tcb *kmx_next;        /* DDR-1181: kmutex FIFO wait link (kmutex.c) */
+    uint32_t    uaccess_pins;    /* DDR-1190 A1.10: uaccess_pin()s this thread holds */
     /* DDR-1181 P1c: thread groups. tgid is the process id every thread of one
      * address space reports (getpid); pid stays unique per tcb and is the tid.
      * is_thread marks a tcb made by SYS_THREAD_CREATE (auto-reaped, never a

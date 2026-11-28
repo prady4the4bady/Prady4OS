@@ -1674,6 +1674,7 @@ static struct tcb *sched_create_state(thread_fn entry, void *arg, const char *na
     t->block_deadline  = 0;   /* DDR-955 */
     t->wake_timed_out  = 0;   /* DDR-955 */
     t->kmx_next        = 0;   /* DDR-1181: not waiting on any kmutex */
+    t->uaccess_pins    = 0;   /* DDR-1190 A1.10; kmalloc does not zero (rule 11) */
     t->tgid            = 0;   /* DDR-1181 P1c: set with pid by the user creators */
     t->is_thread       = 0;
     t->clear_tid       = 0;

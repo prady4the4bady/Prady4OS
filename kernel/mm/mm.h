@@ -35,6 +35,9 @@ struct mm {
     uint32_t       group_set;           /* 1 once the process exit status is fixed */
     int            group_status;        /* what wait4 reports for the process  */
     uint32_t       exited;              /* DDR-1181 §4.7: exit complete, reapable */
+    uint32_t       uaccess_active;      /* DDR-1190 A1.10: user-copy pins held on
+                                         * this address space; reclaim skips it
+                                         * while nonzero (atomic) */
     struct kmutex  lock;                /* DDR-1181 §3.3: held by every mutation
                                          * of this address space (zeroed = free) */
 };

@@ -187,6 +187,12 @@ static long ledger_sign(long ubuf, long ulen) {
     uint8_t  head[32];
     aether_audit_head(&written, head);
 
+    /* DDR-1190 A1.10 point 3: the copy below runs under a spinlock, where the
+     * plain copyout (which may take the mm lock and sleep to swap a page in)
+     * is not allowed. Pin the whole output buffer first, while sleeping is
+     * still fine, and copy with copyout_pinned under the lock. */
+    if (uaccess_pin((void __user *)ubuf, sizeof out, 1) < 0)
+        return -EFAULT;
     spin_lock(&g_ledger_lock);
     uint8_t *m = out;
     memcpy(m, LEDGER_DOMAIN, 18);
@@ -196,9 +202,10 @@ static long ledger_sign(long ubuf, long ulen) {
     int r = s ? mldsa44_sign_internal(g_sk, m, LEDGER_MSG_BYTES,
                                       out + LEDGER_MSG_BYTES, s)
               : -ENOMEM;
-    if (r == 0 && copyout((void __user *)ubuf, out, sizeof out) < 0)
+    if (r == 0 && copyout_pinned((void __user *)ubuf, out, sizeof out) < 0)
         r = -EFAULT;
     spin_unlock(&g_ledger_lock);
+    uaccess_unpin();
     if (r == -1) return -EIO;                   /* rejection bound exceeded */
     return r < 0 ? r : (long)LEDGER_MSG_BYTES;
 }

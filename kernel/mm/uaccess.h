@@ -61,6 +61,21 @@ static inline void uaccess_end(void) {
 long uaccess_copy(void *dst, const void *src, uint64_t n);
 extern char uaccess_copy_insn[], uaccess_copy_insn_end[], uaccess_copy_fault[];
 
+/* DDR-1190 A1.10 point 2: pin a user range of the current address space.
+ * Takes the mm lock (or uses it, if this thread already holds it), swaps in any
+ * swapped-out page of the range, checks it with vmm_user_range_ok, and on
+ * success raises this thread's and the mm's pin counts, which reclaim honours.
+ * 0 or -EFAULT. Thread context, no spinlock held (it may sleep). A caller that
+ * copies under a spinlock pins before taking it and uses the _pinned copies. */
+int  uaccess_pin(const void __user *u, size_t n, int writable);
+void uaccess_unpin(void);
+
+/* DDR-1190 A1.10 point 3: copies for a caller that already holds a pin. They
+ * never sleep and never take the mm lock: they refuse with -EFAULT unless this
+ * thread holds a pin and every page of the range is resident. */
+ssize_t copyin_pinned(void *kdst, const void __user *usrc, size_t n);
+ssize_t copyout_pinned(void __user *udst, const void *ksrc, size_t n);
+
 /* Copy `n` bytes user->kernel. Returns n on success, -EFAULT on a bad source. */
 ssize_t copyin(void *kdst, const void __user *usrc, size_t n);
 

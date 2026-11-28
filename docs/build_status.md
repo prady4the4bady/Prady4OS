@@ -7551,3 +7551,25 @@ the 2026-11-22 entry are lifted.
     recipe fails (CodeRabbit on #170).
 
   These printer lines are not gated.
+
+## 2026-11-28 — DDR-1190 A1.10, C2.1 P1a step 1 (the user-copy pin)
+
+- **What it adds:**
+  - `uaccess_pin(u, n, writable)`, which runs under the mm lock (or under the
+    caller's own hold of it). It swaps the range in, checks it with
+    `vmm_user_range_ok`, and raises `mm->uaccess_active` and
+    `t->uaccess_pins`. `uaccess_unpin` lowers both.
+  - `copyin_pinned` and `copyout_pinned` take no lock and never sleep. They
+    refuse unless this thread holds a pin and the range is present.
+  - The swap-in hook `swap_prefault_locked` (`kernel/mm/swap.h`) is a stub
+    that succeeds. No swap entry exists yet, so behaviour does not change.
+- **Converted callers:**
+  - `copyin`, `copyout` and `copyinstr` (one pin per page) pin, copy, then
+    unpin.
+  - `ledger_sign` pins its output buffer before `g_ledger_lock` and copies
+    with `copyout_pinned` under it.
+- **Not yet built:** the swap entry, the probe store, reclaim, and the
+  `sys_thread`/io_uring sites. These are the later P1a steps.
+- **Gate:** not gated yet. `smoke-swapent` (arms N, N2, N3) lands with the
+  probe syscall.
+- `smoke-shell` 5/5 locally. QEMU (TCG) only, not verified on real hardware.
