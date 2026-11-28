@@ -39,8 +39,7 @@ int uaccess_pin(const void __user *u, size_t n, int writable) {
     if (mm && !held)
         kmutex_lock(&mm->lock);
     int ok = n == 0 ||
-             (swap_prefault_locked(mm, va, (uint64_t)n, writable) == 0 &&
-              vmm_user_range_ok(cur_cr3(), va, (uint64_t)n, writable));
+             swap_user_range_ok_locked(mm, cur_cr3(), va, (uint64_t)n, writable);
     if (ok && t) {
         if (mm)
             __atomic_add_fetch(&mm->uaccess_active, 1, __ATOMIC_ACQ_REL);

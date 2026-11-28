@@ -7568,8 +7568,12 @@ the 2026-11-22 entry are lifted.
     unpin.
   - `ledger_sign` pins its output buffer before `g_ledger_lock` and copies
     with `copyout_pinned` under it.
-- **Not yet built:** the swap entry, the probe store, reclaim, and the
-  `sys_thread`/io_uring sites. These are the later P1a steps.
+- **Step 1b:** `ring_frame` (io_uring, under the mm lock) and the three
+  `sys_thread` checks (now under one hold of the mm lock) swap in before they
+  check, through `swap_user_range_ok_locked`. `smoke-thread`,
+  `smoke-sysiouring` and `smoke-ledger` pass locally.
+- **Not yet built:** the swap entry, the probe store and the fault path.
+  These are the later P1a steps.
 - **Gate:** not gated yet. `smoke-swapent` (arms N, N2, N3) lands with the
   probe syscall.
 - `smoke-shell` 5/5 locally. QEMU (TCG) only, not verified on real hardware.

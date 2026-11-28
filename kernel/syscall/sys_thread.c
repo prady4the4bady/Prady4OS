@@ -16,6 +16,7 @@
 #include "sched.h"
 #include "mm.h"
 #include "vmm.h"
+#include "swap.h"       /* DDR-1190 A1.4 */
 #include "syscall.h"
 #include "errno.h"
 #include "kmutex.h"
@@ -50,12 +51,18 @@ static long sys_thread_create(long a_entry, long a_stack, long a_arg,
      * would #GP the WRMSR at the first switch-in. */
     if (tls != 0 && (tls < VMM_USER_MIN || tls >= VMM_USER_MAX))
         return -EINVAL;
-    if ((stack & 15) || stack < 16 ||
-        !vmm_user_range_ok(t->cr3, stack - 16, 16, 1))
+    /* DDR-1190 A1.4: each page is swapped in before it is checked, so a
+     * swapped-out stack is not refused as unmapped. The three checks share one
+     * hold of the mm lock. */
+    if ((stack & 15) || stack < 16)
         return -EINVAL;
-    if (!vmm_user_range_ok(t->cr3, entry, 1, 0))
-        return -EINVAL;
-    if (ctid && ((ctid & 3) || !vmm_user_range_ok(t->cr3, ctid, 4, 1)))
+    mm_lock(t);
+    int ok = swap_user_range_ok_locked(t->mm, t->cr3, stack - 16, 16, 1) &&
+             swap_user_range_ok_locked(t->mm, t->cr3, entry, 1, 0) &&
+             (!ctid || (!(ctid & 3) &&
+                        swap_user_range_ok_locked(t->mm, t->cr3, ctid, 4, 1)));
+    mm_unlock(t);
+    if (!ok)
         return -EINVAL;
     if (__atomic_load_n(&t->mm->live, __ATOMIC_ACQUIRE) >= THREAD_MAX_PER_MM)
         return -EAGAIN;

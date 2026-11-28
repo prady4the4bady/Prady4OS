@@ -16,6 +16,7 @@
 #include "pipe.h"
 #include "vfs.h"
 #include "vmm.h"
+#include "swap.h"       /* DDR-1190 A1.4 */
 #include "kheap.h"
 #include "pmm.h"
 #include "uaccess.h"
@@ -133,7 +134,9 @@ static int run_sqe(struct tcb *t, const struct io_uring_sqe *s) {
  * NULL if the page is not (or no longer) a user-RW mapping. Caller holds the
  * mm lock. */
 static struct io_ring *ring_frame(struct tcb *t, uint64_t va) {
-    if (!vmm_user_range_ok(t->cr3, va, PAGE_SIZE, 1))
+    /* DDR-1190 A1.4: swap the ring page in first; the mm lock the caller
+     * holds keeps reclaim off it until the CQEs are written back. */
+    if (!swap_user_range_ok_locked(t->mm, t->cr3, va, PAGE_SIZE, 1))
         return 0;
     uint64_t phys = vmm_resolve(t->cr3, va);
     return phys ? (struct io_ring *)(uintptr_t)phys : 0;   /* va is aligned */
