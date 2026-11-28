@@ -433,6 +433,10 @@ static long sys_mmap_locked(long a_addr, long a_len, long a_prot, long a_flags,
                                                  * from -EBADF on purpose, per
                                                  * DDR-1080: the return value
                                                  * should name its own family */
+        if (!fd_can_read(fe))
+            return -EACCES;                     /* DDR-1182: the fill reads the
+                                                 * file, so an O_WRONLY fd may
+                                                 * not be mapped (POSIX) */
         if ((prot & PROT_EXEC) && (fe->flags & OF_ACCMODE) != 0)
             return -EACCES;                     /* L1: only a read-only fd */
         if (a_off < 0 || ((uint64_t)a_off & (PAGE_SIZE - 1)))

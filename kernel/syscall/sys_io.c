@@ -26,6 +26,10 @@
  * (possibly short for a full pipe), or a negative errno when nothing was written.
  * Shared by sys_write and sys_writev (PROC-D). */
 static long fd_write_user(struct fd_entry *e, uint64_t uptr, long count) {
+    /* DDR-1182: an O_RDONLY file is refused before the DDR-1170 charge below,
+     * so a refused write costs no budget and cannot end a budgeted task. */
+    if (e->kind == FD_VFS && e->file && !fd_can_write(e))
+        return -EBADF;
     /* DDR-1170: charged BEFORE any byte moves, on every fd kind, so a budgeted
      * task cannot emit past its limit by choosing a different descriptor. */
     if (count > 0 && aether_budget_charge(current_thread, TASK_BUDGET_BYTES,
@@ -337,6 +341,8 @@ static long sys_read(long fd, long ubuf, long count, long a4, long a5, long a6) 
         return -EBADF;
 
     if (e->kind == FD_VFS && e->file) {
+        if (!fd_can_read(e))
+            return -EBADF;                              /* DDR-1182: O_WRONLY */
         if (count == 0)
             return 0;
         char kbuf[256];
