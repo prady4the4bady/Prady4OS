@@ -105,6 +105,61 @@ static const char M252[] = "Cryptographic Forum Research Group";   /* 34 bytes *
 static const uint8_t T252[16] = {
     0xa8,0x06,0x1d,0xc1,0x30,0x51,0x36,0xc6,0xc2,0x2b,0x8b,0xaf,0x0c,0x01,0x27,0xa9 };
 
+/* DDR-1211: a 4096-byte message, beyond the 1 KiB bound the MAC input used to
+ * have. No RFC 8439 vector is that long, so the answer comes from an
+ * independent implementation (tools/ci/aead_long_kat.py, the `cryptography`
+ * package's ChaCha20-Poly1305). The inputs are pure functions of the index:
+ * key[i] = i, nonce = 0^4 || "DDR-1211", aad = "PRADYOS-LONG",
+ * pt[i] = (7i + 3) mod 256. */
+#define LONG_N 4096u
+static const uint8_t LONG_TAG[16] = { 0x12, 0x0e, 0x48, 0x5a, 0xb7, 0xf4, 0x6d, 0x37,
+                                      0x4f, 0x0b, 0x5b, 0xc2, 0x82, 0x81, 0xa3, 0xc1 };
+#define LONG_CT0    0x44
+#define LONG_CT4000 0x18
+#define LONG_CT4095 0xa1
+
+static int long_arms(void) {
+    int ok = 1;
+    uint8_t key[32], nonce[12], aad[12], pt[LONG_N], ct[LONG_N], back[LONG_N], tag[16];
+    static const char nn[] = "DDR-1211", an[] = "PRADYOS-LONG";
+    for (unsigned i = 0; i < 32u; i++) key[i] = (uint8_t)i;
+    for (unsigned i = 0; i < 4u; i++) nonce[i] = 0;
+    for (unsigned i = 0; i < 8u; i++) nonce[4 + i] = (uint8_t)nn[i];
+    for (unsigned i = 0; i < 12u; i++) aad[i] = (uint8_t)an[i];
+    for (unsigned i = 0; i < LONG_N; i++) pt[i] = (uint8_t)((i * 7u + 3u) & 0xFFu);
+
+    /* L1 -- the known answer. */
+    aead_seal(key, nonce, aad, 12, pt, LONG_N, ct, tag);
+    const uint8_t ctb[3] = { ct[0], ct[4000], ct[4095] };
+    const uint8_t wantb[3] = { LONG_CT0, LONG_CT4000, LONG_CT4095 };
+    ok &= cmp("long_L1_tag", tag, LONG_TAG, 16);
+    ok &= cmp("long_L1_ct", ctb, wantb, 3);
+
+    /* L2 -- the valid box opens and round-trips. */
+    if (aead_open(key, nonce, aad, 12, ct, LONG_N, tag, back) != 0) {
+        wr("AEAD FAIL: long_L2 open rejected a valid 4096-byte box\n");
+        ok = 0;
+    } else {
+        ok &= cmp("long_L2_roundtrip", back, pt, LONG_N);
+    }
+
+    /* L3 -- a byte flipped far past 1 KiB is refused. */
+    ct[4000] ^= 0x01u;
+    if (aead_open(key, nonce, aad, 12, ct, LONG_N, tag, back) == 0) {
+        wr("PRADYOS_AEAD_STUB case=long_L3_tampered_ct_accepted\n");
+        ok = 0;
+    }
+    ct[4000] ^= 0x01u;
+
+    /* L4 -- a changed AAD is refused. */
+    aad[11] ^= 0x01u;
+    if (aead_open(key, nonce, aad, 12, ct, LONG_N, tag, back) == 0) {
+        wr("PRADYOS_AEAD_STUB case=long_L4_tampered_aad_accepted\n");
+        ok = 0;
+    }
+    return ok;
+}
+
 __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
     int ok = 1;
 
@@ -159,6 +214,8 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
             ok = 0;
         }
     }
+
+    ok &= long_arms();                        /* DDR-1211 L1-L4 */
 
     if (!ok) {
         wr("AEAD FAIL\n");

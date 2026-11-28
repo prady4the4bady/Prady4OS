@@ -7551,3 +7551,21 @@ the 2026-11-22 entry are lifted.
     recipe fails (CodeRabbit on #170).
 
   These printer lines are not gated.
+
+## 2026-11-28 — DDR-1211, the AEAD tag in a stream (no length bound)
+
+- **The defect:** `aead_tag` built the Poly1305 input in a 1 KiB buffer and
+  gave a longer input an all-zero tag. `aead_seal` and `aead_open` both did
+  this, so any ciphertext above about 1 KiB verified. No shipped caller
+  reaches the bound (ACC at most 512 B, vault at most 272 B). C2.1 P1a's
+  4 KiB swap pages were the first, and `smoke-swapent` caught it on the P1a
+  branch: a corrupted sealed page was swapped in.
+- **The fix:** Poly1305 has an incremental form (`init`, `update`, `final`)
+  using the same arithmetic, and `aead_tag` streams its five pieces through
+  it. `poly1305_mac` is a wrapper, so the RFC 8439 section 2.5.2 vector still
+  tests it.
+- **Gate:** `smoke-aead` arms L1 to L4: a 4,096-byte known answer from an
+  independent implementation (`tools/ci/aead_long_kat.py`), its round-trip, a
+  byte flipped at offset 4000, and a changed AAD. Mutants A1 to A3.
+  - On the unfixed code, L1, L3 and L4 fail locally (vacuity checked).
+  - QEMU (TCG) only, not verified on real hardware.
