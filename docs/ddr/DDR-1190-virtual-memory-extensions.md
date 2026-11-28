@@ -513,7 +513,123 @@ half is gated on its own.
   in the raw partition), D, J, K and M, with mutants M1, M2, M3, M4, M10, M11
   and M13. The probe store stays in the tree for P1a's arms.
 
+### A1.12 P1a as built: what the code adds beyond A1.4 to A1.11
+
+These points were found while building P1a, from the tree at `5a7a0d0`. They
+are design, recorded before the code that implements them.
+
+**1. An eighth swap-in site: `fx_key` (`kernel/proc/futex.c`).** A1.4 counts
+seven call sites. `fx_key` also resolves a user PTE under the mm lock, and
+refuses a page that is not present with `-EFAULT`. A futex word in a
+swapped-out arena page (a `pthread_mutex_t` in `malloc` memory) would then
+fail `FUTEX_WAIT` and `FUTEX_WAKE`. `fx_key` calls `swap_prefault_locked` on
+the word first. It holds the mm lock already, so no pin is needed: reclaim
+takes the same lock. No other caller of `vmm_resolve`, `vmm_resolve_pte` or
+`leaf_pte` reads a user page that can be swapped:
+- `elf.c` reads a fresh exec image;
+- the `munmap` test in `sys_mmap.c` checks `PTE_SW_SHMEM`, which a swap
+  entry never carries;
+- `mprot_exec_ok` reads bit 53 from the entry, as A1.6 requires;
+- the remaining callers are boot probes.
+
+**2. The ordering of a swap-out.** The probe's swap-out holds the mm lock
+throughout:
+1. Check the candidate rule.
+2. Refuse when `mm->uaccess_active` is nonzero (`skipped=pinned`).
+3. Allocate a slot and take the next counter value.
+4. Replace the PTE with the swap entry. The present bit is now clear.
+5. Run one `tlb_shoot`.
+6. Seal the frame into the slot.
+7. Free the frame.
+
+Sealing after the shootdown means no thread can write the page between the
+seal and the PTE change. A sibling thread that touches the page in that
+window faults, and waits for the mm lock in the swap-in path.
+
+**3. `munmap` and `MAP_FIXED` replacement.** `vmm_unmap_range_flush` skips a
+non-present leaf in pass 1, and pass 2 handles only `PTE_SW_DYING` leaves. A
+swap entry would therefore stay in the page table after `munmap`, and a later
+mapping at the same address could swap the old page back in. So pass 1 frees
+a swap entry's slot and rewrites the leaf as `PTE_SW_DYING` with address 0.
+Pass 2 then clears it and reclaims empty tables after the shootdown, as it
+does for every other leaf. Nothing is passed to `free_fn`, because the
+address is 0.
+
+**4. `mprotect` (`vmm_protect_range`).**
+- Pass 1 accepts a swap entry as a user page.
+- Pass 1b (copy before adding write) skips it, because the page has no frame
+  to share.
+- Pass 2 rewrites the kept flags and keeps the entry not present, with
+  `PTE_SW_SWAP` and the slot index.
+
+**5. Teardown.** `free_subtree` frees the slot of every swap entry it meets.
+
+**6. Pins and thread exit.** A thread that exits while it holds a pin (a
+probe that pinned and never unpinned) leaves `mm->uaccess_active` raised. Its
+address space would then never be reclaimed again. So `sched_exit_common`
+subtracts the exiting thread's `uaccess_pins` from its mm's
+`uaccess_active`.
+
+**7. Termination, per A1.10 point 4.**
+- **A failure in the ring-3 fault path** logs `[swap] integrity FAIL`, then
+  calls `sched_exit(-1)`, the call `signal_deliver` makes when it honours
+  `SIGKILL`. Signals are delivered only at syscall exit and at the timer
+  interrupt's return to ring 3. A fault path that only raised `SIGKILL` would
+  return to ring 3, re-fault on the same entry, and fail the tag check again
+  until the next tick.
+- **A failure in a pre-pass** (a syscall) raises `SIGKILL` on the calling
+  thread, and the syscall returns `-EFAULT`. `signal_deliver` honours the
+  `SIGKILL` at syscall exit, before ring 3 runs, and `sched_exit` ends every
+  thread of the group.
+- The `FAIL` line is printed once per slot.
+
+**8. Signal delivery may now sleep.** `signal_deliver` builds an
+`SA_SIGINFO` frame with `copyout`, so it may now sleep on the mm lock or
+swap the frame's page in. One of its two call sites is the timer interrupt's
+return to ring 3. That path already switches away, through `sched_tick` after
+the EOI and through `sched_exit`. The interrupted frame is a ring-3 frame, so
+the thread holds no kernel lock. Sleeping there uses the same switch.
+
+**9. `SYS_SWAP_PROBE` (NSI 125).** `a1` is the op and `a2` a page address in
+the caller's own arena. Every op acts on the caller's own mm only.
+
+| Op | Effect | Returns |
+|---|---|---|
+| 0 `EVICT` | the single eviction of P1a's reclaim: candidate rule, then the pin check, then the swap-out of point 2 | 0 swapped, 1 `skipped=pinned`, `-EINVAL` not a candidate, `-ENOSPC` store full, `-EOVERFLOW` counter exhausted |
+| 1 `PIN` | `uaccess_pin(a2, a3, 1)` | 0 or `-EFAULT` |
+| 2 `UNPIN` | `uaccess_unpin()` | 0 |
+| 3 `CORRUPT` | flips one byte of the sealed copy of `a2`'s slot | 0, or `-EINVAL` if `a2` is not swapped out |
+| 4 `COUNT` | the page's swap-out count | the count (0 if never swapped out) |
+| 5 `STATE` | whether `a2`'s leaf is a swap entry | 1 or 0 |
+| 6 `SNAP` | copies `a2`'s slot (the sealed copy, its tag and its stored counter) aside | 0, or `-EINVAL` if `a2` is not swapped out |
+| 7 `RESTORE` | puts the copy from `SNAP` back into `a2`'s current slot: a replay of an earlier sealed page with its earlier metadata | 0, or `-EINVAL` |
+
+`SNAP` and `RESTORE` exist for arm C's replay half and mutant M3c ("nonce taken
+from the on-disk counter"). So the RAM store keeps, next to each sealed copy,
+the counter value it was written under: the store's copy of V1's on-disk
+metadata, which swap-in never reads. Replaying an earlier copy then fails the
+tag check, because swap-in uses the trusted `swap_ctr[slot]`. Under M3c it
+would succeed.
+
+A1.11's "swap out one named page" and "ask reclaim to evict one named page"
+are the same op in P1a, because P1a's reclaim is exactly that single
+eviction. The page counts live in a 32-entry table keyed by address space and
+page. An entry is freed when its address space is torn down.
+
+**10. The RAM store.**
+- 32 slots. Each sealed copy is one PMM frame, taken at swap-out and freed
+  when the slot is freed.
+- `swap_ctr[]`, the tags and the slot bitmap are static. They come to about
+  1 KiB of BSS, which `kernel.bin` does not contain.
+- The key comes from `rng_bytes` at the first swap-out. If that fails,
+  swap-out is refused with `-EIO`.
+- The store's spinlock covers only slot allocation, freeing and the counter.
+  Sealing and opening run outside it, under the mm lock.
+- P1b puts the disk backend behind the same five store calls: allocate, write
+  sealed, read sealed, free, corrupt.
+
 ### A1.9 Honesty labels
 
-Unchanged from section 6. Nothing in this amendment is built. It closes no open
+Unchanged from section 6. P1a (A1.11, A1.12) is being built on branch
+`c21-p1-swap`; nothing else in this amendment is built. It closes no open
 defect (OPEN-1/2/12/13, U1-U3). QEMU (TCG) only, not verified on real hardware.
