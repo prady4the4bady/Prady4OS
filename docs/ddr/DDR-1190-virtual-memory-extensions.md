@@ -235,9 +235,9 @@ back in.
   back in before the check, under the caller's mm lock.
 - **Callers.** There are seven call sites: `copyin`, `copyout` and `copyinstr`
   in `kernel/mm/uaccess.c`; `ring_frame` in `sys_io_uring.c`; and the
-  three checks in `sys_thread.c`. Each calls `swap_prefault` first. A swap-in
-  that fails (a tag failure, a disk error, or no frame) makes the check fail,
-  as an unmapped page does today.
+  three checks in `sys_thread.c`. Each calls `swap_prefault` first (A1.10
+  point 2 makes this a pin taken under the mm lock). A swap-in
+  that fails is handled as A1.10 point 4 says (`SIGBUS`, or the out-of-memory kill).
 - **io_uring is safe under this design.** `ring_frame` resolves the ring's
   frame under the mm lock on every `io_uring_enter`, and reclaim takes the same
   lock (A1.6), so the frame cannot be reclaimed between the check and its use.
@@ -314,6 +314,100 @@ dropped (A1.2). P1 adds:
 **Vacuity.** Each of N, O and P needs a swap-out count of at least 1 on the
 page it checks, so on a tree without swap each fails at its first step,
 exactly as A does.
+
+### A1.10 Review fixes (CodeRabbit and Codex on #172)
+
+These five points are part of the design P1 is built from. Where they differ
+from A1.4 to A1.8, A1.10 wins.
+
+**1. Bit 54 is a software bit (Codex 4726669313; AGENTS.md: cite the SDM).**
+- **Present leaf.** Intel SDM Vol. 3A, chapter 4 (4-level paging), in the
+  table "Format of a Page-Table Entry that Maps a 4-KByte Page": bits 58:52
+  are ignored by the processor. Bits 62:59 are protection-key bits when
+  CR4.PKE = 1, and ignored otherwise. AMD APM Vol. 2, section 5.4 (long-mode
+  page-translation entries), likewise leaves bits 58:52 available to software.
+  Bit 54 is inside 58:52 under both manuals and does not touch the
+  protection-key field. Table numbers vary between editions, so the citation
+  names the table, not its number. Not checked on real hardware.
+- **Not-present leaf.** With P = 0, the processor ignores bits 63:1 (the same
+  chapter's "not present" entry format). So the slot index in bits 12 and up,
+  and the kept flags, are never interpreted by the hardware.
+- **Two non-present kinds.** A non-present leaf with `PTE_SW_DYING` (bit 11)
+  is a frame awaiting its TLB-shootdown acknowledgement (DDR-1177). A
+  non-present leaf with `PTE_SW_SWAP` (bit 54) is a swap entry. The two are
+  never set together: reclaim does not choose a leaf that is dying, and a
+  swap entry has no frame to shoot down.
+- **Carrying the bit.** Like bits 52 and 53, bit 54 and the slot field are
+  carried by every rebuild of a user leaf that masks flags. The only rebuild
+  of a swap entry is `mprotect` (A1.6).
+
+**2. The buffer stays resident through the copy (CodeRabbit 4726661216).**
+`copyin`, `copyout` and `copyinstr` do not hold the mm lock while they copy,
+so a page brought back by a bare pre-pass could be reclaimed before the copy.
+The pre-pass and the check are therefore one call, made under the lock, with
+a pin that reclaim honours:
+- **`uaccess_pin(cr3, va, len, writable)`:**
+  1. takes the mm lock;
+  2. swaps in every swapped-out page of the range;
+  3. runs `vmm_user_range_ok`;
+  4. on success, raises `mm->uaccess_active`;
+  5. releases the lock.
+
+  `uaccess_unpin` lowers the count.
+- **Reclaim** holds the target mm's lock (taken by try-lock, A1.6) and skips
+  any address space whose `uaccess_active` is above zero.
+- **`copyin`, `copyout` and `copyinstr`** become pin, copy, unpin. The three
+  `sys_thread.c` checks use `uaccess_pin` followed at once by `uaccess_unpin`.
+- **io_uring.** `ring_frame` already holds the mm lock, so it calls
+  `swap_prefault_locked` (no lock taken) before its check. Reclaim needs the
+  same lock, so the ring frame cannot be reclaimed while it is in use.
+
+**3. Not under a spinlock (CodeRabbit 4726666561).** A swap-in can wait on a
+disk read, so it must never run inside a spinlock. `ledger_sign`
+(`kernel/syscall/sys_ledger.c`) calls `copyout` while holding
+`g_ledger_lock`, which guards its `static` output buffer.
+- **The rule:** a caller that copies under a spinlock pins the user range
+  before it takes the lock, and unpins after releasing it. `copyin` and
+  `copyout` reached with a spinlock held do not pin. In the default build
+  they refuse a swapped-out page with `-EFAULT` and never sleep.
+- **`ledger_sign`** calls `uaccess_pin(ubuf, sizeof out)` before
+  `spin_lock(&g_ledger_lock)`.
+- **The audit.** The P1 PR reads every `copyin`, `copyout` and `copyinstr` call
+  site reached with a spinlock held, not only grep's matches, and lists each
+  one here with the same fix.
+- **The detector.** In the `LOCKDEP=1` build, a `copyin`, `copyout` or
+  `copyinstr` that is reached with a spinlock held (DDR-1209 `ld_held`) and
+  finds a swap entry in its range records a lockdep report before it refuses.
+  `smoke-lockdep` forbids the report, so a missed site that meets a
+  swapped-out page turns that gate red.
+- **Mutant M14c:** the `ledger_sign` pin is removed, and the `LOCKDEP=1` run
+  of arm N must show the report.
+- **Lock order.** A copy made while holding a `kmutex` now takes the mm lock
+  after it. `mmap` of a file holds the mm lock and then reads the file, so
+  the `LOCKDEP=1` run (A1.6) is also the check for an inversion between file
+  locks and the mm lock. An inversion found there is fixed the same way, by
+  pinning before the outer lock.
+
+**4. What a failed swap-in does (CodeRabbit 4726661220).** A1.4's "as an
+unmapped page does today" is withdrawn. The pre-pass and a ring-3 fault
+behave the same:
+- **A failed tag check or a disk error** sends `SIGBUS` to the process (V1,
+  section 5). The syscall returns `-EFAULT` with the signal pending, so the
+  process dies before it can use the result.
+- **No frame** is V4's out-of-memory case: the process is killed, as a ring-3
+  fault with no frame is today (`vmm_stack_fault`).
+
+**5. Gate additions.**
+
+| Arm | Part | Assertion | Mutant | What the mutant breaks |
+|---|---|---|---|---|
+| N2 | P1 | a `read()` into an arena buffer on CPU 1 runs while reclaim on CPU 0 targets that buffer's pages, and returns the full count | M14b | reclaim ignores `uaccess_active` |
+| N3 | P1 | under `LOCKDEP=1`, the probe swaps out the page holding `ledger_sign`'s output buffer, then calls `ledger_sign`. The call returns the full count and records no copy-under-spinlock report | M14c | the `ledger_sign` pin is removed, so the copy meets the swap entry under `g_ledger_lock`: a report, and `-EFAULT` |
+| C2 | P1 | a `read()` whose buffer page fails the tag check kills the process with `SIGBUS`; it does not get `-EFAULT` and continue | M3d | the pre-pass maps a tag failure to a plain `-EFAULT` |
+
+**Vacuity.** N2 needs that page's swap-out count above 0 during the run. N3
+needs the output page's swap-out count above 0 before the call. C2 needs a swapped-out page whose sealed copy was corrupted. Each
+condition fails on a tree without swap.
 
 ### A1.9 Honesty labels
 
