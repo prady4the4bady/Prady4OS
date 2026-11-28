@@ -15,6 +15,7 @@
 #include "vdso_page.h"
 #include "vmm_cow.h"
 #include "vmm.h"          /* ADR-038: vmm_stack_fault + USER_STACK_* range */
+#include "swap.h"         /* DDR-1190: the swap-in fault */
 #include "uaccess.h"    /* copyin — dump the bytes actually executing at a fault */
 #include "mm.h"         /* DDR-1181 §3.3: mm_lock in the fault resolvers */
 #include "regs.h"
@@ -934,6 +935,22 @@ void isr_dispatch(struct regs *r) {
      * and OOM both return -1 and fall through to the kill path below, so the
      * guard stays a guard and an allocation failure kills one thread rather
      * than panicking (S2). */
+    /* DDR-1190 A1.5, A1.12 point 7: a not-present fault on a swap entry
+     * brings the page back. A tag or slot failure, or no frame, ends the
+     * process here (the call SIGKILL's delivery makes): returning would only
+     * re-fault on the same entry. */
+    if (r->vector == 14 && (r->cs & 3) == 3 && !(r->err_code & 0x1) &&
+        current_thread && current_thread->mm) {
+        uint64_t cr2 = read_cr2();
+        mm_lock(current_thread);
+        int sw = swap_in_locked(current_thread->mm, cr2);
+        mm_unlock(current_thread);
+        if (sw > 0)
+            return;
+        if (sw < 0)
+            sched_exit(-1);                     /* never returns */
+    }
+
     if (r->vector == 14 && (r->cs & 3) == 3 && !(r->err_code & 0x1) &&
         current_thread) {
         uint64_t cr2 = read_cr2();

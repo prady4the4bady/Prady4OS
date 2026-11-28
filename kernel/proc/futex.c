@@ -17,6 +17,7 @@
 #include "sched.h"
 #include "mm.h"
 #include "vmm.h"
+#include "swap.h"       /* DDR-1190 A1.12 point 1 */
 #include "irq.h"          /* g_ticks */
 #include "signal.h"
 #include "spinlock.h"
@@ -63,6 +64,9 @@ static int fx_key(struct tcb *t, uint64_t uaddr, int priv,
     if (uaddr & 3)
         return -EINVAL;
     if (uaddr < VMM_USER_MIN || uaddr >= VMM_USER_MAX || !t->mm)
+        return -EFAULT;
+    /* DDR-1190 A1.12 point 1: an eighth swap-in site. */
+    if (swap_prefault_locked(t->mm, uaddr, 4, 0) < 0)
         return -EFAULT;
     uint64_t pte = vmm_resolve_pte(t->cr3, uaddr);
     if (!(pte & VMM_PRESENT) || !(pte & VMM_USER) || (pte & PTE_SW_DYING))

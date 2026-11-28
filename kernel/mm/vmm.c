@@ -12,6 +12,7 @@
 #include "tlb.h"               /* DDR-1177: cross-CPU shootdown */
 #include "string.h"            /* DDR-1202: memcpy for the copy before write is added */
 #include "kreloc.h"            /* DDR-1179 A2: kaslr_slide for the W^X walk */
+#include "swap.h"              /* DDR-1190 A1.6: swap entries in the walkers */
 
 #define PTE_PRESENT  0x1ull
 #define PTE_PS       0x80ull
@@ -368,7 +369,10 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
         uint64_t *pte = leaf_pte(pml4_phys, p);
         if (!pte) return -1;
         uint64_t e = *pte;
-        if (!(e & PTE_PRESENT) || !(e & VMM_USER))
+        /* DDR-1190 A1.6, A1.12 point 4: a swap entry is a user page too; its
+         * kept flags are rewritten below and it stays swapped out. */
+        int swapped = !(e & PTE_PRESENT) && (e & PTE_SW_SWAP);
+        if ((!(e & PTE_PRESENT) && !swapped) || !(e & VMM_USER))
             return -1;
         /* DDR-1031 §3b: the hardware RO bit IS copy-on-write's trigger. Granting
          * write on a COW page would not make it writable -- it would let this
@@ -402,6 +406,8 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
         for (uint64_t p = start; p < end; p += 0x1000ull) {
             uint64_t *pte = leaf_pte(pml4_phys, p);
             uint64_t e = *pte;
+            if (!(e & PTE_PRESENT))
+                continue;                   /* DDR-1190: a swap entry has no frame to share */
             if (e & (VMM_RW | PTE_SW_SHMEM | PTE_SW_SHARED))
                 continue;                   /* no write is added, or a shared mapping */
             uint64_t frame = e & PTE_ADDR;
@@ -432,10 +438,13 @@ int vmm_protect_range(uint64_t pml4_phys, uint64_t va, uint64_t len, uint64_t fl
     for (uint64_t p = start; p < end; p += 0x1000ull) {
         uint64_t *pte = leaf_pte(pml4_phys, p);
         uint64_t e = *pte;
+        /* DDR-1190 A1.12 point 4: a swap entry keeps its slot and its marker
+         * and stays not present; only its kept permission bits change. */
+        uint64_t live = (e & PTE_PRESENT) ? PTE_PRESENT : (e & PTE_SW_SWAP);
         *pte = (e & PTE_ADDR)
              | (e & (PTE_SW_COW | PTE_SW_SHARED | PTE_SW_SHMEM | PTE_SW_EVERW | VMM_PWT | VMM_PCD))
              | everw
-             | PTE_PRESENT | VMM_USER
+             | live | VMM_USER
              | (flags & VMM_RW)
              | nx;
         invlpg(p);
@@ -459,6 +468,13 @@ void vmm_unmap_range_flush(uint64_t pml4_phys, uint64_t va, uint64_t npages,
     for (uint64_t i = 0; i < npages; i++) {
         uint64_t p = va + i * 0x1000ull;
         uint64_t *pte = leaf_pte(pml4_phys, p);
+        if (pte && !(*pte & PTE_PRESENT) && (*pte & PTE_SW_SWAP)) {
+            /* DDR-1190 A1.12 point 3: free the slot now; pass 2 clears the
+             * leaf after the ack. Address 0: nothing for free_fn. */
+            swap_entry_release(*pte);
+            *pte = PTE_SW_DYING;
+            continue;
+        }
         if (!pte || !(*pte & PTE_PRESENT))
             continue;
         *pte = (*pte & ~PTE_PRESENT) | PTE_SW_DYING;
@@ -532,6 +548,10 @@ static void free_subtree(uint64_t table_phys, int level) {
     uint64_t *t = table_at(table_phys);
     for (unsigned i = 0; i < 512; i++) {
         uint64_t e = t[i];
+        if (level == 1 && !(e & PTE_PRESENT) && (e & PTE_SW_SWAP)) {
+            swap_entry_release(e);          /* DDR-1190 A1.6: teardown frees the slot */
+            continue;
+        }
         if (!(e & PTE_PRESENT) || (e & PTE_PS))
             continue;
         if (level > 1)
@@ -556,6 +576,7 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
         if ((e & PTE_PRESENT) && e != kp[i])
             free_subtree(e & PTE_ADDR, 3);
     }
+    swap_as_gone(pml4_phys);                /* DDR-1190 A1.12 point 9 */
     ptnode_free((void *)(uintptr_t)pml4_phys);
 }
 

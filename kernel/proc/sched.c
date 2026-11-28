@@ -3726,6 +3726,11 @@ static void sched_exit_common(int status, int group) {
      * compares against, so the unlocked read is stable for that test. */
     if (mm && __atomic_load_n(&mm->lock.owner, __ATOMIC_ACQUIRE) == self)
         kmutex_unlock(&mm->lock);
+    /* DDR-1190 A1.12 point 6: pins this thread never released. */
+    if (mm && self->uaccess_pins) {
+        __atomic_sub_fetch(&mm->uaccess_active, self->uaccess_pins, __ATOMIC_ACQ_REL);
+        self->uaccess_pins = 0;
+    }
 
     /* DDR-1181 §3.4: a process exit ends every thread of the group. The status
      * is fixed FIRST, so the siblings' own SIGKILL exits cannot overwrite it. */

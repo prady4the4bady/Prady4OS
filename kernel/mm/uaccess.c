@@ -13,6 +13,8 @@
 #include "string.h"
 #include "mm.h"         /* struct mm, mm->lock (DDR-1190 A1.10) */
 #include "swap.h"       /* swap_prefault_locked */
+#include "lockdep.h"    /* DDR-1190 A1.10 point 3: the copy-under-spinlock detector */
+#include "console.h"
 
 static inline uint64_t cur_cr3(void) {
     uint64_t v;
@@ -90,9 +92,30 @@ ssize_t copyout_pinned(void __user *udst, const void *ksrc, size_t n) {
     return rc ? rc : (ssize_t)n;
 }
 
+/* DDR-1190 A1.10 point 3: a plain copy may take the mm lock and sleep, so it
+ * must never run under a spinlock. The LOCKDEP=1 build knows the spinlocks
+ * this thread holds (DDR-1209 D3) and refuses such a copy with a report. The
+ * shipped build cannot tell (spin_lock is a bare test-and-set), so it relies
+ * on the audit recorded in A1.10. */
+#if LOCKDEP
+static int copy_under_spinlock(void) {
+    struct tcb *t = current_thread;
+    if (!t || !t->ld.depth)
+        return 0;
+    kputs("[uaccess] copy under spinlock depth=");
+    kputdec(t->ld.depth);
+    kputs("\r\n");
+    return 1;
+}
+#define COPY_SPIN_CHECK() do { if (copy_under_spinlock()) return -EFAULT; } while (0)
+#else
+#define COPY_SPIN_CHECK() do { } while (0)
+#endif
+
 ssize_t copyin(void *kdst, const void __user *usrc, size_t n) {
     if (n == 0)
         return 0;
+    COPY_SPIN_CHECK();
     if (uaccess_pin(usrc, n, 0) < 0)    /* DDR-1190 A1.10: swap-in + check */
         return -EFAULT;
     uaccess_begin();                    /* DDR-1041: SMAP window opens HERE --
@@ -107,6 +130,7 @@ ssize_t copyin(void *kdst, const void __user *usrc, size_t n) {
 ssize_t copyout(void __user *udst, const void *ksrc, size_t n) {
     if (n == 0)
         return 0;
+    COPY_SPIN_CHECK();
     /* writable=1: the destination pages must be present, user, AND RW — a write
      * to a read-only / text user page is rejected here (W^X upheld). */
     if (uaccess_pin(udst, n, 1) < 0)    /* DDR-1190 A1.10 */
@@ -123,6 +147,7 @@ ssize_t copyinstr(char *kdst, const void __user *usrc, size_t max, size_t *lenou
         *lenout = 0;
     if (max == 0)
         return -ENAMETOOLONG;
+    COPY_SPIN_CHECK();
 
     uint64_t ua  = (uint64_t)(uintptr_t)usrc;
     int pinned = 0;                     /* DDR-1190 A1.10: one pin, per page */

@@ -36,6 +36,12 @@
  * rebuild of a user leaf (map_core, vmm_protect_range, the fork walk). mprotect never
  * adds X to a page that carries it. */
 #define PTE_SW_EVERW  (1ull << 53)
+/* DDR-1190 A1.5, A1.10 point 1: bit 54 marks a NOT-present user leaf that is
+ * a swap entry: the page's flag bits are kept, and the address field holds a
+ * swap slot index, not a frame. Bits 58:52 are ignored by the MMU (Intel SDM
+ * Vol. 3A ch. 4, 4-KByte PTE format; AMD APM Vol. 2 sec. 5.4). Distinct from
+ * PTE_SW_DYING (bit 11). A not-present leaf without it is "never mapped". */
+#define PTE_SW_SWAP   (1ull << 54)
 
 /* User virtual range = PML4 slot 1 = [512 GiB, 1 TiB) (ADR-021). The ELF loader
  * mirrors these as its own USER_MIN/USER_MAX; any user pointer the kernel copies

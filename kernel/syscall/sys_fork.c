@@ -20,6 +20,7 @@
 #include "mm.h"           /* DDR-1181 */
 #include "vmm_cow.h"
 #include "vmm.h"
+#include "swap.h"         /* DDR-1190 A1.6 */
 #include "syscall.h"      /* syscall_register, syscall_user_rip/rsp */
 #include "errno.h"
 
@@ -45,6 +46,13 @@ static long sys_fork(long a1, long a2, long a3, long a4, long a5, long a6) {
      * sibling's mmap/munmap between the two would leave the child's page
      * tables and mapping table disagreeing (DDR-1181 §4.4 R1). */
     mm_lock(parent);
+    /* DDR-1190 A1.6: the walk below skips not-present leaves, so every
+     * swapped-out page comes back in first, under the same hold. */
+    int sw = swap_in_all_locked(parent->mm);
+    if (sw < 0) {
+        mm_unlock(parent);
+        return sw == -ENOMEM ? -ENOMEM : -EFAULT;
+    }
     uint64_t child_cr3 = vmm_fork_address_space_cow(parent->cr3);
     if (!child_cr3) {
         mm_unlock(parent);

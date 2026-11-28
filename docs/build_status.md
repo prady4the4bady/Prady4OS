@@ -7572,8 +7572,22 @@ the 2026-11-22 entry are lifted.
   `sys_thread` checks (now under one hold of the mm lock) swap in before they
   check, through `swap_user_range_ok_locked`. `smoke-thread`,
   `smoke-sysiouring` and `smoke-ledger` pass locally.
-- **Not yet built:** the swap entry, the probe store and the fault path.
-  These are the later P1a steps.
+- **Steps 3 to 8 (DDR-1190 A1.5, A1.6, A1.12):**
+  - `PTE_SW_SWAP` (bit 54) and the 32-slot RAM store in `kernel/mm/swap.c`,
+    sealed with the AEAD under the trusted `swap_ctr[]`;
+  - swap-in on a ring-3 not-present fault; a failure ends the process;
+  - the fork pre-pass (`sys_fork.c`), slot freeing in unmap and teardown, and
+    `mprotect` on a swap entry (`vmm.c`);
+  - the futex site (`fx_key`, A1.12 point 1);
+  - pins released at thread exit;
+  - `SYS_SWAP_PROBE` (NSI 125, ops 0 to 7);
+  - the `LOCKDEP=1` copy-under-spinlock detector in `uaccess.c`.
+
+  `kernel.bin` is 1,737,112 B (+8,192 B). smoke-shell 5/5, and smoke-thread,
+  smoke-ledger, smoke-mprotect, smoke-cowfork, smoke-sigsem, smoke-kill and
+  smoke-mapguard pass locally. These show only that nothing existing broke:
+  no swap-out happens until the probe runs.
+- **Not yet built:** the probe `user/swaptest.c` and the gate `smoke-swapent`.
 - **Gate:** not gated yet. `smoke-swapent` (arms N, N2, N3) lands with the
   probe syscall.
 - `smoke-shell` 5/5 locally. QEMU (TCG) only, not verified on real hardware.

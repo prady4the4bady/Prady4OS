@@ -628,6 +628,30 @@ page. An entry is freed when its address space is torn down.
 - P1b puts the disk backend behind the same five store calls: allocate, write
   sealed, read sealed, free, corrupt.
 
+**11. The gate as built.**
+- **`smoke-swapent`** boots the shipped kernel once, in a CI shard. The probe
+  `user/swaptest.c` runs one process per role:
+  - MAIN runs arms N, N2, O, P and U;
+  - TAMPER (one flipped byte), REPLAY (the slot's earlier copy and metadata put
+    back) and C2 (a handler on every catchable signal, then `read()` into the
+    page) are each meant to be killed;
+  - LEDGER is sovereign and runs arm N3.
+- **The kills are checked per process.** `tools/ci/swapent_check.py` requires
+  `[swap] integrity FAIL` lines for three distinct pids after the first
+  `armed` line, so a kill for another reason does not pass. `SURVIVED` and
+  `HANDLER` lines are forbidden.
+- **Arm U** is new: after a swapped-out page is unmapped, a `MAP_FIXED`
+  mapping at the same address reads zeros (point 3).
+- **Arm O** uses a private mapping of a read-only file. That page may become
+  executable, so the refusal depends on bit 53 alone. On an anonymous page,
+  `mprot_exec_ok` refuses whatever bit 53 says, and mutant M15 would pass. The
+  arm checks the refusal twice: on the swap entry, and after swap-in.
+- **N3's `LOCKDEP=1` half runs in `smoke-lockdep`.** CI's shard rule is that
+  no shard gate rebuilds the kernel. `smoke-lockdep` already boots the
+  `LOCKDEP=1` kernel in a flag-gate job of its own, so it gains the `swap`
+  probes, `QEMU_RNG=1` for the swap key, the N3 line, and the forbidden
+  `[uaccess] copy under spinlock`. Mutant M14c is run against `smoke-lockdep`.
+
 ### A1.9 Honesty labels
 
 Unchanged from section 6. P1a (A1.11, A1.12) is being built on branch

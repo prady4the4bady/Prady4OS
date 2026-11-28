@@ -27,6 +27,7 @@ void sys_disk_register(void);     /* kernel/syscall/sys_disk.c (DDR-1143) */
 void sys_install_register(void);  /* kernel/install/install.c (DDR-1143) */
 void sys_ledger_register(void);   /* kernel/syscall/sys_ledger.c (DDR-1150) */
 void sys_thread_register(void);   /* kernel/syscall/sys_thread.c (DDR-1181) */
+void swap_register(void);         /* kernel/mm/swap.c (DDR-1190 A1.12) */
 void sys_fb_register(void);       /* kernel/syscall/sys_fb.c (DDR-702) */
 void sys_input_register(void);    /* kernel/syscall/sys_input.c (DDR-703) */
 void sys_surface_register(void);  /* kernel/syscall/sys_surface.c (DDR-706) */
@@ -257,6 +258,7 @@ void syscall_init(void) {
     sys_exec_register();                  /* SYS_EXECVE (slice 7) */
     sys_fork_register();                  /* SYS_FORK (slice 8) */
     sys_thread_register();                /* SYS_THREAD_CREATE/EXIT (DDR-1181) */
+    swap_register();                      /* SYS_SWAP_PROBE (DDR-1190 A1.12) */
     futex_register();                     /* SYS_FUTEX (DDR-1181 A1) */
     sys_wait_register();                  /* SYS_WAIT4 (slice 9) */
     pipe_register();                      /* SYS_PIPE / SYS_DUP2 (PROC-A) */
