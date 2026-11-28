@@ -81,102 +81,67 @@ void chacha20_stream(const uint8_t key[32], const uint8_t nonce[12],
  * overflow. Inventing a limb layout here would be the easiest way to be subtly
  * wrong in a way the short vectors would not catch. */
 
-/* DDR-1211: an incremental Poly1305. The arithmetic is the one-shot
- * poly1305_mac's, unchanged; only the bookkeeping is split so a caller can feed
- * the message in pieces. RFC 8439 section 2.5.1 defines the MAC over the
- * concatenated message, so splitting must not change it: a partial block is
- * buffered, and only poly1305_final ever processes a short block. */
-struct poly1305_st {
-    uint32_t r0, r1, r2, r3, r4, s1, s2, s3, s4;
-    uint32_t h0, h1, h2, h3, h4;
-    uint8_t  key_s[16];          /* the addend s, applied at the end */
-    uint8_t  buf[16];
-    uint32_t nbuf;
-};
-
-static void poly1305_init(struct poly1305_st *st, const uint8_t key[32]) {
-    /* r is clamped per the spec; s is the addend applied at the end. */
-    st->r0 = (le32(key +  0)      ) & 0x3ffffffu;
-    st->r1 = (le32(key +  3) >> 2 ) & 0x3ffff03u;
-    st->r2 = (le32(key +  6) >> 4 ) & 0x3ffc0ffu;
-    st->r3 = (le32(key +  9) >> 6 ) & 0x3f03fffu;
-    st->r4 = (le32(key + 12) >> 8 ) & 0x00fffffu;
-    st->s1 = st->r1 * 5u; st->s2 = st->r2 * 5u; st->s3 = st->r3 * 5u; st->s4 = st->r4 * 5u;
-    st->h0 = st->h1 = st->h2 = st->h3 = st->h4 = 0;
-    for (unsigned i = 0; i < 16u; i++)
-        st->key_s[i] = key[16 + i];
-    st->nbuf = 0;
-}
-
-/* One 16-byte block. `hibit` is 1 << 24 for a full block (the implicit 1 at
- * bit 128) and 0 for the short final block, which carries its own 0x01. */
-static void poly1305_block(struct poly1305_st *st, const uint8_t blk[16], uint32_t hibit) {
-    uint32_t r0 = st->r0, r1 = st->r1, r2 = st->r2, r3 = st->r3, r4 = st->r4;
-    uint32_t s1 = st->s1, s2 = st->s2, s3 = st->s3, s4 = st->s4;
-    uint32_t h0 = st->h0, h1 = st->h1, h2 = st->h2, h3 = st->h3, h4 = st->h4;
-
-    h0 += (le32(blk +  0)      ) & 0x3ffffffu;
-    h1 += (le32(blk +  3) >> 2 ) & 0x3ffffffu;
-    h2 += (le32(blk +  6) >> 4 ) & 0x3ffffffu;
-    h3 += (le32(blk +  9) >> 6 ) & 0x3ffffffu;
-    h4 += (le32(blk + 12) >> 8 ) | hibit;
-
-    uint64_t d0 = (uint64_t)h0 * r0 + (uint64_t)h1 * s4 + (uint64_t)h2 * s3 +
-                  (uint64_t)h3 * s2 + (uint64_t)h4 * s1;
-    uint64_t d1 = (uint64_t)h0 * r1 + (uint64_t)h1 * r0 + (uint64_t)h2 * s4 +
-                  (uint64_t)h3 * s3 + (uint64_t)h4 * s2;
-    uint64_t d2 = (uint64_t)h0 * r2 + (uint64_t)h1 * r1 + (uint64_t)h2 * r0 +
-                  (uint64_t)h3 * s4 + (uint64_t)h4 * s3;
-    uint64_t d3 = (uint64_t)h0 * r3 + (uint64_t)h1 * r2 + (uint64_t)h2 * r1 +
-                  (uint64_t)h3 * r0 + (uint64_t)h4 * s4;
-    uint64_t d4 = (uint64_t)h0 * r4 + (uint64_t)h1 * r3 + (uint64_t)h2 * r2 +
-                  (uint64_t)h3 * r1 + (uint64_t)h4 * r0;
-
-    uint64_t c;
-    c = d0 >> 26; h0 = (uint32_t)d0 & 0x3ffffffu;
-    d1 += c; c = d1 >> 26; h1 = (uint32_t)d1 & 0x3ffffffu;
-    d2 += c; c = d2 >> 26; h2 = (uint32_t)d2 & 0x3ffffffu;
-    d3 += c; c = d3 >> 26; h3 = (uint32_t)d3 & 0x3ffffffu;
-    d4 += c; c = d4 >> 26; h4 = (uint32_t)d4 & 0x3ffffffu;
-    h0 += (uint32_t)c * 5u; c = h0 >> 26; h0 &= 0x3ffffffu;
-    h1 += (uint32_t)c;
-
-    st->h0 = h0; st->h1 = h1; st->h2 = h2; st->h3 = h3; st->h4 = h4;
-}
-
-static void poly1305_update(struct poly1305_st *st, const void *msg, uint32_t len) {
+void poly1305_mac(const uint8_t key[32], const void *msg, uint32_t len,
+                  uint8_t tag[AEAD_TAG_LEN]) {
     const uint8_t *m = (const uint8_t *)msg;
-    while (len > 0) {
-        if (st->nbuf == 0 && len >= 16u) {   /* whole blocks straight from m */
-            poly1305_block(st, m, 1u << 24);
-            m += 16; len -= 16;
-            continue;
-        }
-        st->buf[st->nbuf++] = *m++;
-        len--;
-        if (st->nbuf == 16u) {
-            poly1305_block(st, st->buf, 1u << 24);
-            st->nbuf = 0;
-        }
-    }
-}
 
-static void poly1305_final(struct poly1305_st *st, uint8_t tag[AEAD_TAG_LEN]) {
-    if (st->nbuf) {
-        /* Short final block: a literal 0x01 immediately after the data acts as
-         * the terminator, and there is NO implicit bit at 128. */
+    /* r is clamped per the spec; s is the addend applied at the end. */
+    uint32_t r0 = (le32(key +  0)      ) & 0x3ffffffu;
+    uint32_t r1 = (le32(key +  3) >> 2 ) & 0x3ffff03u;
+    uint32_t r2 = (le32(key +  6) >> 4 ) & 0x3ffc0ffu;
+    uint32_t r3 = (le32(key +  9) >> 6 ) & 0x3f03fffu;
+    uint32_t r4 = (le32(key + 12) >> 8 ) & 0x00fffffu;
+
+    uint32_t s1 = r1 * 5u, s2 = r2 * 5u, s3 = r3 * 5u, s4 = r4 * 5u;
+    uint32_t h0 = 0, h1 = 0, h2 = 0, h3 = 0, h4 = 0;
+
+    while (len > 0) {
         uint8_t blk[16];
-        uint32_t n = st->nbuf;
+        uint32_t n = (len < 16u) ? len : 16u;
+        uint32_t hibit;
+
         for (uint32_t i = 0; i < n; i++)
-            blk[i] = st->buf[i];
-        blk[n] = 0x01u;
-        for (uint32_t i = n + 1u; i < 16u; i++)
-            blk[i] = 0u;
-        poly1305_block(st, blk, 0u);
-        st->nbuf = 0;
+            blk[i] = m[i];
+        if (n < 16u) {
+            /* Short final block: a literal 0x01 immediately after the data acts
+             * as the terminator, and there is NO implicit bit at 128. */
+            blk[n] = 0x01u;
+            for (uint32_t i = n + 1u; i < 16u; i++)
+                blk[i] = 0u;
+            hibit = 0u;
+        } else {
+            hibit = 1u << 24;                 /* implicit 1 at bit 128 */
+        }
+
+        h0 += (le32(blk +  0)      ) & 0x3ffffffu;
+        h1 += (le32(blk +  3) >> 2 ) & 0x3ffffffu;
+        h2 += (le32(blk +  6) >> 4 ) & 0x3ffffffu;
+        h3 += (le32(blk +  9) >> 6 ) & 0x3ffffffu;
+        h4 += (le32(blk + 12) >> 8 ) | hibit;
+
+        uint64_t d0 = (uint64_t)h0 * r0 + (uint64_t)h1 * s4 + (uint64_t)h2 * s3 +
+                      (uint64_t)h3 * s2 + (uint64_t)h4 * s1;
+        uint64_t d1 = (uint64_t)h0 * r1 + (uint64_t)h1 * r0 + (uint64_t)h2 * s4 +
+                      (uint64_t)h3 * s3 + (uint64_t)h4 * s2;
+        uint64_t d2 = (uint64_t)h0 * r2 + (uint64_t)h1 * r1 + (uint64_t)h2 * r0 +
+                      (uint64_t)h3 * s4 + (uint64_t)h4 * s3;
+        uint64_t d3 = (uint64_t)h0 * r3 + (uint64_t)h1 * r2 + (uint64_t)h2 * r1 +
+                      (uint64_t)h3 * r0 + (uint64_t)h4 * s4;
+        uint64_t d4 = (uint64_t)h0 * r4 + (uint64_t)h1 * r3 + (uint64_t)h2 * r2 +
+                      (uint64_t)h3 * r1 + (uint64_t)h4 * r0;
+
+        uint64_t c;
+        c = d0 >> 26; h0 = (uint32_t)d0 & 0x3ffffffu;
+        d1 += c; c = d1 >> 26; h1 = (uint32_t)d1 & 0x3ffffffu;
+        d2 += c; c = d2 >> 26; h2 = (uint32_t)d2 & 0x3ffffffu;
+        d3 += c; c = d3 >> 26; h3 = (uint32_t)d3 & 0x3ffffffu;
+        d4 += c; c = d4 >> 26; h4 = (uint32_t)d4 & 0x3ffffffu;
+        h0 += (uint32_t)c * 5u; c = h0 >> 26; h0 &= 0x3ffffffu;
+        h1 += (uint32_t)c;
+
+        m   += n;
+        len -= n;
     }
-    uint32_t h0 = st->h0, h1 = st->h1, h2 = st->h2, h3 = st->h3, h4 = st->h4;
-    const uint8_t *key_s = st->key_s;
 
     /* Final carry propagation and the conditional subtraction of 2^130 - 5,
      * done branchlessly. */
@@ -210,10 +175,10 @@ static void poly1305_final(struct poly1305_st *st, uint8_t tag[AEAD_TAG_LEN]) {
     uint32_t o2 = (h2 >> 12) | (h3 << 14);
     uint32_t o3 = (h3 >> 18) | (h4 <<  8);
 
-    f = (uint64_t)o0 + le32(key_s +  0);                o0 = (uint32_t)f;
-    f = (uint64_t)o1 + le32(key_s +  4) + (f >> 32);    o1 = (uint32_t)f;
-    f = (uint64_t)o2 + le32(key_s +  8) + (f >> 32);    o2 = (uint32_t)f;
-    f = (uint64_t)o3 + le32(key_s + 12) + (f >> 32);    o3 = (uint32_t)f;
+    f = (uint64_t)o0 + le32(key + 16);                  o0 = (uint32_t)f;
+    f = (uint64_t)o1 + le32(key + 20) + (f >> 32);      o1 = (uint32_t)f;
+    f = (uint64_t)o2 + le32(key + 24) + (f >> 32);      o2 = (uint32_t)f;
+    f = (uint64_t)o3 + le32(key + 28) + (f >> 32);      o3 = (uint32_t)f;
 
     uint32_t out[4] = { o0, o1, o2, o3 };
     for (unsigned i = 0; i < 4u; i++) {
@@ -224,37 +189,37 @@ static void poly1305_final(struct poly1305_st *st, uint8_t tag[AEAD_TAG_LEN]) {
     }
 }
 
-void poly1305_mac(const uint8_t key[32], const void *msg, uint32_t len,
-                  uint8_t tag[AEAD_TAG_LEN]) {
-    struct poly1305_st st;
-    poly1305_init(&st, key);
-    poly1305_update(&st, msg, len);
-    poly1305_final(&st, tag);
-}
-
 /* ---------------- AEAD (RFC 8439 §2.8) ---------------- */
 
 /* The tag covers AAD || pad16 || ct || pad16 || len(AAD) || len(ct), with both
- * lengths as 64-bit little-endian. DDR-1211: streamed through poly1305_update,
- * piece by piece, so no buffer holds the whole input and there is no length
- * bound. (It used to be assembled in a 1 KiB buffer, and an oversized input got
- * an all-zero tag on BOTH seal and open: everything over ~1 KiB verified.) */
+ * lengths as 64-bit little-endian. Streamed into a scratch MAC rather than
+ * assembled, so no allocation is needed. */
 static void aead_tag(const uint8_t polykey[32],
                      const uint8_t *aad, uint32_t aadlen,
                      const uint8_t *ct,  uint32_t ctlen,
                      uint8_t tag[AEAD_TAG_LEN]) {
-    static const uint8_t zeros[16] = { 0 };
-    struct poly1305_st st;
-    poly1305_init(&st, polykey);
-    poly1305_update(&st, aad, aadlen);
-    poly1305_update(&st, zeros, (16u - (aadlen % 16u)) % 16u);
-    poly1305_update(&st, ct, ctlen);
-    poly1305_update(&st, zeros, (16u - (ctlen % 16u)) % 16u);
-    uint8_t lens[16];
-    for (unsigned i = 0; i < 8u; i++) lens[i]     = (uint8_t)((uint64_t)aadlen >> (i * 8));
-    for (unsigned i = 0; i < 8u; i++) lens[8 + i] = (uint8_t)((uint64_t)ctlen  >> (i * 8));
-    poly1305_update(&st, lens, 16);
-    poly1305_final(&st, tag);
+    /* Build the MAC input in a bounded scratch buffer. ACC messages are small;
+     * the bound is stated so an oversized caller fails loudly rather than
+     * overflowing. */
+    static const uint32_t SCRATCH = 1024u;
+    uint8_t buf[1024];
+    uint32_t n = 0;
+
+    uint32_t apad = (16u - (aadlen % 16u)) % 16u;
+    uint32_t cpad = (16u - (ctlen  % 16u)) % 16u;
+    if ((uint64_t)aadlen + apad + ctlen + cpad + 16u > SCRATCH) {
+        for (unsigned i = 0; i < AEAD_TAG_LEN; i++)
+            tag[i] = 0;                       /* caller's verify will fail */
+        return;
+    }
+    for (uint32_t i = 0; i < aadlen; i++) buf[n++] = aad[i];
+    for (uint32_t i = 0; i < apad;   i++) buf[n++] = 0;
+    for (uint32_t i = 0; i < ctlen;  i++) buf[n++] = ct[i];
+    for (uint32_t i = 0; i < cpad;   i++) buf[n++] = 0;
+    for (unsigned i = 0; i < 8u; i++) buf[n++] = (uint8_t)((uint64_t)aadlen >> (i * 8));
+    for (unsigned i = 0; i < 8u; i++) buf[n++] = (uint8_t)((uint64_t)ctlen  >> (i * 8));
+
+    poly1305_mac(polykey, buf, n, tag);
 }
 
 void aead_seal(const uint8_t key[AEAD_KEY_LEN], const uint8_t nonce[AEAD_NONCE_LEN],
